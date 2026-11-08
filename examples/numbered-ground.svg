@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" data-zone-id="ground" viewBox="0 0 600 400">
+  <title>Ground floor numbered venue draft</title>
+  <g data-table-id="G1">
+    <rect x="20" y="20" width="180" height="150" fill="white" stroke="black"/>
+    <text x="100" y="38">G1</text>
+  </g>
+  <g data-table-id="G2">
+    <ellipse cx="340" cy="105" rx="90" ry="75" fill="white" stroke="black"/>
+    <text x="340" y="48">G2</text>
+  </g>
+</svg>
