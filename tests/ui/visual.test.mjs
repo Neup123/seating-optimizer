@@ -114,7 +114,7 @@ test("guest import shows detected headers, lets owner override mapping, and neve
   assert.match(root.textContent, /Spreadsheet sample/);
   setValue($("#map-count"), "group_id", dom.window);
   click($("#preview-mapping"));
-  await until(() => calls.some(([path,p]) => path === "/v1/import/preview" && p.mapping.Count === "group_id"));
+  await until(() => calls.some(([path,p]) => path === "/v1/import/preview" && p.mapping?.Count === "group_id"));
   setValue($("#map-count"), "size", dom.window);
   click($("#import-guests"));
   await until(() => root.textContent.includes("Import blocked"));
