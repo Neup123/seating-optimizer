@@ -1,11 +1,12 @@
-"""Pluggable, headless plan renderers: exactly two Phase 1 formats."""
+"""Pluggable, headless seating renderers across Phases 1 and 2."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
 from .models import Plan
+from .print_exports import render_floor_pdf, render_floor_svg, render_table_cards_pdf
 
-Renderer = Callable[[Plan], str]
+Renderer = Callable[[Plan], str | bytes]
 
 
 def render_table(plan: Plan) -> str:
@@ -37,9 +38,11 @@ def render_json(plan: Plan) -> str:
     return plan.model_dump_json(indent=2)
 
 
-def render(plan: Plan, format: str, renderers: Mapping[str, Renderer] | None = None) -> str:
+def render(plan: Plan, format: str, renderers: Mapping[str, Renderer] | None = None) -> str | bytes:
     """Caller-provided renderer mapping permits integration without changing the core."""
-    available = {"table": render_table, "json": render_json}
+    available: dict[str, Renderer] = {"table": render_table, "json": render_json,
+        "floor-map-svg": lambda p: render_floor_svg(p).model_dump_json(indent=2),
+        "floor-map-pdf": render_floor_pdf, "table-cards-pdf": render_table_cards_pdf}
     if renderers:
         available.update(renderers)
     try:
