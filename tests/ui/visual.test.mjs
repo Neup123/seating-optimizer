@@ -63,7 +63,7 @@ async function setup(handler = async () => ({})) {
     { url: "http://localhost/" });
   globalThis.document = dom.window.document;
   globalThis.window = dom.window;
-  globalThis.btoa = dom.window.btoa.bind(dom.window);
+  globalThis.btoa = value => Buffer.from(value, "binary").toString("base64");
   dom.window.URL.createObjectURL = () => "blob:test/print";
   dom.window.URL.revokeObjectURL = () => {};
   globalThis.URL = dom.window.URL;
