@@ -5,6 +5,9 @@ import csv
 import json
 import re
 from io import BytesIO, StringIO
+from zipfile import BadZipFile
+from xml.etree.ElementTree import ParseError
+from openpyxl.utils.exceptions import InvalidFileException
 from importlib.resources import files
 from typing import Literal
 
@@ -90,7 +93,7 @@ def import_registrations(
     result = ImportResult()
     try:
         rows = _rows(content, filename)
-    except (UnicodeError, csv.Error, OSError, ValueError) as exc:
+    except (UnicodeError, csv.Error, OSError, ValueError, BadZipFile, InvalidFileException, ParseError) as exc:
         result.issues.append(ImportIssue(row=None, column=None, severity="error", message=str(exc)))
         return result
     if not rows:
@@ -216,7 +219,7 @@ def preview_registrations(
         return result
     try:
         rows = _rows(content, filename)
-    except (UnicodeError, csv.Error, OSError, ValueError, KeyError) as exc:
+    except (UnicodeError, csv.Error, OSError, ValueError, KeyError, BadZipFile, InvalidFileException, ParseError) as exc:
         result.issues.append(ImportIssue(row=None, column=None, severity="error", message=str(exc)))
         return result
     if not rows:
