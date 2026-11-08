@@ -2,6 +2,8 @@
 
 **Phases 1–2: headless seating optimization and print-ready layouts** for one event meal sitting. The Python core contains the CP-SAT solver, rule models, guest and venue importers, structured per-floor geometry and pluggable exports. FastAPI exposes the same functions. Floor-map SVG/PDF and printable table cards are available now; Phase 3's visual editor and individual seat ordering are not included.
 
+The approved [build brief](docs/build-plan.md) is the authoritative project plan across all phases.
+
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
 ## Installation
