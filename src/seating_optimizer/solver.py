@@ -194,6 +194,7 @@ def solve(problem: Problem) -> Plan:
             status="infeasible" if status == cp_model.INFEASIBLE else "unknown",
             conflicting_constraints=conflicts,
             solve_seconds=elapsed,
+            layout=problem.layout,
             message=("No plan satisfies all hard constraints." if status == cp_model.INFEASIBLE
                      else "Time limit reached without a feasible plan; infeasibility is unproven."),
         )
@@ -332,4 +333,5 @@ def solve(problem: Problem) -> Plan:
                 total_score=calculated, assignments=assignments,
                 tables=table_usage, score_breakdown=breakdown,
                 compromises=compromises, solve_seconds=elapsed,
+                layout=problem.layout,
                 message="All hard constraints satisfied.")
