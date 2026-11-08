@@ -115,6 +115,7 @@ test("guest import shows detected headers, lets owner override mapping, and neve
   setValue($("#map-count"), "group_id", dom.window);
   click($("#preview-mapping"));
   await until(() => calls.some(([path,p]) => path === "/v1/import/preview" && p.mapping?.Count === "group_id"));
+  await until(() => root.textContent.includes("Mapping checked by the API"));
   setValue($("#map-count"), "size", dom.window);
   click($("#import-guests"));
   await until(() => root.textContent.includes("Import blocked"));
