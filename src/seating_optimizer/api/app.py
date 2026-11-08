@@ -9,8 +9,23 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
-from seating_optimizer import Plan, Problem, import_registrations, render_json, render_table, solve
+from seating_optimizer import (
+    Plan, Problem, Table, Zone, VenueLayout, SvgFloorBundle, import_layout_files,
+    import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
+    render_json, render_table, solve,
+)
 from seating_optimizer.importer import ImportResult
+
+
+class LayoutFile(BaseModel):
+    filename: str
+    content_base64: str
+
+
+class LayoutImportRequest(BaseModel):
+    files: list[LayoutFile] = Field(min_length=1)
+    zones: list[Zone] | None = None
+    tables: list[Table] | None = None
 
 
 class ImportRequest(BaseModel):
@@ -43,6 +58,20 @@ def create_app() -> FastAPI:
             content, request.filename, mapping=request.mapping, aliases=request.header_aliases
         )
 
+    @app.post("/v1/layouts/import", response_model=VenueLayout)
+    def import_venue(request: LayoutImportRequest) -> VenueLayout:
+        sources = []
+        for item in request.files:
+            try:
+                content = base64.b64decode(item.content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 input: {item.filename}") from exc
+            sources.append((item.filename, content))
+        try:
+            return import_layout_files(sources, zones=request.zones, tables=request.tables)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/v1/solve", response_model=Plan)
     def solve_problem(problem: Problem) -> Plan:
         try:
@@ -57,6 +86,31 @@ def create_app() -> FastAPI:
     @app.post("/v1/exports/json")
     def json_export(plan: Plan) -> Response:
         return Response(content=render_json(plan), media_type="application/json")
+
+    @app.post("/v1/exports/floor-map/svg", response_model=SvgFloorBundle)
+    def floor_map_svg_export(plan: Plan) -> SvgFloorBundle:
+        try:
+            return render_floor_svg(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/exports/floor-map/pdf")
+    def floor_map_pdf_export(plan: Plan) -> Response:
+        try:
+            pdf = render_floor_pdf(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="floor-maps.pdf"'})
+
+    @app.post("/v1/exports/table-cards/pdf")
+    def table_cards_pdf_export(plan: Plan) -> Response:
+        try:
+            pdf = render_table_cards_pdf(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="table-cards.pdf"'})
 
     @app.get("/openapi.yaml", response_class=PlainTextResponse)
     def openapi_yaml() -> str:
