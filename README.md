@@ -2,6 +2,8 @@
 
 **Phase 1: a fully headless, explainable seating optimizer** for one event meal sitting at a time. A reusable Python package contains the models, dynamic rule evaluation, Google OR-Tools CP-SAT solver, importer and two export renderers. A thin FastAPI layer exposes every capability. No seating UI, floor map, table cards or individual seat ordering are included.
 
+The approved [build brief](docs/build-plan.md) is the authoritative project plan across all phases.
+
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
 ## Installation
