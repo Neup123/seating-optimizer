@@ -318,10 +318,6 @@ components:
         column: {type: [string, 'null']}
         severity: {type: string, enum: [error, warning]}
         message: {type: string}
-        layout:
-          anyOf:
-            - {$ref: '#/components/schemas/VenueLayout'}
-            - {type: 'null'}
     ImportResult:
       type: object
       required: [guests, mapping, issues, rows_seen, rows_imported]
@@ -385,3 +381,7 @@ components:
         conflicting_constraints: {type: array, items: {type: string}}
         solve_seconds: {type: number}
         message: {type: string}
+        layout:
+          anyOf:
+            - {$ref: '#/components/schemas/VenueLayout'}
+            - {type: 'null'}
