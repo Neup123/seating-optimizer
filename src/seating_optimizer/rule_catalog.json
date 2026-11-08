@@ -1,0 +1,141 @@
+{
+  "shapes": [
+    {
+      "shape": "attribute_grouping",
+      "title": "Attribute grouping",
+      "description": "Reward guests sharing an attribute value at a table.",
+      "modes": [
+        "soft",
+        "hard"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "attribute",
+          "label": "Attribute kind",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "value",
+          "label": "Attribute value (optional)",
+          "kind": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "shape": "zone_restriction",
+      "title": "Zone restriction",
+      "description": "Restrict or prefer the zone for any group containing an affected guest.",
+      "modes": [
+        "hard",
+        "soft"
+      ],
+      "default_mode": "hard",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "attribute",
+          "label": "Attribute kind",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "value",
+          "label": "Attribute value (optional)",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "zone",
+          "label": "Allowed zone",
+          "kind": "zone",
+          "required": true
+        }
+      ]
+    },
+    {
+      "shape": "pair",
+      "title": "Pair together / apart",
+      "description": "Keep two guests or groups together or apart.",
+      "modes": [
+        "soft",
+        "hard"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "left",
+          "label": "First guest or group",
+          "kind": "target",
+          "required": true
+        },
+        {
+          "name": "right",
+          "label": "Second guest or group",
+          "kind": "target",
+          "required": true
+        },
+        {
+          "name": "relation",
+          "label": "Relationship",
+          "kind": "select",
+          "required": true,
+          "choices": [
+            "together",
+            "apart"
+          ]
+        }
+      ]
+    },
+    {
+      "shape": "capacity",
+      "title": "Table capacity",
+      "description": "Record the always-hard capacity ceiling. Table chair counts are enforced even without this record.",
+      "modes": [
+        "hard"
+      ],
+      "default_mode": "hard",
+      "default_weight": null,
+      "fields": []
+    },
+    {
+      "shape": "fill_efficiency",
+      "title": "Fill efficiency",
+      "description": "Penalize empty chairs on occupied tables.",
+      "modes": [
+        "soft"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": []
+    },
+    {
+      "shape": "pin",
+      "title": "Locked assignment",
+      "description": "Pin a guest or group to a fixed table.",
+      "modes": [
+        "hard"
+      ],
+      "default_mode": "hard",
+      "default_weight": null,
+      "fields": [
+        {
+          "name": "target",
+          "label": "Guest or group",
+          "kind": "target",
+          "required": true
+        },
+        {
+          "name": "table",
+          "label": "Table",
+          "kind": "table",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
