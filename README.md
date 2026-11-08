@@ -1,6 +1,6 @@
 # Seating Plan Optimizer
 
-**Phases 1–2: headless seating optimization and print-ready layouts** for one event meal sitting. The Python core contains the CP-SAT solver, rule models, guest and venue importers, structured per-floor geometry and pluggable exports. FastAPI exposes the same functions. Floor-map SVG/PDF and printable table cards are available now; Phase 3's visual editor and individual seat ordering are not included.
+**Phases 1–3: explainable seating optimization with a visual API client.** The Python core contains the CP-SAT solver, rule models, guest and venue importers, structured per-floor geometry and pluggable exports. FastAPI exposes every capability, while the responsive browser client handles input, editing and presentation only. Individual seat ordering remains out of scope.
 
 The approved [build brief](docs/build-plan.md) is the authoritative project plan across all phases.
 
@@ -15,9 +15,11 @@ Python 3.11+ is required.
     python -m pip install -e ".[api,test]"
     python -m pytest -v -s
 
-Serve REST and Scalar API reference:
+Serve the API, visual planner and Scalar API reference together:
 
     uvicorn seating_optimizer.api.app:app --host 127.0.0.1 --port 8000
+
+Open http://127.0.0.1:8000/ for the **visual planner**.
 
 The docs are served at http://127.0.0.1:8000/docs, using **Scalar** (not Swagger). The checked-in OpenAPI 3.1 YAML is served at /openapi.yaml.
 
@@ -158,4 +160,44 @@ Print renderers report an error instead of dropping names when layouts are too s
 
 ### Open questions preserved from the approved build plan
 
-Individual seat ORDER is out of scope. Multiple sittings remain separate solves over the same fixed venue. Joining or splitting physical tables per event remains undecided and is not implemented. Phase 3 is exclusively the visual API client, not part of this PR.
+Individual seat ORDER is out of scope. Multiple sittings remain separate solves over the same fixed venue. Joining or splitting physical tables per event remains undecided and is not implemented. Phase 3 adds the visual API client; the core/REST parity remains intact.
+
+
+## Phase 3 — browser planner (no UI-only optimization)
+
+The no-build, English-language browser interface ships with the FastAPI application at the root URL (/). It requires no frontend framework or Node.js at runtime; JavaScript, CSS and HTML are packaged with the Python API.
+
+**Workflow:**
+
+1. **Guest import:** choose CSV/XLSX. The browser sends the file to POST /v1/import/preview and shows every source column, automatically detected mapping and sample values. Correct header-to-field mapping manually, including free-form attribute fields. POST /v1/import performs the actual import and returns every validation issue. Imports containing errors are blocked in the UI, not silently merged or discarded.
+2. **Venue map editor:** create floors and numbered tables with independent chair counts; position rectangles, ellipses or circles by dragging or entering exact coordinates. Import structured JSON or annotated SVG files through POST /v1/layouts/import. Validate the edited layout through that same endpoint and export the JSON geometry to reuse in code or future edits.
+3. **Rule editor:** GET /v1/rules/catalog supplies metadata for **all six** rule shapes, their parameter fields and HARD/soft modes. Add, update, or remove rule records, supply positive weights for soft rules, and provide group/guest/table/zone references. The browser does not compute scores or evaluate rules.
+4. **Solve and review:** the client sends a Problem with current guests, table capacities, layout, rules and time limit to POST /v1/solve. View the server's status, rule-by-rule reasons, compromise report and table utilization. Switch between the classic table export, SVG floor maps, printable PDF table cards and complete JSON plan. Download vector floor-map PDF or table-card PDF. Every plan view comes from the API, including the /v1/exports/table, /v1/exports/floor-map/svg, /v1/exports/floor-map/pdf, /v1/exports/table-cards/pdf and /v1/exports/json endpoints.
+
+The UI does not manage registration systems, payments, messaging, CRM, or persistent accounts. The active draft lives in the current browser session; preserve the source spreadsheets, rules and layouts outside the UI. Reloading the page resets the in-memory form state. This is a browser client over stateless APIs, not a separate backend.
+
+### API additions
+
+- POST /v1/import/preview: accepts the existing base64 ImportRequest and returns ImportPreview (headers, automatic/current column mappings, sample rows, row issues and row count). Python exposes preview_registrations() for the same headless capability.
+- GET /v1/rules/catalog: returns RuleCatalog with data-defined field metadata. Python exposes rule_catalog(). These records describe existing solver rule shapes; only the solver implements the semantics.
+
+Both operations are documented in the checked-in OpenAPI YAML, still rendered with **Scalar** at /docs.
+
+### UI verification
+
+Core/API tests:
+
+    python -m pip install -e ".[api,test]"
+    python -m pytest -v -s
+
+Browser DOM tests (Node.js 22 required **only for testing**):
+
+    npm install
+    npm run test:ui
+
+Full real-browser golden E2E (also requires Chromium installed by Playwright):
+
+    npx playwright install chromium
+    npm run test:browser
+
+The browser test launches the actual FastAPI server, uploads **60 two-person registrations (120 guests)**, imports two-floor/12-table layout data, sets chair capacities, creates hard and soft rules through the visual editor, calls the real CP-SAT solver, and visits all four plan views. It asserts zero hard violations and wheelchair-family propagation. The CI workflow runs Python 3.11/3.12 core tests plus DOM and Chromium browser tests; the golden browser E2E does not mock a solver.
