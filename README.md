@@ -1,6 +1,6 @@
 # Seating Plan Optimizer
 
-**Phase 1: a fully headless, explainable seating optimizer** for one event meal sitting at a time. A reusable Python package contains the models, dynamic rule evaluation, Google OR-Tools CP-SAT solver, importer and two export renderers. A thin FastAPI layer exposes every capability. No seating UI, floor map, table cards or individual seat ordering are included.
+**Phases 1–2: headless seating optimization and print-ready layouts** for one event meal sitting. The Python core contains the CP-SAT solver, rule models, guest and venue importers, structured per-floor geometry and pluggable exports. FastAPI exposes the same functions. Floor-map SVG/PDF and printable table cards are available now; Phase 3's visual editor and individual seat ordering are not included.
 
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
@@ -93,6 +93,10 @@ Default auto-detection aliases are data in src/seating_optimizer/header_aliases.
 - POST /v1/solve: JSON Problem body. Returns Plan with status and reasons, even on infeasible cases.
 - POST /v1/exports/table: JSON Plan body. Returns text/plain table-by-table guest list with reasons and compromises.
 - POST /v1/exports/json: JSON Plan body. Returns the complete application/json Plan.
+- POST /v1/layouts/import: JSON array of base64-encoded structured JSON and/or numbered SVG layout files; optional zones and tables validate references. Returns VenueLayout.
+- POST /v1/exports/floor-map/svg: Plan with layout; returns standalone SVG documents, one per floor, in a JSON bundle.
+- POST /v1/exports/floor-map/pdf: Plan with layout; returns a vector PDF with one page per floor.
+- POST /v1/exports/table-cards/pdf: Plan; returns an A5 landscape PDF, one card per table.
 - GET /healthz, GET /openapi.yaml, GET /docs.
 
 A minimal client can save a problem to problem.json and send:
@@ -102,10 +106,54 @@ A minimal client can save a problem to problem.json and send:
     curl -s http://127.0.0.1:8000/v1/exports/table \
       -H 'content-type: application/json' -d @plan.json
 
-The API has no persistent state and no history dependency. An integration can pass an updated problem to solve again with pins added or edited. The Python render(plan, format, renderers=...) hook accepts a caller-provided renderer mapping. Phase 1 ships exactly two default formats: table and json.
+The API has no persistent state and no history dependency. An integration can pass an updated problem to solve again with pins added or edited. The Python render(plan, format, renderers=...) hook accepts a caller-provided renderer mapping. Built-in formats are table, json, floor-map-svg, floor-map-pdf and table-cards-pdf.
 
 ## Verification
 
 The suite includes unit tests for each rule, atomic grouping and wheelchair-family propagation, unique table capacities, contradictory hard rules naming conflicts, soft compromises, fill efficiency and re-solve pins. Import tests cover CSV, XLSX, manual mapping, auto-detection and malformed data. API tests validate live routes and JSON responses against the checked-in YAML and verify Scalar documentation. The golden scenario generates **120 guests in 60 families**, three languages, mixed age layers, a wheelchair family, two floors and 12 differently located tables; it checks all hard invariants and prints GOLDEN_120_SOLVE_SECONDS in the test logs.
 
 The solver targets a few seconds for practical events around 300 guests, subject to instance difficulty, hardware and time limit. A feasible plan is not misreported as optimal.
+
+
+## Phase 2 — venue geometry and printable exports
+
+VenueLayout is optional data on Problem and is returned unchanged on Plan when solved. Each FloorLayout contains a zone_id, width, height and drawings for zero or more tables. A TableDrawing has table_id, x, y, width, height and shape (rectangle, ellipse or circle). Coordinates have a top-left origin in a floor canvas of the specified dimensions. Tables still belong to exactly one zone and retain their own hard chair capacities. Layout never changes the solver objective or constraints.
+
+Validation rejects duplicate floor/table drawings, drawings outside the floor, negative or zero dimensions, noncircular circles and tables on a mismatched floor. Partial layouts can be saved and solved but the floor-map exporters require a drawing for every table, failing explicitly instead of silently omitting assigned groups. Table cards do not require a layout.
+
+### Structured JSON and numbered SVG draft import
+
+See examples/layout.json for a full two-floor structured geometry file and examples/numbered-ground.svg for a single-floor numbered SVG draft.
+
+    from seating_optimizer import import_layout, import_layout_files, solve
+    from seating_optimizer import render_floor_svg, render_floor_pdf, render_table_cards_pdf
+
+    layout = import_layout(open("examples/layout.json", "rb").read(),
+                           "layout.json", zones=problem.zones, tables=problem.tables)
+    plan = solve(problem.model_copy(update={"layout": layout}))
+    floor_svg_pages = render_floor_svg(plan).pages
+    floor_pdf_bytes = render_floor_pdf(plan)
+    cards_pdf_bytes = render_table_cards_pdf(plan)
+
+A structured JSON layout contains a floors list; each floor contains its zone_id, dimensions and tables list. A numbered SVG draft is converted to equivalent JSON data when:
+- The SVG root has data-zone-id and viewBox with a zero origin (e.g. 0 0 600 400).
+- Every numbered table is a g element with data-table-id matching the actual venue table, containing precisely one rect, ellipse or circle and, optionally, a text label matching that ID.
+- No SVG transforms or external entities are used. The importer rejects unsupported transformations and ambiguous labels instead of making guesses.
+
+Multiple draft SVGs and/or JSON layouts may be combined by import_layout_files in Python or by POST /v1/layouts/import with a list of base64 file entries. The same layout records are usable directly by future visual clients.
+
+Raster scans, unannotated PDF sketches and arbitrary unlabeled SVGs require operator-guided annotation/conversion; Phase 2 does not attempt OCR or guess table identities. This limitation is deliberate.
+
+### Exports and headless API parity
+
+- Floor-map SVG: one standalone SVG page per floor, with every group label printed inside its assigned table drawing. Table/group identifiers are available in data-table-id and data-group-id attributes for verification and later editor reuse.
+- Floor-map PDF: matching vector geometry, one printable page per floor, including assigned group names.
+- Table cards PDF: one A5 landscape card per table, including empty tables; shows table/zone, occupied seats, all families and their guest names.
+
+In Python, render(plan, "floor-map-svg") returns a JSON string of pages and render(plan, "floor-map-pdf") or render(plan, "table-cards-pdf") returns PDF bytes. The same three operations are available in REST with typed OpenAPI YAML rendered by Scalar. All existing Phase 1 imports and render formats remain valid.
+
+Print renderers report an error instead of dropping names when layouts are too small. PDF output prefers installed Unicode TrueType fonts, and uses the built-in font when available; deployments without a Unicode font must provide a suitable system font to print non-Latin guest names. SVG preserves Unicode directly.
+
+### Open questions preserved from the approved build plan
+
+Individual seat ORDER is out of scope. Multiple sittings remain separate solves over the same fixed venue. Joining or splitting physical tables per event remains undecided and is not implemented. Phase 3 is exclusively the visual API client, not part of this PR.
