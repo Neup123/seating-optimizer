@@ -1,0 +1,238 @@
+openapi: 3.1.0
+info:
+  title: Seating Plan Optimizer API
+  version: 0.1.0
+  description: Headless Phase 1 seating optimization. All rules, weights and configuration are provided in requests.
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Health status
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, const: ok}
+  /v1/import:
+    post:
+      operationId: importRegistrations
+      summary: Import CSV or XLSX registrations
+      description: Source-column-to-target mapping overrides configurable header detection. Rows with errors are reported, not silently discarded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ImportRequest'}
+      responses:
+        '200':
+          description: Imported guests and row diagnostics
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ImportResult'}
+        '400':
+          description: Invalid base64 input
+  /v1/solve:
+    post:
+      operationId: solveSession
+      summary: Solve a single session using CP-SAT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Problem'}
+      responses:
+        '200':
+          description: Plan or honest infeasible/unknown report
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Plan'}
+        '422':
+          description: Invalid problem or references
+  /v1/exports/table:
+    post:
+      operationId: exportTable
+      summary: Render the complete table-by-table list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Plain-text seating table list
+          content:
+            text/plain:
+              schema: {type: string}
+  /v1/exports/json:
+    post:
+      operationId: exportJson
+      summary: Render the complete machine-readable plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Full plan including assignments, reasons and compromises
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Plan'}
+  /openapi.yaml:
+    get:
+      operationId: openapiYaml
+      summary: Download the static OpenAPI document
+      responses:
+        '200':
+          description: OpenAPI YAML
+          content:
+            text/plain:
+              schema: {type: string}
+components:
+  schemas:
+    Zone:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    Table:
+      type: object
+      additionalProperties: false
+      required: [id, zone_id, capacity]
+      properties:
+        id: {type: string}
+        zone_id: {type: string}
+        capacity: {type: integer, minimum: 1}
+    Guest:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        group_id: {type: [string, 'null']}
+        attributes:
+          type: object
+          additionalProperties: {type: [string, number, boolean]}
+    Rule:
+      type: object
+      additionalProperties: false
+      required: [id, shape, mode]
+      properties:
+        id: {type: string}
+        shape:
+          type: string
+          enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]
+        mode: {type: string, enum: [soft, hard]}
+        parameters: {type: object, additionalProperties: true}
+        weight: {type: [integer, 'null'], minimum: 1}
+    SolverConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        time_limit_seconds: {type: number, exclusiveMinimum: 0, default: 5}
+        workers: {type: integer, minimum: 1, maximum: 64, default: 8}
+        random_seed: {type: integer, default: 42}
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [session_id, zones, tables, guests]
+      properties:
+        session_id: {type: string}
+        zones: {type: array, items: {$ref: '#/components/schemas/Zone'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/Table'}}
+        guests: {type: array, items: {$ref: '#/components/schemas/Guest'}}
+        rules: {type: array, items: {$ref: '#/components/schemas/Rule'}}
+        config: {$ref: '#/components/schemas/SolverConfig'}
+    ImportRequest:
+      type: object
+      required: [filename, content_base64]
+      properties:
+        filename: {type: string}
+        content_base64: {type: string, contentEncoding: base64}
+        mapping: {type: [object, 'null'], additionalProperties: {type: string}}
+        header_aliases:
+          type: [object, 'null']
+          additionalProperties:
+            type: array
+            items: {type: string}
+    ImportIssue:
+      type: object
+      required: [row, column, severity, message]
+      properties:
+        row: {type: [integer, 'null']}
+        column: {type: [string, 'null']}
+        severity: {type: string, enum: [error, warning]}
+        message: {type: string}
+    ImportResult:
+      type: object
+      required: [guests, mapping, issues, rows_seen, rows_imported]
+      properties:
+        guests: {type: array, items: {$ref: '#/components/schemas/Guest'}}
+        mapping: {type: object, additionalProperties: {type: string}}
+        issues: {type: array, items: {$ref: '#/components/schemas/ImportIssue'}}
+        rows_seen: {type: integer}
+        rows_imported: {type: integer}
+    Reason:
+      type: object
+      required: [rule_id, description, points]
+      properties:
+        rule_id: {type: string}
+        description: {type: string}
+        points: {type: number}
+    Assignment:
+      type: object
+      required: [group_id, table_id, guest_ids, guest_names, reasons, points]
+      properties:
+        group_id: {type: string}
+        table_id: {type: string}
+        guest_ids: {type: array, items: {type: string}}
+        guest_names: {type: array, items: {type: string}}
+        reasons: {type: array, items: {$ref: '#/components/schemas/Reason'}}
+        points: {type: number}
+    ScoreItem:
+      type: object
+      required: [rule_id, points]
+      properties:
+        rule_id: {type: string}
+        points: {type: integer}
+    Compromise:
+      type: object
+      required: [rule_id, description, lost_points]
+      properties:
+        rule_id: {type: string}
+        description: {type: string}
+        lost_points: {type: integer}
+    TableUsage:
+      type: object
+      required: [table_id, zone_id, capacity, occupied, empty_seats]
+      properties:
+        table_id: {type: string}
+        zone_id: {type: string}
+        capacity: {type: integer}
+        occupied: {type: integer}
+        empty_seats: {type: integer}
+    Plan:
+      type: object
+      additionalProperties: false
+      required: [session_id, status, total_score, assignments, tables, score_breakdown, compromises, conflicting_constraints, solve_seconds, message]
+      properties:
+        session_id: {type: string}
+        status: {type: string, enum: [optimal, feasible, infeasible, unknown]}
+        total_score: {type: [integer, 'null']}
+        assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/TableUsage'}}
+        score_breakdown: {type: array, items: {$ref: '#/components/schemas/ScoreItem'}}
+        compromises: {type: array, items: {$ref: '#/components/schemas/Compromise'}}
+        conflicting_constraints: {type: array, items: {type: string}}
+        solve_seconds: {type: number}
+        message: {type: string}
