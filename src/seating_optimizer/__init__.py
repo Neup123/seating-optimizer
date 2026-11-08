@@ -2,7 +2,8 @@
 from .exporters import render, render_json, render_table
 from .layout_io import import_layout, import_layout_files
 from .print_exports import SvgFloorBundle, SvgFloorPage, render_floor_pdf, render_floor_svg, render_table_cards_pdf
-from .importer import ImportIssue, ImportResult, default_aliases, detect_headers, import_registrations
+from .importer import ImportIssue, ImportResult, ImportPreview, default_aliases, detect_headers, import_registrations, preview_registrations
+from .rule_catalog import RuleCatalog, RuleField, RuleShapeSpec, rule_catalog
 from .models import (
     Assignment, Compromise, FloorLayout, Guest, Plan, Problem, Reason, Rule,
     TableDrawing, VenueLayout, validate_layout_references,
@@ -17,5 +18,6 @@ __all__ = [
     "render_floor_pdf", "render_floor_svg", "render_table_cards_pdf",
     "ScoreItem", "SolverConfig", "Table", "TableUsage", "Zone", "solve",
     "render", "render_json", "render_table", "ImportIssue", "ImportResult",
-    "default_aliases", "detect_headers", "import_registrations",
+    "default_aliases", "detect_headers", "import_registrations", "ImportPreview", "preview_registrations",
+    "RuleCatalog", "RuleField", "RuleShapeSpec", "rule_catalog",
 ]
