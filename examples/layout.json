@@ -1,0 +1,50 @@
+{
+  "floors": [
+    {
+      "zone_id": "ground",
+      "width": 600,
+      "height": 400,
+      "tables": [
+        {
+          "table_id": "G1",
+          "x": 20,
+          "y": 20,
+          "width": 180,
+          "height": 150,
+          "shape": "rectangle"
+        },
+        {
+          "table_id": "G2",
+          "x": 250,
+          "y": 30,
+          "width": 180,
+          "height": 150,
+          "shape": "ellipse"
+        }
+      ]
+    },
+    {
+      "zone_id": "upper",
+      "width": 600,
+      "height": 400,
+      "tables": [
+        {
+          "table_id": "U1",
+          "x": 40,
+          "y": 25,
+          "width": 180,
+          "height": 150,
+          "shape": "rectangle"
+        },
+        {
+          "table_id": "U2",
+          "x": 280,
+          "y": 25,
+          "width": 150,
+          "height": 150,
+          "shape": "circle"
+        }
+      ]
+    }
+  ]
+}
