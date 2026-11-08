@@ -4,15 +4,17 @@ from __future__ import annotations
 import base64
 import binascii
 from importlib.resources import files
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
 from pydantic import BaseModel, Field
 
 from seating_optimizer import (
     Plan, Problem, Table, Zone, VenueLayout, SvgFloorBundle, import_layout_files,
     import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
-    render_json, render_table, solve,
+    render_json, render_table, solve, preview_registrations, rule_catalog,
+    ImportPreview, RuleCatalog,
 )
 from seating_optimizer.importer import ImportResult
 
@@ -57,6 +59,20 @@ def create_app() -> FastAPI:
         return import_registrations(
             content, request.filename, mapping=request.mapping, aliases=request.header_aliases
         )
+
+    @app.post("/v1/import/preview", response_model=ImportPreview)
+    def preview_import(request: ImportRequest) -> ImportPreview:
+        try:
+            content = base64.b64decode(request.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid base64 input") from exc
+        return preview_registrations(
+            content, request.filename, mapping=request.mapping, aliases=request.header_aliases
+        )
+
+    @app.get("/v1/rules/catalog", response_model=RuleCatalog)
+    def get_rule_catalog() -> RuleCatalog:
+        return rule_catalog()
 
     @app.post("/v1/layouts/import", response_model=VenueLayout)
     def import_venue(request: LayoutImportRequest) -> VenueLayout:
@@ -115,6 +131,20 @@ def create_app() -> FastAPI:
     @app.get("/openapi.yaml", response_class=PlainTextResponse)
     def openapi_yaml() -> str:
         return files("seating_optimizer.api").joinpath("openapi.yaml").read_text(encoding="utf-8")
+
+    web_dir = Path(__file__).parent / "web"
+
+    @app.get("/", include_in_schema=False)
+    def visual_client() -> FileResponse:
+        return FileResponse(web_dir / "index.html", media_type="text/html")
+
+    @app.get("/assets/app.js", include_in_schema=False)
+    def visual_client_script() -> FileResponse:
+        return FileResponse(web_dir / "app.js", media_type="text/javascript")
+
+    @app.get("/assets/style.css", include_in_schema=False)
+    def visual_client_styles() -> FileResponse:
+        return FileResponse(web_dir / "style.css", media_type="text/css")
 
     @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
     def scalar_docs() -> str:

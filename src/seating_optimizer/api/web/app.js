@@ -1,0 +1,806 @@
+/* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
+const SVG_NS = "http://www.w3.org/2000/svg";
+const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
+const VIEWS = [["table", "Table view"], ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+
+function element(tag, className, text) {
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+}
+function append(parent, ...children) {
+  for (const child of children.flat()) {
+    if (child !== null && child !== undefined) parent.append(child);
+  }
+  return parent;
+}
+function action(label, callback, className = "secondary", id) {
+  const b = element("button", className, label);
+  b.type = "button";
+  if (id) b.id = id;
+  b.addEventListener("click", callback);
+  return b;
+}
+function textField(label, value, onChange, options = {}) {
+  const holder = element("label", "field");
+  holder.append(element("span", "", label));
+  const field = document.createElement("input");
+  field.type = options.type || "text";
+  field.value = value === null || value === undefined ? "" : String(value);
+  if (options.id) field.id = options.id;
+  if (options.placeholder) field.placeholder = options.placeholder;
+  if (options.min !== undefined) field.min = String(options.min);
+  if (options.step !== undefined) field.step = String(options.step);
+  if (options.required) field.required = true;
+  field.addEventListener("change", () => onChange(field.value));
+  holder.append(field);
+  return holder;
+}
+function selectField(label, choices, current, onChange, options = {}) {
+  const holder = element("label", "field");
+  holder.append(element("span", "", label));
+  const field = document.createElement("select");
+  if (options.id) field.id = options.id;
+  for (const candidate of choices) {
+    const value = Array.isArray(candidate) ? candidate[0] : candidate;
+    const title = Array.isArray(candidate) ? candidate[1] : candidate;
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = title;
+    field.append(o);
+  }
+  field.value = String(current === null || current === undefined ? "" : current);
+  field.addEventListener("change", () => onChange(field.value));
+  holder.append(field);
+  return holder;
+}
+function card(title, description) {
+  const holder = element("section", "card");
+  if (title) holder.append(element("h2", "", title));
+  if (description) holder.append(element("p", "muted", description));
+  return holder;
+}
+function row(...nodes) { return append(element("div", "row"), nodes); }
+function grid(...nodes) { return append(element("div", "grid"), nodes); }
+function issuesList(issues) {
+  const holder = element("div", "stack");
+  for (const issue of issues || []) {
+    const d = element("div", "problem" + (issue.severity === "warning" ? " warning" : ""),
+      (issue.row == null ? "File" : "Row " + issue.row) +
+      (issue.column ? " · " + issue.column : "") + ": " + issue.message);
+    holder.append(d);
+  }
+  return holder;
+}
+function safeNumber(input) {
+  const number = Number(input);
+  return Number.isFinite(number) ? number : NaN;
+}
+function encodeBytes(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return btoa(binary);
+}
+async function encodeFile(file) {
+  if (!file || file.size > 10_000_000) throw Error("File must be smaller than 10 MB.");
+  return encodeBytes(new Uint8Array(await file.arrayBuffer()));
+}
+function encodeText(text) { return encodeBytes(new TextEncoder().encode(text)); }
+
+export function createGateway(fetcher = fetch) {
+  async function request(path, options, resultType = "json") {
+    const response = await fetcher(path, options);
+    if (!response.ok) {
+      let detail = await response.text();
+      try { const parsed = JSON.parse(detail); detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail); }
+      catch (_) { /* preserve human-readable HTTP error */ }
+      throw Error(detail || "Request failed (" + response.status + ")");
+    }
+    return resultType === "blob" ? response.blob() :
+      resultType === "text" ? response.text() : response.json();
+  }
+  return {
+    get: (path) => request(path),
+    post: (path, value, type = "json") => request(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(value)
+    }, type)
+  };
+}
+
+export function createApp(root, api = createGateway()) {
+  const state = {
+    screen: "import", view: "table", viewContent: null, viewError: "",
+    importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
+    catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
+    zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
+    sessionId: "meal-1", seconds: 5, plan: null,
+    notice: "Choose a CSV or XLSX guest list to begin.", error: false
+  };
+  let viewObjectUrl = null;
+  let working = false;
+
+  function announce(message, error = false) {
+    state.notice = message;
+    state.error = error;
+    render();
+  }
+  async function attempt(task) {
+    if (working) return;
+    working = true;
+    try { await task(); }
+    catch (error) { announce(error.message || String(error), true); }
+    finally { working = false; }
+  }
+  function invalidate() { state.plan = null; state.viewContent = null; }
+  function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
+  function configuredTables() { return state.tables.filter(t => Number.isInteger(Number(t.capacity)) && Number(t.capacity) > 0); }
+  function projectProblem() {
+    if (!state.guests.length) throw Error("Import valid guests before solving.");
+    if (!state.tables.length || !state.zones.length) throw Error("Configure tables and floors before solving.");
+    if (configuredTables().length !== state.tables.length) throw Error("Every table requires its own positive chair capacity.");
+    return {
+      session_id: state.sessionId,
+      zones: state.zones.map(z => ({ id: z.id, name: z.name })),
+      tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id, capacity: Number(t.capacity) })),
+      guests: state.guests,
+      rules: state.rules,
+      config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
+      layout: state.layout.floors.length ? state.layout : null
+    };
+  }
+  function clearObjectUrl() {
+    if (viewObjectUrl && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(viewObjectUrl);
+    viewObjectUrl = null;
+  }
+  function downloadBlob(data, name, type) {
+    const blob = data instanceof Blob ? data : new Blob([data], { type });
+    if (typeof URL.createObjectURL !== "function") throw Error("File downloads are unavailable in this browser.");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.append(a);
+    a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function drawHeader() {
+    const sidebar = element("aside", "sidebar");
+    const brand = element("div", "brand", "Seating Plan Optimizer");
+    brand.append(element("span", "", "Event meal planning"));
+    sidebar.append(brand);
+    const nav = element("nav", "nav");
+    nav.setAttribute("aria-label", "Workflow screens");
+    SCREENS.forEach(([screen, name], index) => {
+      const b = action("", () => { state.screen = screen; render(); }, "");
+      b.append(element("span", "step", "0" + (index + 1)), element("span", "", name));
+      b.id = "nav-" + screen;
+      if (state.screen === screen) b.setAttribute("aria-current", "page");
+      nav.append(b);
+    });
+    sidebar.append(nav, element("p", "side-note",
+      "All assignments and printable exports are produced by the REST API. No seating rules execute in the browser."));
+    return sidebar;
+  }
+  function render() {
+    root.replaceChildren();
+    const shell = element("div", "shell");
+    shell.append(drawHeader());
+    const main = element("main", "workspace");
+    const header = element("div", "topline");
+    const text = element("div");
+    const title = SCREENS.find(([screen]) => screen === state.screen)?.[1] || "Seating Plan";
+    text.append(element("h1", "", title), element("p", "", "Build, optimize and review a seating session"));
+    const stats = element("div", "stats");
+    stats.append(element("span", "pill", state.guests.length + " guests"),
+      element("span", "pill", state.tables.length + " tables"),
+      element("span", "pill", state.rules.length + " rules"));
+    header.append(text, stats);
+    main.append(header);
+    const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
+    notice.setAttribute("role", "status");
+    notice.id = "notice";
+    main.append(notice);
+    if (state.screen === "import") main.append(renderImport());
+    else if (state.screen === "rules") main.append(renderRules());
+    else if (state.screen === "map") main.append(renderMap());
+    else main.append(renderPlan());
+    shell.append(main);
+    root.append(shell);
+  }
+
+  function renderImport() {
+    const area = element("div");
+    const form = card("Upload guest registrations", "CSV or XLSX. The server detects headers; you can override every column before importing.");
+    const fileLabel = element("label", "");
+    fileLabel.append(element("span", "", "Guest list spreadsheet"));
+    const file = document.createElement("input");
+    file.type = "file"; file.id = "guest-file"; file.accept = ".csv,.xlsx";
+    file.addEventListener("change", async () => attempt(async () => {
+      const selected = file.files && file.files[0];
+      if (!selected) return;
+      const base64 = await encodeFile(selected);
+      state.importFile = { filename: selected.name, content_base64: base64 };
+      state.preview = await api.post("/v1/import/preview", state.importFile);
+      state.mapping = { ...state.preview.mapping };
+      state.importResult = null;
+      state.guests = [];
+      invalidate();
+      announce("Header preview loaded. Review the mapping and import the guests.");
+    }));
+    fileLabel.append(file);
+    form.append(fileLabel);
+    if (state.importFile) form.append(element("p", "muted", "Selected: " + state.importFile.filename));
+    area.append(form);
+    if (!state.preview) return area;
+
+    const mappingCard = card("Map columns", "Automatic matches are preselected. Choose a target or enter any custom attribute key. Unmapped columns are preserved under their original header.");
+    const choices = [["", "Unmapped (preserve as attribute)"],
+      ["name", "Guest / registration name"], ["size", "Party size"],
+      ["group_id", "Group ID"], ["attribute.language", "Attribute: language"],
+      ["attribute.age_layer", "Attribute: age layer"],
+      ["attribute.mobility", "Attribute: mobility"], ["custom", "Custom attribute..."]];
+    const sheet = element("div", "table-scroll");
+    const table = document.createElement("table");
+    const head = element("thead");
+    const tr = element("tr");
+    ["Source column", "Target field", "Preview value"].forEach(t => tr.append(element("th", "", t)));
+    head.append(tr); table.append(head);
+    const body = element("tbody");
+    state.preview.headers.forEach(header => {
+      const rowEl = element("tr");
+      rowEl.append(element("td", "", header));
+      const cell = element("td");
+      const value = state.mapping[header] || "";
+      const selected = choices.some(choice => choice[0] === value) ? value :
+                       value.startsWith("attribute.") ? "custom" : "";
+      const sel = selectField("Mapping for " + header, choices, selected, next => {
+        if (next === "custom") state.mapping[header] = "attribute.custom";
+        else if (!next) delete state.mapping[header];
+        else state.mapping[header] = next;
+        render();
+      }, { id: "map-" + header.replace(/[^a-z0-9]+/gi, "-").toLowerCase() });
+      cell.append(sel);
+      if (selected === "custom") {
+        const custom = textField("Attribute key", value.startsWith("attribute.") ?
+          value.slice(10) : "", next => { state.mapping[header] = "attribute." + next; }, {
+          id: "custom-" + header.replace(/[^a-z0-9]+/gi, "-").toLowerCase()
+        });
+        cell.append(custom);
+      }
+      rowEl.append(cell, element("td", "sample", state.preview.sample_rows[0]?.[header] || "—"));
+      body.append(rowEl);
+    });
+    table.append(body); sheet.append(table); mappingCard.append(sheet);
+    const buttons = row(action("Review corrected mapping", () => attempt(async () => {
+      state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
+      announce("Mapping checked by the API. Review any row-level issues below.");
+    }), "secondary", "preview-mapping"), action("Import guests", () => attempt(async () => {
+      const result = await api.post("/v1/import", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
+      state.importResult = result;
+      if (result.issues.some(i => i.severity === "error")) {
+        state.guests = [];
+        invalidate();
+        announce("Import blocked: fix the reported errors. No rows were silently accepted.", true);
+      } else {
+        state.guests = result.guests;
+        invalidate();
+        announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
+      }
+    }), "primary", "import-guests"));
+    mappingCard.append(buttons);
+    area.append(mappingCard);
+    if (state.preview.issues?.length || state.importResult?.issues?.length) {
+      const problems = card("Validation diagnostics", "Every import error and warning stays visible for correction.");
+      problems.append(issuesList(state.importResult ? state.importResult.issues : state.preview.issues));
+      area.append(problems);
+    }
+    if (state.preview.sample_rows?.length) {
+      const sample = card("Spreadsheet sample", "First rows as parsed by the API.");
+      const wrap = element("div", "table-scroll");
+      const table2 = document.createElement("table");
+      const h2 = element("tr");
+      state.preview.headers.forEach(h => h2.append(element("th", "", h)));
+      table2.append(append(element("thead"), h2));
+      const body2 = element("tbody");
+      state.preview.sample_rows.forEach(entry => {
+        const r = element("tr");
+        state.preview.headers.forEach(h => r.append(element("td", "", entry[h])));
+        body2.append(r);
+      });
+      table2.append(body2); wrap.append(table2); sample.append(wrap); area.append(sample);
+    }
+    if (state.importResult && !state.importResult.issues.some(i => i.severity === "error")) {
+      area.append(append(card("Import complete"), element("p", "counter", state.guests.length + " guests are ready for optimization.")));
+    }
+    return area;
+  }
+
+  function renderRules() {
+    const area = element("div");
+    const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
+    if (!state.catalog) {
+      form.append(element("p", "problem", "Rule catalog is unavailable. Reload the page."));
+      return append(area, form);
+    }
+    const shapes = state.catalog.shapes;
+    form.append(row(selectField("New consideration", shapes.map(s => [s.shape, s.title]), state.selectedShape,
+      next => { state.selectedShape = next; }, { id: "new-rule-shape" }),
+      action("Add consideration", () => {
+        const spec = shapes.find(s => s.shape === state.selectedShape);
+        const parameters = {};
+        spec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
+        state.rules.push({
+          id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
+          weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters
+        });
+        invalidate();
+        announce("Added a " + spec.title + " rule. Set its parameters below.");
+      }, "primary", "add-rule")));
+    area.append(form);
+    if (!state.rules.length) {
+      area.append(append(card("No considerations yet"), element("p", "muted",
+        "Add grouping, zone restrictions, pair preferences, capacity, fill efficiency, or locked assignments.")));
+    }
+    state.rules.forEach((rule, i) => {
+      const spec = shapes.find(s => s.shape === rule.shape);
+      const section = card(spec?.title || rule.shape, spec?.description);
+      section.setAttribute("data-rule-id", rule.id);
+      const header = element("div", "row between");
+      header.append(element("span", "badge", rule.shape));
+      header.append(action("Remove rule", () => {
+        state.rules.splice(i, 1); invalidate(); announce("Rule removed.");
+      }, "danger small", "delete-rule-" + i));
+      section.append(header);
+      section.append(grid(
+        textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
+        selectField("Hard or weighted", spec.modes.map(m => [m, m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)"]),
+          rule.mode, value => {
+            rule.mode = value;
+            rule.weight = value === "soft" ? (spec.default_weight || 1) : null;
+            invalidate(); render();
+          }, { id: "rule-mode-" + i }),
+        rule.mode === "soft"
+          ? textField("Points weight", rule.weight, value => { rule.weight = Number(value); invalidate(); },
+              { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
+          : element("p", "muted", "HARD — no weight")
+      ));
+      const fields = element("div", "grid three");
+      spec.fields.forEach(field => {
+        const original = rule.parameters[field.name] || "";
+        const update = value => {
+          if (value === "") delete rule.parameters[field.name];
+          else rule.parameters[field.name] = value;
+          invalidate();
+        };
+        if (field.kind === "select") fields.append(selectField(field.label,
+          field.choices, original, update, { id: "rule-" + i + "-" + field.name }));
+        else if (field.kind === "zone") fields.append(selectField(field.label,
+          [["", "Select zone"], ...state.zones.map(z => [z.id, z.name])], original, update,
+          { id: "rule-" + i + "-" + field.name }));
+        else if (field.kind === "table") fields.append(selectField(field.label,
+          [["", "Select table"], ...state.tables.map(t => [t.id, t.id + " (" + t.zone_id + ")"])],
+          original, update, { id: "rule-" + i + "-" + field.name }));
+        else if (field.kind === "target") {
+          const list = [[ "", "Select guest or group" ]];
+          const seen = new Set();
+          state.guests.forEach(g => {
+            const val = g.group_id || g.id;
+            if (!seen.has(val)) { seen.add(val); list.push([val, val]); }
+          });
+          fields.append(selectField(field.label, list, original, update,
+            { id: "rule-" + i + "-" + field.name }));
+        } else fields.append(textField(field.label, original, update,
+          { id: "rule-" + i + "-" + field.name, required: field.required }));
+      });
+      section.append(fields);
+      area.append(section);
+    });
+    return area;
+  }
+
+  async function validateLayout() {
+    if (!state.layout.floors.length) throw Error("Add or import at least one floor.");
+    if (configuredTables().length !== state.tables.length) throw Error("Set every table's chair capacity before validating.");
+    const request = {
+      files: [{ filename: "edited-layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }],
+      zones: state.zones, tables: state.tables.map(t => ({ ...t, capacity: Number(t.capacity) }))
+    };
+    const validated = await api.post("/v1/layouts/import", request);
+    state.layout = validated;
+    invalidate();
+    announce("Venue layout validated by the API. Positions and shapes are ready for printing.");
+  }
+  async function loadLayoutFiles(files) {
+    const encoded = [];
+    for (const file of files) encoded.push({ filename: file.name, content_base64: await encodeFile(file) });
+    const imported = await api.post("/v1/layouts/import", { files: encoded });
+    state.layout = imported;
+    for (const floor of imported.floors) {
+      if (!state.zones.some(z => z.id === floor.zone_id))
+        state.zones.push({ id: floor.zone_id, name: floor.zone_id });
+      for (const drawing of floor.tables) {
+        const old = state.tables.find(t => t.id === drawing.table_id);
+        if (old && old.zone_id !== floor.zone_id)
+          throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
+        if (!old) state.tables.push({ id: drawing.table_id, zone_id: floor.zone_id, capacity: null });
+      }
+    }
+    state.focusedFloor = imported.floors[0].zone_id;
+    invalidate();
+    announce("Layout imported. Set chair capacities and validate the venue before solving.");
+  }
+
+  function renderMap() {
+    const area = element("div");
+    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Capacity is per table.");
+    const file = document.createElement("input");
+    file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
+    file.addEventListener("change", () => attempt(async () => {
+      if (file.files?.length) await loadLayoutFiles(Array.from(file.files));
+    }));
+    intro.append(append(element("label", "", ""), element("span", "", "Import venue layout files"), file));
+    intro.append(row(
+      action("Validate layout", () => attempt(validateLayout), "primary", "validate-layout"),
+      action("Export layout JSON", () => attempt(async () => {
+        const validated = await api.post("/v1/layouts/import", {
+          files: [{ filename: "layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }]
+        });
+        downloadBlob(JSON.stringify(validated, null, 2), "venue-layout.json", "application/json");
+      }), "secondary", "export-layout")
+    ));
+    area.append(intro);
+    const floorForm = card("Add floor", "Zones identify the floor for solver restrictions and printable pages.");
+    const addFloor = element("form", "grid three");
+    addFloor.id = "floor-form";
+    const inputs = {};
+    [["id", "Floor ID", "ground"], ["name", "Floor name", "Ground floor"],
+     ["width", "Canvas width", "700"], ["height", "Canvas height", "450"]].forEach(([key,label,placeholder]) => {
+      const input = document.createElement("input");
+      input.name = key; input.placeholder = placeholder; input.required = true;
+      input.type = key === "width" || key === "height" ? "number" : "text";
+      if (input.type === "number") { input.min = "1"; input.value = placeholder; }
+      inputs[key] = input;
+      addFloor.append(append(element("label"), element("span", "", label), input));
+    });
+    const submit = element("button", "primary", "Create floor");
+    submit.type = "submit"; submit.id = "add-floor";
+    addFloor.append(submit);
+    addFloor.addEventListener("submit", event => {
+      event.preventDefault();
+      const id = inputs.id.value.trim();
+      if (!id || state.zones.some(z => z.id === id)) return announce("Floor ID must be unique and nonempty.", true);
+      const width = safeNumber(inputs.width.value), height = safeNumber(inputs.height.value);
+      if (!(width > 0 && height > 0)) return announce("Floor dimensions must be positive.", true);
+      state.zones.push({ id, name: inputs.name.value.trim() || id });
+      state.layout.floors.push({ zone_id: id, width, height, tables: [] });
+      state.focusedFloor = id;
+      invalidate(); announce("Floor " + id + " added.");
+    });
+    floorForm.append(addFloor); area.append(floorForm);
+
+    if (!state.layout.floors.length) {
+      area.append(element("div", "empty", "No floors yet. Create one or import structured layout files."));
+      return area;
+    }
+    if (!currentFloor()) state.focusedFloor = state.layout.floors[0].zone_id;
+    const layout = currentFloor();
+    const panel = card("Edit tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id),
+      "Drag a numbered shape to reposition it, or edit exact geometry and table chair count below.");
+    panel.append(selectField("Floor", state.layout.floors.map(f => [f.zone_id,
+      state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
+      state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
+
+    const split = element("div", "map-layout");
+    const canvas = element("div", "map-canvas");
+    canvas.append(makeEditorSvg(layout));
+    split.append(canvas);
+    const controls = element("div");
+    const tableForm = element("form", "stack");
+    tableForm.id = "table-form";
+    tableForm.append(element("h3", "", "Add numbered table"));
+    const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
+    const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
+    const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
+    tableForm.append(grid(idInput, capacityInput, shapeInput));
+    const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
+    tableForm.append(create);
+    tableForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const id = tableForm.querySelector("#new-table-id").value.trim();
+      const capacity = Number(tableForm.querySelector("#new-table-capacity").value);
+      const shape = tableForm.querySelector("#new-table-shape").value;
+      if (!id || state.tables.some(t => t.id === id)) return announce("Each table requires a unique ID.", true);
+      if (!Number.isInteger(capacity) || capacity < 1) return announce("Chair capacity must be a positive integer.", true);
+      const width = Math.min(160, layout.width / 2);
+      const height = shape === "circle" ? width : Math.min(125, layout.height / 2);
+      const x = 8 + (layout.tables.length % 3) * 14;
+      const y = 8 + (layout.tables.length % 3) * 14;
+      if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
+      state.tables.push({ id, zone_id: layout.zone_id, capacity });
+      layout.tables.push({ table_id: id, x, y, width, height, shape });
+      invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
+    });
+    controls.append(tableForm);
+    const list = element("div", "stack");
+    list.append(element("h3", "", "Tables on this floor"));
+    for (const drawing of layout.tables) {
+      const table = state.tables.find(t => t.id === drawing.table_id);
+      const editor = element("form", "table-editor");
+      editor.dataset.tableId = drawing.table_id;
+      editor.append(element("h3", "", drawing.table_id));
+      const fields = element("div", "grid three");
+      const definitions = [
+        ["capacity", "Chairs", table?.capacity, 1],
+        ["x", "X", drawing.x, 0], ["y", "Y", drawing.y, 0],
+        ["width", "Width", drawing.width, 1], ["height", "Height", drawing.height, 1]
+      ];
+      for (const [key, label, value, min] of definitions) {
+        const f = textField(label, value, () => {}, {
+          type: "number", step: key === "capacity" ? 1 : "any",
+          min, id: "table-" + drawing.table_id + "-" + key
+        });
+        fields.append(f);
+      }
+      fields.append(selectField("Shape", ["rectangle", "ellipse", "circle"], drawing.shape,
+        () => {}, { id: "table-" + drawing.table_id + "-shape" }));
+      editor.append(fields);
+      const save = element("button", "secondary small", "Apply dimensions");
+      save.type = "submit";
+      const remove = action("Remove table", () => {
+        layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
+        state.tables = state.tables.filter(t => t.id !== drawing.table_id);
+        invalidate(); announce("Removed table " + drawing.table_id + ".");
+      }, "danger small");
+      editor.append(row(save, remove));
+      editor.addEventListener("submit", event => {
+        event.preventDefault();
+        const next = {};
+        for (const [key] of definitions) {
+          const val = editor.querySelector('[id="table-' + drawing.table_id + "-" + key + '"]').value;
+          next[key] = Number(val);
+        }
+        if (["x","y","width","height"].some(k => !Number.isFinite(next[k])))
+          return announce("Table drawing coordinates must be finite numbers.", true);
+        if (!Number.isInteger(next.capacity) || next.capacity < 1)
+          return announce("Chair capacity must be a positive integer.", true);
+        table.capacity = next.capacity;
+        ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
+        drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
+        invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");
+      });
+      list.append(editor);
+    }
+    controls.append(list);
+    split.append(controls); panel.append(split); area.append(panel);
+    return area;
+  }
+
+  function makeEditorSvg(floor) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + floor.width + " " + floor.height);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Interactive table layout for " + floor.zone_id);
+    svg.id = "map-editor-svg";
+    const bg = document.createElementNS(SVG_NS, "rect");
+    bg.setAttribute("width", String(floor.width)); bg.setAttribute("height", String(floor.height));
+    bg.setAttribute("fill", "#f5f8fa"); svg.append(bg);
+    for (const drawing of floor.tables) {
+      const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
+      g.setAttribute("data-table-id", drawing.table_id);
+      const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
+      if (drawing.shape === "rectangle") {
+        ["x", "y", "width", "height"].forEach(k => shape.setAttribute(k, String(drawing[k])));
+      } else {
+        shape.setAttribute("cx", String(drawing.x + drawing.width / 2));
+        shape.setAttribute("cy", String(drawing.y + drawing.height / 2));
+        shape.setAttribute("rx", String(drawing.width / 2));
+        shape.setAttribute("ry", String(drawing.height / 2));
+      }
+      shape.setAttribute("fill", "#d8eef0");
+      shape.setAttribute("stroke", "#19758a");
+      shape.setAttribute("stroke-width", "2");
+      const label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("x", String(drawing.x + drawing.width / 2));
+      label.setAttribute("y", String(drawing.y + drawing.height / 2));
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("fill", "#154b5a");
+      label.setAttribute("font-size", "15");
+      label.setAttribute("font-weight", "700");
+      label.textContent = drawing.table_id;
+      g.append(shape,label); svg.append(g);
+      g.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const startX = event.clientX, startY = event.clientY;
+        const oldX = drawing.x, oldY = drawing.y;
+        function move(e) {
+          const dx = (e.clientX - startX) * floor.width / rect.width;
+          const dy = (e.clientY - startY) * floor.height / rect.height;
+          drawing.x = Math.round(Math.max(0, Math.min(floor.width - drawing.width, oldX + dx)));
+          drawing.y = Math.round(Math.max(0, Math.min(floor.height - drawing.height, oldY + dy)));
+          if (drawing.shape === "rectangle") { shape.setAttribute("x", drawing.x); shape.setAttribute("y", drawing.y); }
+          else { shape.setAttribute("cx", drawing.x + drawing.width / 2); shape.setAttribute("cy", drawing.y + drawing.height / 2); }
+          label.setAttribute("x", drawing.x + drawing.width / 2);
+          label.setAttribute("y", drawing.y + drawing.height / 2);
+        }
+        function stop() {
+          document.removeEventListener("pointermove", move);
+          document.removeEventListener("pointerup", stop);
+          invalidate(); render();
+        }
+        document.addEventListener("pointermove", move);
+        document.addEventListener("pointerup", stop);
+      });
+    }
+    return svg;
+  }
+
+  function renderPlan() {
+    const area = element("div");
+    const controls = card("Solve seating", "Optimization runs only in the API. Hard constraints remain mandatory; time-limited results report feasible versus optimal.");
+    controls.append(row(
+      textField("Session ID", state.sessionId, v => { state.sessionId = v; invalidate(); },
+        { id: "session-id", required: true }),
+      textField("Solver time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
+        { id: "time-limit", type: "number", min: 0.1, step: 0.1 }),
+      action("Optimize seating", () => attempt(async () => {
+        const problem = projectProblem();
+        const plan = await api.post("/v1/solve", problem);
+        state.plan = plan;
+        state.view = "table";
+        state.viewContent = null;
+        announce("Solver returned " + plan.status.toUpperCase() + "; " +
+          (plan.assignments?.length || 0) + " group assignments.");
+        if (plan.status === "optimal" || plan.status === "feasible") await loadView("table");
+      }), "primary", "solve-plan")
+    ));
+    area.append(controls);
+    if (!state.plan) {
+      area.append(element("div", "empty", "Import guests, configure the venue, add considerations, then optimize."));
+      return area;
+    }
+    const plan = state.plan;
+    const status = card("Solution report", "Status: " + plan.status.toUpperCase() +
+      " · Score: " + (plan.total_score ?? "—") +
+      " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
+    if (plan.status === "infeasible" || plan.status === "unknown") {
+      status.append(element("p", "problem", plan.message));
+      status.append(issuesList((plan.conflicting_constraints || []).map(x => ({
+        row: null, column: null, severity: "error", message: x
+      }))));
+      area.append(status);
+      return area;
+    }
+    status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
+    area.append(status);
+    const views = card("Plan views");
+    const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
+    VIEWS.forEach(([name,title]) => {
+      const b = action(title, () => attempt(() => loadView(name)), "");
+      b.id = "view-" + name;
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", state.view === name ? "true" : "false");
+      tabs.append(b);
+    });
+    views.append(tabs);
+    if (state.viewError) views.append(element("p", "problem", state.viewError));
+    if (state.view === "table") {
+      views.append(element("h3", "", "Table-by-table assignments"));
+      views.append(element("pre", "", typeof state.viewContent === "string" ? state.viewContent : "Loading table view…"));
+    } else if (state.view === "json") {
+      views.append(element("h3", "", "Machine-readable plan"));
+      views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
+    } else if (state.view === "floor") {
+      const pages = state.viewContent?.pages || [];
+      if (!pages.length) views.append(element("p", "muted", "Loading floor-map pages…"));
+      else {
+        const container = element("div", "");
+        const active = pages.find(p => p.zone_id === state.focusedFloor) || pages[0];
+        container.append(selectField("Floor", pages.map(p => [p.zone_id, p.zone_id]), active.zone_id,
+          value => { state.focusedFloor = value; render(); }, { id: "plan-floor-select" }));
+        const frame = element("iframe", "floor-preview");
+        frame.id = "floor-preview";
+        frame.title = "Printable seating map for " + active.zone_id;
+        frame.setAttribute("sandbox", "");
+        frame.srcdoc = active.svg;
+        container.append(frame);
+        container.append(action("Download full floor-map PDF", () => attempt(async () => {
+          const blob = await api.post("/v1/exports/floor-map/pdf", state.plan, "blob");
+          downloadBlob(blob, "floor-maps.pdf", "application/pdf");
+        }), "secondary", "download-floor-pdf"));
+        views.append(container);
+      }
+    } else {
+      views.append(element("h3", "", "Printable table cards"));
+      if (viewObjectUrl) {
+        const frame = element("iframe", "print-preview");
+        frame.id = "cards-preview"; frame.title = "Printable PDF table cards"; frame.src = viewObjectUrl;
+        views.append(frame);
+      } else views.append(element("p", "muted", "Loading printable PDF…"));
+      views.append(action("Download table cards PDF", () => attempt(async () => {
+        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        downloadBlob(blob, "table-cards.pdf", "application/pdf");
+      }), "secondary", "download-cards"));
+    }
+    area.append(views);
+    const compromises = card("Compromises and empty chairs",
+      "Unmet soft considerations are listed with lost points. Hard rules cannot be traded away.");
+    if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));
+    else compromises.append(issuesList(plan.compromises.map(c => ({
+      row: null, column: c.rule_id, severity: "warning",
+      message: c.description + " (lost " + c.lost_points + " points)"
+    }))));
+    const tableWrap = element("div", "table-scroll");
+    const table = document.createElement("table");
+    const head = element("tr");
+    ["Table", "Floor", "Occupied", "Capacity", "Empty chairs"].forEach(x => head.append(element("th", "", x)));
+    table.append(append(element("thead"),head));
+    const body = element("tbody");
+    (plan.tables || []).forEach(t => {
+      const r = element("tr");
+      [t.table_id, t.zone_id, t.occupied, t.capacity, t.empty_seats].forEach(x => r.append(element("td", "", x)));
+      body.append(r);
+    });
+    table.append(body); tableWrap.append(table); compromises.append(tableWrap); area.append(compromises);
+    const reasons = card("Per-assignment explanations", "Plain-language reasons and point contributions reported by the engine.");
+    const list = element("div", "reasons");
+    (plan.assignments || []).forEach(a => {
+      const part = element("article", "reason-card");
+      part.append(element("h4", "", a.group_id + " → " + a.table_id),
+        element("p", "muted", a.guest_names.join(", ") + " · " + Number(a.points).toFixed(2) + " points"));
+      const ul = document.createElement("ul");
+      (a.reasons || []).forEach(r => ul.append(element("li", "",
+        r.description + " (" + Number(r.points).toFixed(2) + " pts)")));
+      part.append(ul); list.append(part);
+    });
+    reasons.append(list); area.append(reasons);
+    return area;
+  }
+
+  async function loadView(view) {
+    if (view === "floor" && state.plan?.layout?.floors?.length) {
+      state.focusedFloor = state.plan.layout.floors[0].zone_id;
+    }
+    state.view = view;
+    state.viewContent = null;
+    state.viewError = "";
+    clearObjectUrl();
+    render();
+    try {
+      if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
+      else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
+      else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
+      else {
+        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
+        viewObjectUrl = URL.createObjectURL(blob);
+      }
+    } catch (error) {
+      state.viewError = error.message || String(error);
+    }
+    render();
+  }
+
+  const ready = (async () => {
+    try {
+      state.catalog = await api.get("/v1/rules/catalog");
+      if (state.catalog.shapes?.length) state.selectedShape = state.catalog.shapes[0].shape;
+    } catch (error) {
+      state.notice = "Could not load rule catalog: " + error.message;
+      state.error = true;
+    }
+    render();
+  })();
+  render();
+  return { state, ready, render, show: screen => { state.screen = screen; render(); },
+           loadView, validateLayout, loadLayoutFiles, projectProblem };
+}
+
+if (typeof document !== "undefined") {
+  const mounted = document.querySelector("[data-seat-app]");
+  if (mounted) createApp(mounted);
+}

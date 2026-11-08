@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Seating Plan Optimizer API
   version: 0.1.0
-  description: Headless seating optimization with Phase 2 venue layouts, floor maps and table cards. All rules and geometry are supplied as data.
+  description: Headless seating optimization with venue layouts, printable exports, data-driven rule catalog and spreadsheet previews. The visual client only consumes these documented API capabilities.
 servers:
   - url: /
 paths:
@@ -38,6 +38,34 @@ paths:
               schema: {$ref: '#/components/schemas/ImportResult'}
         '400':
           description: Invalid base64 input
+  /v1/import/preview:
+    post:
+      operationId: previewRegistrations
+      summary: Preview spreadsheet headers and automatic/manual mapping
+      description: Returns detected column mappings, sample rows and diagnostics without committing an import. Manual mapping remains available through /v1/import.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ImportRequest'}
+      responses:
+        '200':
+          description: Headers, column mapping, sample rows and validation errors
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ImportPreview'}
+        '400':
+          description: Invalid base64 input
+  /v1/rules/catalog:
+    get:
+      operationId: listRuleShapes
+      summary: Retrieve the six available data-driven rule shapes
+      responses:
+        '200':
+          description: Shape/parameter fields, supported modes, titles and default weights
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RuleCatalog'}
   /v1/layouts/import:
     post:
       operationId: importVenueLayout
@@ -253,6 +281,48 @@ components:
         pages:
           type: array
           items: {$ref: '#/components/schemas/SvgFloorPage'}
+    ImportPreview:
+      type: object
+      additionalProperties: false
+      required: [headers, detected_mapping, mapping, targets, sample_rows, issues, rows_seen]
+      properties:
+        headers: {type: array, items: {type: string}}
+        detected_mapping: {type: object, additionalProperties: {type: string}}
+        mapping: {type: object, additionalProperties: {type: string}}
+        targets: {type: array, items: {type: string}}
+        sample_rows:
+          type: array
+          items: {type: object, additionalProperties: {type: string}}
+        issues: {type: array, items: {$ref: '#/components/schemas/ImportIssue'}}
+        rows_seen: {type: integer, minimum: 0}
+    RuleField:
+      type: object
+      additionalProperties: false
+      required: [name, label, kind, required, choices]
+      properties:
+        name: {type: string}
+        label: {type: string}
+        kind: {type: string, enum: [text, zone, table, target, select]}
+        required: {type: boolean}
+        choices: {type: array, items: {type: string}}
+    RuleShapeSpec:
+      type: object
+      additionalProperties: false
+      required: [shape, title, description, modes, default_mode, default_weight, fields]
+      properties:
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]}
+        title: {type: string}
+        description: {type: string}
+        modes: {type: array, items: {type: string, enum: [soft, hard]}}
+        default_mode: {type: string, enum: [soft, hard]}
+        default_weight: {type: [integer, 'null']}
+        fields: {type: array, items: {$ref: '#/components/schemas/RuleField'}}
+    RuleCatalog:
+      type: object
+      additionalProperties: false
+      required: [shapes]
+      properties:
+        shapes: {type: array, items: {$ref: '#/components/schemas/RuleShapeSpec'}}
     Guest:
       type: object
       additionalProperties: false

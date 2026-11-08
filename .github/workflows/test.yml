@@ -1,4 +1,4 @@
-name: Phase 1 tests
+name: Seating core API and browser tests
 on:
   push:
     branches: [main, feature/phase-1-headless-optimizer]
@@ -23,3 +23,26 @@ jobs:
         run: python -m pip install -e ".[api,test]"
       - name: Run unit, API contract and golden tests
         run: python -m pytest -v -s
+
+  visual-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install backend and test dependencies
+        run: python -m pip install -e ".[api,test]"
+      - name: Install browser test dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run DOM tests for all four UI screens
+        run: npm run test:ui
+      - name: Install Chromium for true end-to-end tests
+        run: npx playwright install --with-deps chromium
+      - name: Run 120-guest browser golden test against live FastAPI
+        run: npm run test:browser
+
