@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "seating-optimizer-ui-tests",
+  "scripts": {
+    "test:ui": "node --test tests/ui/*.test.mjs",
+    "test:browser": "playwright test --config playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "jsdom": "^26.1.0"
+  }
+}
