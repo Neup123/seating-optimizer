@@ -182,3 +182,64 @@ def import_registrations(
                    group_id=group_id, attributes=attrs))
         result.rows_imported += 1
     return result
+
+
+class ImportPreview(Model):
+    """Header/sample inspection without committing any imported guests."""
+    headers: list[str] = Field(default_factory=list)
+    detected_mapping: dict[str, str] = Field(default_factory=dict)
+    mapping: dict[str, str] = Field(default_factory=dict)
+    targets: list[str] = Field(default_factory=list)
+    sample_rows: list[dict[str, str]] = Field(default_factory=list)
+    issues: list[ImportIssue] = Field(default_factory=list)
+    rows_seen: int = 0
+
+
+def preview_registrations(
+    content: bytes,
+    filename: str,
+    mapping: dict[str, str] | None = None,
+    aliases: dict[str, list[str]] | None = None,
+    sample_limit: int = 5,
+) -> ImportPreview:
+    """Use the exact same parsing and detection logic as the actual importer.
+
+    Designed for clients that must show headers before a user can correct
+    automatic mapping; requires no browser-side CSV/XLSX parsing.
+    """
+    if not 0 <= sample_limit <= 25:
+        raise ValueError("sample_limit must be between 0 and 25")
+    result = ImportPreview()
+    if len(content) > 10_000_000:
+        result.issues.append(ImportIssue(row=None, column=None, severity="error",
+                                         message="Spreadsheet exceeds the 10 MB preview limit"))
+        return result
+    try:
+        rows = _rows(content, filename)
+    except (UnicodeError, csv.Error, OSError, ValueError, KeyError) as exc:
+        result.issues.append(ImportIssue(row=None, column=None, severity="error", message=str(exc)))
+        return result
+    if not rows:
+        result.issues.append(ImportIssue(row=1, column=None, severity="error", message="Empty spreadsheet"))
+        return result
+    result.headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+    if not all(result.headers) or len(result.headers) != len(set(result.headers)):
+        result.issues.append(ImportIssue(row=1, column=None, severity="error",
+                                         message="Headers must be nonempty and unique"))
+        return result
+    choices = default_aliases() if aliases is None else aliases
+    result.targets = list(choices)
+    result.detected_mapping, warnings = detect_headers(result.headers, choices)
+    result.rows_seen = sum(1 for raw in rows[1:]
+                           if any(v is not None and str(v).strip() for v in raw))
+    for raw in rows[1:1 + sample_limit]:
+        result.sample_rows.append({
+            h: str(raw[i]) if i < len(raw) and raw[i] is not None else ""
+            for i, h in enumerate(result.headers)
+        })
+    imported = import_registrations(content, filename, mapping=mapping, aliases=choices)
+    result.mapping = imported.mapping
+    result.issues = imported.issues
+    # Detection issues are already contained in import diagnostics, including
+    # missing name/size mappings; preview never silently commits partial data.
+    return result
