@@ -20,7 +20,7 @@ def example_plan():
             TableDrawing(table_id="G2", x=240, y=20, width=180, height=130, shape="ellipse"),
         ]),
         FloorLayout(zone_id="upper", width=500, height=340, tables=[
-            TableDrawing(table_id="U1", x=100, y=100, width=200, height=160, shape="circle"),
+            TableDrawing(table_id="U1", x=100, y=100, width=200, height=200, shape="circle"),
         ]),
     ])
     return Plan(
