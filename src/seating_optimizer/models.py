@@ -21,6 +21,72 @@ class Table(Model):
     capacity: int = Field(gt=0)
 
 
+class TableDrawing(Model):
+    """Optional position/shape of a table within its zone's floor canvas.
+
+    Coordinates are canvas units from the top-left. Drawings are keyed by
+    table_id and can be edited as data without changing optimization rules.
+    """
+    table_id: str
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+    shape: Literal["rectangle", "ellipse", "circle"] = "rectangle"
+
+    @model_validator(mode="after")
+    def valid_circle(self) -> "TableDrawing":
+        if self.shape == "circle" and abs(self.width - self.height) > 0.0001:
+            raise ValueError(f"Circle {self.table_id} must have equal width and height")
+        return self
+
+
+class FloorLayout(Model):
+    zone_id: str
+    width: float = Field(gt=0, le=10000)
+    height: float = Field(gt=0, le=10000)
+    tables: list[TableDrawing] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid_positions(self) -> "FloorLayout":
+        ids = [table.table_id for table in self.tables]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"Duplicate table drawing in zone {self.zone_id}")
+        for table in self.tables:
+            if table.x + table.width > self.width + 0.0001 or table.y + table.height > self.height + 0.0001:
+                raise ValueError(f"Table drawing {table.table_id} exceeds floor bounds in {self.zone_id}")
+        return self
+
+
+class VenueLayout(Model):
+    """Portable floor-by-floor geometry shared by code, API, and future editors."""
+    floors: list[FloorLayout] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def valid_uniqueness(self) -> "VenueLayout":
+        ids = [floor.zone_id for floor in self.floors]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate floor zone_id in layout")
+        tables = [table.table_id for floor in self.floors for table in floor.tables]
+        if len(tables) != len(set(tables)):
+            raise ValueError("Table drawing duplicated across floors")
+        return self
+
+
+def validate_layout_references(layout: VenueLayout, zones: list[Zone], tables: list[Table]) -> None:
+    """Reject geometry that refers to missing tables or the wrong floor."""
+    zone_ids = {zone.id for zone in zones}
+    table_zones = {table.id: table.zone_id for table in tables}
+    for floor in layout.floors:
+        if floor.zone_id not in zone_ids:
+            raise ValueError(f"Layout refers to unknown zone {floor.zone_id}")
+        for drawing in floor.tables:
+            if drawing.table_id not in table_zones:
+                raise ValueError(f"Layout refers to unknown table {drawing.table_id}")
+            if table_zones[drawing.table_id] != floor.zone_id:
+                raise ValueError(f"Table {drawing.table_id} belongs to {table_zones[drawing.table_id]}, not {floor.zone_id}")
+
+
 class Guest(Model):
     id: str
     name: str
@@ -64,6 +130,7 @@ class Problem(Model):
     guests: list[Guest]
     rules: list[Rule] = Field(default_factory=list)
     config: SolverConfig = Field(default_factory=SolverConfig)
+    layout: VenueLayout | None = None
 
     @model_validator(mode="after")
     def validate_references(self) -> "Problem":
@@ -83,6 +150,8 @@ class Problem(Model):
             raise ValueError("Every table must reference an existing zone")
         if not all(g.id.strip() and g.name.strip() for g in self.guests):
             raise ValueError("Guests need nonempty IDs and names")
+        if self.layout is not None:
+            validate_layout_references(self.layout, self.zones, self.tables)
         return self
 
 
@@ -131,3 +200,4 @@ class Plan(Model):
     conflicting_constraints: list[str] = Field(default_factory=list)
     solve_seconds: float = 0
     message: str = ""
+    layout: VenueLayout | None = None
