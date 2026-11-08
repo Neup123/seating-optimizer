@@ -111,3 +111,18 @@ def test_browser_files_are_actually_served_with_correct_media_types():
     assert "createApp" in js.text and "/v1/solve" in js.text
     assert "text/css" in css.headers["content-type"]
     assert "grid-template-columns" in css.text
+
+
+def test_corrupt_xlsx_reports_diagnostics_without_500_or_silent_acceptance():
+    corrupted = b"this-is-not-a-valid-XLSX-zip-archive"
+    for endpoint, model in (("/v1/import/preview", "ImportPreview"),
+                            ("/v1/import", "ImportResult")):
+        response = client.post(endpoint, json=payload(corrupted, "bad.xlsx"))
+        assert response.status_code == 200, response.text
+        validate(response.json(), model)
+        assert any(issue["severity"] == "error" for issue in response.json()["issues"])
+        assert not response.json().get("guests")
+        if endpoint.endswith("/preview"):
+            assert response.json()["headers"] == []
+        else:
+            assert response.json()["rows_imported"] == 0
