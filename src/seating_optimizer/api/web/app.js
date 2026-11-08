@@ -762,6 +762,9 @@ export function createApp(root, api = createGateway()) {
   }
 
   async function loadView(view) {
+    if (view === "floor" && state.plan?.layout?.floors?.length) {
+      state.focusedFloor = state.plan.layout.floors[0].zone_id;
+    }
     state.view = view;
     state.viewContent = null;
     state.viewError = "";
