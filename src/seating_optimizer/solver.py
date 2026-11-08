@@ -235,7 +235,14 @@ def solve(problem: Problem) -> Plan:
                 potential = sum(rule.weight * q * (q - 1) // 2 for q in all_values.values())
                 if potential > points:
                     compromises.append(Compromise(rule_id=rule.id,
-                        description="Some matching-attribute guest pairs sit at different tables.",
+                        description=(
+                            next((f"{p['attribute']}={val} is split across " +
+                                  ", ".join(tables[j].id for j, q in per_table.items() if q)
+                                  for val, per_table in value_counts.items()
+                                  if sum(q > 0 for q in per_table.values()) > 1),
+                                 "Matching attribute values are split across tables")
+                            + "; the separated guest pairs earn no grouping points."
+                        ),
                         lost_points=potential - points))
         elif rule.shape == "zone_restriction":
             allowed = _allowed_zones(rule)
@@ -254,7 +261,14 @@ def solve(problem: Problem) -> Plan:
                         points=share))
             if rule.mode == "soft" and total_matches * rule.weight > points:
                 compromises.append(Compromise(rule_id=rule.id,
-                    description="Some affected groups are outside preferred zones.",
+                    description=(
+                        next((f"Group {gid} sits in zone {tables[placed[gid]].zone_id} "
+                              f"instead of a preferred zone {', '.join(sorted(allowed))}."
+                              for gid, members in groups.items()
+                              if any(_matched(g, rule) for g in members)
+                              and tables[placed[gid]].zone_id not in allowed),
+                             "Affected groups are outside their preferred zone.")
+                    ),
                     lost_points=total_matches * rule.weight - points))
         elif rule.shape == "pair":
             a, b = lookup[p["left"]], lookup[p["right"]]
@@ -267,7 +281,15 @@ def solve(problem: Problem) -> Plan:
                         points=points / len({a, b})))
             elif rule.mode == "soft":
                 compromises.append(Compromise(rule_id=rule.id,
-                    description=f"Pair preference not met: {p['left']} and {p['right']} should be {p['relation']}.",
+                    description=(f"Pair preference not met: {p['left']} at {tables[placed[a]].id} "
+                                 f"and {p['right']} at {tables[placed[b]].id} "
+                                 f"should be {p['relation']}. "
+                                 + ("Hard pins involved: " + ", ".join(r.id for r in problem.rules
+                                      if r.shape == "pin" and r.mode == "hard" and
+                                      lookup[r.parameters["target"]] in {a, b})
+                                    if any(r.shape == "pin" and r.mode == "hard" and
+                                           lookup[r.parameters["target"]] in {a, b}
+                                           for r in problem.rules) else "")),
                     lost_points=rule.weight))
         elif rule.shape == "pin":
             gid = lookup[p["target"]]
