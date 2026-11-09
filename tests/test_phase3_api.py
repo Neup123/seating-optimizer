@@ -80,11 +80,13 @@ def test_xlsx_header_preview_and_diagnostic_isolation():
 def test_catalog_covers_six_solver_shapes_and_openapi_contract():
     catalog = rule_catalog()
     shapes = {shape.shape: shape for shape in catalog.shapes}
-    assert set(shapes) == {"attribute_grouping", "zone_restriction", "table_property_need",
+    assert set(shapes) == {"attribute_grouping", "zone_restriction", "table_property_need", "global_pattern",
                            "pair", "capacity", "fill_efficiency", "pin"}
     assert shapes["capacity"].modes == ["hard"]
     assert shapes["pin"].modes == ["hard"]
     assert shapes["fill_efficiency"].modes == ["soft"]
+    assert shapes["global_pattern"].modes == ["soft"]
+    assert any(field.kind == "pattern" for field in shapes["global_pattern"].fields)
     assert shapes["table_property_need"].modes == ["soft", "hard"]
     assert {field.name for field in shapes["table_property_need"].fields} == {
         "attribute", "value", "property"

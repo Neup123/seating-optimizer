@@ -400,7 +400,7 @@ components:
       properties:
         name: {type: string}
         label: {type: string}
-        kind: {type: string, enum: [text, zone, table, target, select]}
+        kind: {type: string, enum: [text, zone, table, target, select, pattern]}
         required: {type: boolean}
         choices: {type: array, items: {type: string}}
     RuleShapeSpec:
@@ -408,7 +408,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard]}}
@@ -451,7 +451,7 @@ components:
         id: {type: string}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]
         mode: {type: string, enum: [soft, hard]}
         parameters: {type: object, additionalProperties: true}
         weight: {type: [integer, 'null'], minimum: 1}
@@ -535,6 +535,15 @@ components:
       properties:
         rule_id: {type: string}
         points: {type: integer}
+    PatternMatch:
+      type: object
+      additionalProperties: false
+      required: [rule_id, table_id, description, points]
+      properties:
+        rule_id: {type: string}
+        table_id: {type: string}
+        description: {type: string}
+        points: {type: integer}
     Compromise:
       type: object
       required: [rule_id, description, lost_points]
@@ -562,6 +571,10 @@ components:
         assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
         tables: {type: array, items: {$ref: '#/components/schemas/TableUsage'}}
         score_breakdown: {type: array, items: {$ref: '#/components/schemas/ScoreItem'}}
+        pattern_matches:
+          type: array
+          description: Per-table matches (including empty tables) of enabled global pattern rules.
+          items: {$ref: '#/components/schemas/PatternMatch'}
         compromises: {type: array, items: {$ref: '#/components/schemas/Compromise'}}
         conflicting_constraints: {type: array, items: {type: string}}
         solve_seconds: {type: number}

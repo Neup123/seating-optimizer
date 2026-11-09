@@ -8,7 +8,8 @@ from time import perf_counter
 from ortools.sat.python import cp_model
 
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
-from .models import Assignment, Compromise, Plan, Problem, Reason, ScoreItem, TableUsage
+from .models import Assignment, Compromise, PatternMatch, Plan, Problem, Reason, ScoreItem, TableUsage
+from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
 
 def _group_id(guest):
@@ -81,6 +82,8 @@ def _prepare(problem):
             if rule.shape == "pin":
                 if p["target"] not in lookup or p["table"] not in tables:
                     raise ValueError("unknown target or table")
+            if rule.shape == "global_pattern":
+                validate_pattern(p, rule_id=rule.id)
         except (KeyError, TypeError) as exc:
             raise ValueError(f"Rule {rule.id}: missing or invalid parameter: {exc}") from exc
     return groups, lookup
@@ -449,6 +452,14 @@ def solve(problem: Problem) -> Plan:
                         score = model.NewIntVar(0, triangular[-1], f"pairs:{rule.id}:{value}:{j}")
                         model.AddElement(count, triangular, score)
                         terms.append(rule.weight * score)
+        elif rule.shape == "global_pattern":
+            if p.get("enabled", False):
+                sign = -1 if p.get("effect", "penalty") == "penalty" else 1
+                for j, table in enumerate(tables):
+                    matched = add_pattern_match(
+                        model, p, f"{rule.id}:{table.id}", table.capacity,
+                        sum(x[gid, j] for gid in ids), seats[j])
+                    terms.append(sign * rule.weight * matched)
         elif rule.shape == "fill_efficiency":
             for j, table in enumerate(tables):
                 used = model.NewBoolVar(f"used:{rule.id}:{table.id}")
@@ -513,6 +524,7 @@ def solve(problem: Problem) -> Plan:
     table_reasons = defaultdict(list)
     breakdown = []
     compromises = []
+    matched_tables = []
     for gid in ids:
         if gid in split_groups:
             for j in group_tables[gid]:
@@ -685,6 +697,36 @@ def solve(problem: Problem) -> Plan:
             gid = lookup[p["target"]]
             reasons[gid].append(Reason(rule_id=rule.id,
                 description=f"Hard pin keeps {p['target']} at table {p['table']}."))
+        elif rule.shape == "global_pattern":
+            if p.get("enabled", False):
+                sign = -1 if p.get("effect", "penalty") == "penalty" else 1
+                description = pattern_description(p)
+                for j, table in enumerate(tables):
+                    at_table = [gid for gid in ids if j in group_tables[gid]]
+                    facts = {"groups_at_table": len(at_table),
+                             "occupied_seats": usage[j],
+                             "empty_seats": table.capacity - usage[j]}
+                    if not pattern_matches(p, facts):
+                        continue
+                    earned = sign * rule.weight
+                    points += earned
+                    message = (f"Global pattern [{description}] matched table {table.id} "
+                               f"({facts['groups_at_table']} groups, {facts['occupied_seats']} occupied seats, "
+                               f"{facts['empty_seats']} empty seats); "
+                               f"{p.get('effect', 'penalty')} {rule.weight} point(s).")
+                    matched_tables.append(PatternMatch(
+                        rule_id=rule.id, table_id=table.id, description=message, points=earned))
+                    if earned < 0:
+                        compromises.append(Compromise(rule_id=rule.id,
+                            description=message, lost_points=rule.weight))
+                    if at_table:
+                        for gid in at_table:
+                            reason = Reason(rule_id=rule.id,
+                                description=message, points=earned / len(at_table))
+                            if gid in split_groups:
+                                table_reasons[gid, j].append(reason)
+                            else:
+                                reasons[gid].append(reason)
         elif rule.shape == "fill_efficiency":
             for j, table in enumerate(tables):
                 holes = table.capacity - usage[j] if usage[j] else 0
@@ -747,7 +789,7 @@ def solve(problem: Problem) -> Plan:
     return Plan(session_id=problem.session_id,
                 status="optimal" if status == cp_model.OPTIMAL else "feasible",
                 total_score=calculated, assignments=assignments,
-                tables=table_usage, score_breakdown=breakdown,
+                tables=table_usage, score_breakdown=breakdown, pattern_matches=matched_tables,
                 compromises=compromises, solve_seconds=elapsed,
                 layout=problem.layout,
                 message="All hard constraints satisfied.")

@@ -465,6 +465,65 @@ export function createApp(root, api = createGateway()) {
     return area;
   }
 
+  function defaultRuleParameters(spec) {
+    const params = {};
+    spec.fields.forEach(f => {
+      if (f.kind === "select" && f.choices.length) params[f.name] = f.choices[0];
+    });
+    if (spec.shape === "global_pattern") {
+      // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
+      params.scope = "global";
+      params.enabled = false;
+      params.conditions = [
+        { fact: "groups_at_table", op: "==", value: 1 },
+        { fact: "empty_seats", op: "==", value: 1 }
+      ];
+    }
+    return params;
+  }
+
+  function renderPatternEditor(rule, index) {
+    const panel = element("div", "pattern-editor");
+    panel.append(element("p", "muted",
+      "Scope: whole plan · All comparisons are AND clauses, evaluated per table. " +
+      "Every matching table earns or loses the selected weight."));
+    const facts = [
+      ["groups_at_table", "Number of groups at table"],
+      ["occupied_seats", "Occupied seats at table"],
+      ["empty_seats", "Empty seats at table"]
+    ];
+    const operators = [
+      ["==", "equals"], ["!=", "does not equal"], ["<", "less than"],
+      ["<=", "at most"], [">", "greater than"], [">=", "at least"]
+    ];
+    const conditions = Array.isArray(rule.parameters.conditions) ? rule.parameters.conditions : [];
+    conditions.forEach((condition, j) => {
+      const clause = element("div", "pattern-clause");
+      clause.append(selectField("Table fact", facts, condition.fact, value => {
+        condition.fact = value; invalidate();
+      }, { id: "rule-" + index + "-pattern-" + j + "-fact" }));
+      clause.append(selectField("Comparison", operators, condition.op, value => {
+        condition.op = value; invalidate();
+      }, { id: "rule-" + index + "-pattern-" + j + "-op" }));
+      clause.append(textField("Count", condition.value, value => {
+        condition.value = Number(value); invalidate();
+      }, { type: "number", min: 0, step: 1, id: "rule-" + index + "-pattern-" + j + "-value" }));
+      clause.append(action("Remove comparison", () => {
+        if (conditions.length === 1) return announce("A pattern requires at least one comparison.", true);
+        conditions.splice(j, 1);
+        invalidate(); render();
+      }, "danger small", "rule-" + index + "-remove-pattern-" + j));
+      panel.append(clause);
+    });
+    panel.append(action("Add comparison", () => {
+      if (conditions.length >= 8) return announce("Patterns support up to eight comparisons.", true);
+      if (!Array.isArray(rule.parameters.conditions)) rule.parameters.conditions = [];
+      rule.parameters.conditions.push({ fact: "occupied_seats", op: ">=", value: 1 });
+      invalidate(); render();
+    }, "secondary small", "rule-" + index + "-add-pattern"));
+    return panel;
+  }
+
   function renderRules() {
     const area = element("div", "form-measure rules-flow");
     const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
@@ -483,8 +542,7 @@ export function createApp(root, api = createGateway()) {
       "Choose a type to see the new rule's fields."));
     newRuleForm.append(action("Step 2 — Add " + chosenShape.title + " rule", () => {
       const spec = shapes.find(s => s.shape === state.selectedShape);
-      const parameters = {};
-      spec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
+      const parameters = defaultRuleParameters(spec);
       state.rules.push({
         id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
         weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters
@@ -514,8 +572,7 @@ export function createApp(root, api = createGateway()) {
         shapes.map(s => [s.shape, s.title]), rule.shape, value => {
           if (value === rule.shape) return;
           const nextSpec = shapes.find(s => s.shape === value);
-          const parameters = {};
-          nextSpec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
+          const parameters = defaultRuleParameters(nextSpec);
           rule.shape = nextSpec.shape;
           rule.mode = nextSpec.default_mode;
           rule.weight = nextSpec.default_mode === "soft" ? nextSpec.default_weight : null;
@@ -540,6 +597,19 @@ export function createApp(root, api = createGateway()) {
               { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
           : element("p", "muted", "HARD — no weight")
       ));
+      if (rule.shape === "global_pattern") {
+        const label = element("label", "field");
+        const enabled = document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.id = "rule-pattern-enabled-" + i;
+        enabled.checked = rule.parameters.enabled === true;
+        enabled.addEventListener("change", () => {
+          rule.parameters.enabled = enabled.checked;
+          invalidate();
+        });
+        label.append(enabled, element("span", "", "Enable global pattern (default off)"));
+        section.append(label);
+      }
       const fields = element("div", "grid three");
       spec.fields.forEach(field => {
         const original = rule.parameters[field.name] || "";
@@ -548,7 +618,8 @@ export function createApp(root, api = createGateway()) {
           else rule.parameters[field.name] = value;
           invalidate();
         };
-        if (field.kind === "select") fields.append(selectField(field.label,
+        if (field.kind === "pattern") fields.append(renderPatternEditor(rule, i));
+        else if (field.kind === "select") fields.append(selectField(field.label,
           field.choices, original, update, { id: "rule-" + i + "-" + field.name }));
         else if (field.kind === "zone") fields.append(selectField(field.label,
           [["", "Select zone"], ...state.zones.map(z => [z.id, z.name])], original, update,
@@ -1070,6 +1141,15 @@ export function createApp(root, api = createGateway()) {
       }), "secondary", "download-cards"));
     }
     area.append(views);
+    if ((plan.pattern_matches || []).length) {
+      const matches = card("Global pattern matches",
+        "Every matched table is listed, including empty tables with no guest-level explanation cards.");
+      (plan.pattern_matches || []).forEach(match => {
+        matches.append(element("p", "reason", match.description +
+          " (" + (match.points > 0 ? "+" : "") + match.points + " points)"));
+      });
+      area.append(matches);
+    }
     const compromises = card("Compromises and empty chairs",
       "Unmet soft considerations are listed with lost points. Hard rules cannot be traded away.");
     if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));

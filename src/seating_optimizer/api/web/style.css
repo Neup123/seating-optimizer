@@ -103,3 +103,12 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .print-reasons-toggle{display:flex;align-items:center;gap:10px;margin:10px 0 16px;font-size:13px;font-weight:650}
 .print-reasons-toggle input{width:18px;height:18px;flex:none}
 .list-preview{display:block;min-height:600px;margin-bottom:14px}
+
+
+/* Generic global-pattern clause editor; each count comparison remains editable. */
+.pattern-editor{grid-column:1/-1;display:grid;gap:12px;width:100%;min-width:0}
+.pattern-editor>.muted{max-width:700px}
+.pattern-clause{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,.8fr) auto;gap:10px;align-items:end}
+.pattern-clause :is(input,select){max-width:100%;min-width:0}
+.pattern-clause button{margin-bottom:2px}
+@media(max-width:780px){.pattern-clause{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.pattern-clause button{grid-column:1/-1}}
