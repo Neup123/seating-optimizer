@@ -604,6 +604,62 @@ test("printable list tabs fetch exact API views and toggle written reasons witho
 });
 
 
+test("global pattern rule editor composes a different count pattern, score and on/off controls", async () => {
+  catalog.shapes.push({
+    shape: "global_pattern", title: "Global table-count pattern", description: "Generic rule",
+    modes: ["soft"], default_mode: "soft", default_weight: 2,
+    fields: [
+      { name: "effect", label: "Effect", kind: "select", required: true, choices: ["penalty", "reward"] },
+      { name: "conditions", label: "Conditions", kind: "pattern", required: true, choices: [] }
+    ]
+  });
+  try {
+    const { app, dom, $, root } = await setup();
+    app.show("rules");
+    setValue($("#new-rule-shape"), "global_pattern", dom.window);
+    click($("#add-rule"));
+    const stored = app.state.rules[0];
+    assert.equal(stored.shape, "global_pattern");
+    assert.equal(stored.mode, "soft");
+    assert.equal(stored.parameters.scope, "global");
+    assert.equal(stored.parameters.enabled, false);
+    assert.deepEqual(stored.parameters.conditions, [
+      { fact: "groups_at_table", op: "==", value: 1 },
+      { fact: "empty_seats", op: "==", value: 1 }
+    ]);
+    const enabled = $("#rule-pattern-enabled-0");
+    enabled.checked = true;
+    enabled.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    setValue($("#rule-0-effect"), "reward", dom.window);
+    setValue($("#rule-weight-0"), "12", dom.window);
+    setValue($("#rule-0-pattern-0-fact"), "groups_at_table", dom.window);
+    setValue($("#rule-0-pattern-0-op"), ">=", dom.window);
+    setValue($("#rule-0-pattern-0-value"), "2", dom.window);
+    click($("#rule-0-remove-pattern-1"));
+    assert.equal(stored.parameters.conditions.length, 1);
+    click($("#rule-0-add-pattern"));
+    setValue($("#rule-0-pattern-1-fact"), "occupied_seats", dom.window);
+    setValue($("#rule-0-pattern-1-op"), ">=", dom.window);
+    setValue($("#rule-0-pattern-1-value"), "2", dom.window);
+    assert.deepEqual(stored.parameters, {
+      scope: "global", enabled: true, effect: "reward",
+      conditions: [
+        { fact: "groups_at_table", op: ">=", value: 2 },
+        { fact: "occupied_seats", op: ">=", value: 2 }
+      ]
+    });
+    assert.equal(stored.weight, 12);
+    app.state.plan = { ...plan, pattern_matches: [
+      { rule_id: stored.id, table_id: "G1", points: 12,
+        description: "Global pattern matched table G1." }
+    ] };
+    app.show("plan");
+    assert.match(root.textContent, /Global pattern matches/);
+    assert.match(root.textContent, /Global pattern matched table G1/);
+  } finally { catalog.shapes.pop(); }
+});
+
+
 test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
   const printable = "<!DOCTYPE html><html><head></head><body><table></table></body></html>";
   const { app, $, dom, calls } = await setup(async path => {

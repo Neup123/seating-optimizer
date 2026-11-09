@@ -221,6 +221,40 @@ From the **Seating plan** page, choose **People list** (one combined table), **P
 These formats are stateless views of the exact solved `Plan` supplied to the API. Every guest ID/name, group ID, table ID and floor/room zone ID comes from that object; the reasons-on variant writes each recorded reason description **verbatim** (escaped only for safe HTML display), and the default omits all written reasons. The Plan has **table assignments but no individual chair / numbered seat field**; exports therefore show the recorded table rather than inventing seat numbers. Use `/v1/exports/json` for the lossless machine-readable Plan. An infeasible Plan cannot be printed as an assignment list.
 
 
+### Composable global table-count rules
+
+On **Rules**, select **Global table-count pattern**. The new rule starts with
+an editable **lonely-last-seat** example, **off by default**: `groups_at_table == 1`
+AND `empty_seats == 1`, effect **penalty**. Enable it to apply the rule,
+adjust its positive weight, or edit or replace its comparisons and effect.
+
+The same engine accepts other patterns without code changes. Use **Add comparison**
+to combine up to eight comparisons with AND. Every comparison chooses one of
+`groups_at_table`, `occupied_seats`, or `empty_seats`, a comparator (`==`,
+`!=`, `<`, `<=`, `>`, `>=`) and a nonnegative integer value. The scope is
+**global**: each table independently evaluates the same condition list, including
+empty tables. Each matching table contributes exactly **+weight** for reward
+or **−weight** for penalty to the objective. This adds to other weighted rules
+but cannot violate any hard seating, table capacity or guest-group constraints.
+
+The saved `Rule` has shape `global_pattern`, mode `soft`, weight, and
+`parameters = {scope: "global", enabled: false|true, effect: "penalty"|"reward",
+conditions: [{fact, op, value}, ...]}`. The default-off rule contributes zero.
+The score breakdown records a signed point total per global rule; the plan's
+`pattern_matches` gives table-specific facts and signed points even for empty
+tables. Penalties appear as compromises, and populated-table matches also
+appear in affected assignment reasons. The plan view shows per-table matches.
+
+**Expressiveness boundary:** This deliberately small condition language
+compares per-table group and chair counts and combines comparisons with AND.
+It cannot express OR, negated subtrees, table-specific exceptions, guest attributes,
+table tags, pair relationships, adjacency, or comparisons across different tables.
+Those require future general primitives, not another hard-coded lonely-seat
+branch. A dedicated *global pattern rule shape* is necessary because existing
+rule shapes do not evaluate whole-plan per-table facts. Within that shape, the
+lonely-seat example and other count patterns are entirely data-defined.
+
+
 ### Imported fields in printable lists
 
 People, people-by-floor, table, and per-table lists display group sizes next to
