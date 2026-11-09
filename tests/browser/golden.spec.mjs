@@ -356,7 +356,7 @@ test("import mapping and sibling form screens are centred at a comfortable width
   });
   await expect(page.locator("#map-guest-name")).toBeVisible();
   const check = async selector => {
-    const metrics = await page.locator(selector).evaluate(node => {
+    const metrics = await page.locator(selector).first().evaluate(node => {
       const parent = node.closest(".workspace").getBoundingClientRect();
       const rect = node.getBoundingClientRect();
       return { width: rect.width, delta: Math.abs((rect.left + rect.right) / 2 -
