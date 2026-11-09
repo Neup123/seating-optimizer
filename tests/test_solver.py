@@ -63,7 +63,8 @@ def test_hard_capacity_per_table_and_unsatisfiable_oversized_group():
     impossible = solve(make_problem(guests, tables=[small,
         Table(id="other", zone_id="upper", capacity=2)]))
     assert impossible.status == "infeasible"
-    assert any(name.startswith("capacity:") for name in impossible.conflicting_constraints)
+    assert any("Party too large" in name for name in impossible.conflicting_constraints)
+    assert not any(name.startswith("capacity:") for name in impossible.conflicting_constraints)
 
 
 def test_conflicting_hard_pins_name_both_constraints():
@@ -185,3 +186,51 @@ def test_invalid_rules_and_targets_fail_loudly():
     with pytest.raises(ValueError, match="unknown"):
         solve(make_problem([Guest(id="a", name="Alice")], [
             rule("bad", "pin", "hard", target="a", table="unknown")]))
+
+
+
+def test_capacity_shortage_reports_guests_vs_chairs_without_table_dump():
+    guests = [Guest(id=str(i), name=f"Guest {i}") for i in range(5)]
+    result = solve(make_problem(guests, tables=[
+        Table(id="T1", zone_id="ground", capacity=2),
+        Table(id="T2", zone_id="upper", capacity=2),
+    ]))
+    assert result.status == "infeasible"
+    assert len(result.conflicting_constraints) == 1
+    assert "5 guests" in result.conflicting_constraints[0]
+    assert "4 chairs" in result.conflicting_constraints[0]
+    assert "short by 1" in result.conflicting_constraints[0]
+    assert "capacity:T" not in str(result.conflicting_constraints)
+
+
+def test_250_guest_42_party_packing_reports_proven_33_table_lower_bound():
+    # 18 groups of five can pair into nine ten-chair tables; all 24 groups
+    # of six/seven each require their own table: 33 minimum, not 26.
+    guests = []
+    for index, size in enumerate([5] * 18 + [7] * 16 + [6] * 8):
+        guests.extend(Guest(id=f"{index}-{person}", name=f"Guest {index}-{person}",
+                            group_id=f"family-{index}") for person in range(size))
+    tables = [Table(id=f"T{n}", zone_id="ground", capacity=10) for n in range(26)]
+    plan = solve(make_problem(guests, tables=tables))
+    assert len(guests) == 250
+    assert plan.status == "infeasible"
+    assert len(plan.conflicting_constraints) == 1
+    diagnostic = plan.conflicting_constraints[0]
+    assert "Party packing" in diagnostic
+    assert "at least 33 tables" in diagnostic
+    assert "26 tables" in diagnostic
+    assert "250 guests" in diagnostic and "260 chairs" in diagnostic
+    assert not any(f"capacity:T{n}" in diagnostic for n in range(26))
+    assert "Party packing" in render_table(plan)
+
+
+def test_unrelated_hard_rule_is_not_reported_as_a_conflict():
+    guests = [Guest(id="a", name="Alice"), Guest(id="b", name="Bob")]
+    out = solve(make_problem(guests, [
+        rule("only_ground", "pin", "hard", target="a", table="G"),
+        rule("only_upper", "pin", "hard", target="a", table="U"),
+        rule("harmless", "pin", "hard", target="b", table="G"),
+    ]))
+    assert out.status == "infeasible"
+    assert {"rule:only_ground", "rule:only_upper"} <= set(out.conflicting_constraints)
+    assert "rule:harmless" not in out.conflicting_constraints

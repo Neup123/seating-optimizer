@@ -5,7 +5,9 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
-from seating_optimizer import default_aliases, detect_headers, import_registrations
+from seating_optimizer import (
+    default_aliases, detect_headers, import_registrations, preview_registrations,
+)
 
 
 def test_csv_automatic_detection_and_group_expansion():
@@ -86,3 +88,59 @@ def test_ragged_nonempty_data_reported():
     result = import_registrations(b"Name,Size\nAlice,1,surprise\n", "x.csv")
     assert result.has_errors
     assert not result.guests
+
+
+
+def test_guest_name_family_side_meal_detects_confident_headers_without_faking_size():
+    raw = b"Guest Name,Family,Side,Meal\nAlice,Smith,North,Vegan\n"
+    preview = preview_registrations(raw, "export.csv")
+    assert preview.detected_mapping == {"Guest Name": "name", "Family": "group_id"}
+    assert preview.mapping == preview.detected_mapping
+    assert "Side" not in preview.mapping and "Meal" not in preview.mapping
+    assert any(issue.severity == "warning" and "Missing required mapping: size" in issue.message
+               and "Map columns" in issue.message for issue in preview.issues)
+    # A genuinely absent size is a data requirement, not something to guess.
+    result = import_registrations(raw, "export.csv")
+    assert result.has_errors
+    assert not result.guests
+
+
+def test_real_world_aliases_import_groups_without_manual_correction():
+    raw = (b"Full Guest Name,Household,Party Count,Side,Meal\n"
+           b"Alice,Family A,2,North,Vegan\n"
+           b"Bob,Family B,1,South,Kosher\n")
+    result = import_registrations(raw, "external.csv")
+    assert not result.has_errors, result.issues
+    assert result.mapping["Full Guest Name"] == "name"
+    assert result.mapping["Household"] == "group_id"
+    assert result.mapping["Party Count"] == "size"
+    assert len(result.guests) == 3
+    assert result.guests[0].group_id == "Family A"
+    assert result.guests[2].group_id == "Family B"
+    assert result.guests[0].attributes["Side"] == "North"
+    assert result.guests[0].attributes["Meal"] == "Vegan"
+
+
+def test_fuzzy_typo_does_not_mistake_side_for_size_or_guess_ambiguous_name():
+    found, problems = detect_headers(["Guset Name", "Family", "Pax", "Side", "Meal"])
+    assert found == {"Guset Name": "name", "Family": "group_id", "Pax": "size"}
+    assert not problems
+    assert "Side" not in found and "Meal" not in found
+    doubles, duplicate_issues = detect_headers(["Guest Name", "Full Name", "Party Size"])
+    assert "name" not in doubles.values()
+    assert doubles["Party Size"] == "size"
+    assert any("Multiple matching columns" in issue.message for issue in duplicate_issues)
+    assert all(issue.severity == "warning" for issue in duplicate_issues)
+
+
+def test_manual_size_mapping_can_correct_an_unknown_column_after_preview():
+    raw = b"Guest Name,Family,How Many Came,Side\nAlice,Smith,2,North\n"
+    before = preview_registrations(raw, "guests.csv")
+    assert before.mapping == {"Guest Name": "name", "Family": "group_id"}
+    assert any("Missing required mapping: size" in issue.message for issue in before.issues)
+    manual = {"How Many Came": "size"}
+    reviewed = preview_registrations(raw, "guests.csv", mapping=manual)
+    assert not [issue for issue in reviewed.issues if issue.severity == "error"], reviewed.issues
+    assert reviewed.mapping == {"Guest Name": "name", "Family": "group_id", "How Many Came": "size"}
+    imported = import_registrations(raw, "guests.csv", mapping=manual)
+    assert not imported.has_errors and len(imported.guests) == 2

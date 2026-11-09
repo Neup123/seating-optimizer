@@ -151,6 +151,38 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
     " tables=" + plan.tables.length + " hard_violations=0");
 });
 
+
+
+test("common external headers pre-map name, family, party count and preserve other columns", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#guest-file").setInputFiles({
+    name: "external.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Family,Party Count,Side,Meal\nAlice,Smith,2,North,Vegan\n")
+  });
+  await expect(page.locator("#map-guest-name")).toHaveValue("name");
+  await expect(page.locator("#map-family")).toHaveValue("group_id");
+  await expect(page.locator("#map-party-count")).toHaveValue("size");
+  await expect(page.locator("#map-side")).toHaveValue("");
+  await expect(page.locator("#map-meal")).toHaveValue("");
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+});
+
+test("missing party-size column stays editable in preview, but unsafe import is rejected", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#guest-file").setInputFiles({
+    name: "incomplete.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Family,Side,Meal\nAlice,Smith,North,Vegan\n")
+  });
+  await expect(page.locator("#map-guest-name")).toHaveValue("name");
+  await expect(page.locator("#map-family")).toHaveValue("group_id");
+  await expect(page.locator("body")).toContainText("Missing required mapping: size");
+  await expect(page.locator("#import-guests")).toBeEnabled();
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Import blocked");
+  await expect(page.locator(".pill").first()).toContainText("0 guests");
+});
+
 test("single-floor venue and rules template prepared before import works in a new session", async ({ page }) => {
   await page.goto("/");
   await page.locator("#nav-map").click();

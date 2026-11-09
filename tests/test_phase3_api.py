@@ -130,3 +130,32 @@ def test_corrupt_xlsx_reports_diagnostics_without_500_or_silent_acceptance():
             assert response.json()["headers"] == []
         else:
             assert response.json()["rows_imported"] == 0
+
+
+
+def test_issue_15_aliases_preview_and_import_have_api_parity():
+    raw = b"Guest Name,Family,Party Count,Side,Meal\nAlice,Smith,2,North,Vegan\n"
+    preview = client.post("/v1/import/preview", json=payload(raw, "export.csv"))
+    assert preview.status_code == 200
+    mapping = preview.json()["mapping"]
+    assert mapping == {"Guest Name": "name", "Family": "group_id", "Party Count": "size"}
+    assert preview.json()["detected_mapping"] == mapping
+    assert not [issue for issue in preview.json()["issues"] if issue["severity"] == "error"]
+    actual = client.post("/v1/import", json=payload(raw, "export.csv"))
+    assert actual.status_code == 200
+    assert actual.json()["mapping"] == mapping
+    assert len(actual.json()["guests"]) == 2
+    assert actual.json()["guests"][0]["attributes"]["Meal"] == "Vegan"
+    validate(preview.json(), "ImportPreview")
+    validate(actual.json(), "ImportResult")
+
+    incomplete = b"Guest Name,Family,Side,Meal\nAlice,Smith,North,Vegan\n"
+    preview = client.post("/v1/import/preview", json=payload(incomplete, "export.csv"))
+    assert preview.status_code == 200
+    assert preview.json()["mapping"] == {"Guest Name": "name", "Family": "group_id"}
+    assert any("Missing required mapping: size" in issue["message"] and issue["severity"] == "warning"
+               for issue in preview.json()["issues"])
+    actual = client.post("/v1/import", json=payload(incomplete, "export.csv"))
+    assert actual.status_code == 200
+    assert any("Missing required mapping: size" in issue["message"] and issue["severity"] == "error"
+               for issue in actual.json()["issues"])
