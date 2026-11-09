@@ -225,6 +225,9 @@ test("solved plan switches between all API exports and shows reasons, compromise
   await until(() => calls.filter(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4").length === 2);
   setValue($("#cards-per-page"), "2", dom.window);
   await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=2"));
+  await until(() => !!$("#cards-preview"));
+  // Let the download task settle before navigating (actions are serialized).
+  await new Promise(resolve => setTimeout(resolve, 10));
   click($("#view-json"));
   await until(() => root.textContent.includes('"score_breakdown"'));
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
