@@ -669,9 +669,14 @@ export function createApp(root, api = createGateway()) {
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
     if (plan.status === "infeasible" || plan.status === "unknown") {
       status.append(element("p", "problem", plan.message));
-      status.append(issuesList((plan.conflicting_constraints || []).map(x => ({
-        row: null, column: null, severity: "error", message: x
-      }))));
+      if ((plan.conflicting_constraints || []).length) {
+        status.append(element("h3", "", "Why no seating plan fits"));
+        const explanations = element("div", "stack");
+        for (const explanation of plan.conflicting_constraints) {
+          explanations.append(element("div", "problem", explanation));
+        }
+        status.append(explanations);
+      }
       area.append(status);
       return area;
     }

@@ -223,3 +223,25 @@ test("solved plan switches between all API exports and shows reasons, compromise
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
   assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
 });
+
+
+
+test("infeasible report shows packing cause without misleading File: prefix", async () => {
+  const { app, root, $ } = await setup(async path => {
+    if (path === "/v1/solve") return {
+      session_id: "packing", status: "infeasible", total_score: null, solve_seconds: 0.1,
+      conflicting_constraints: ["Party packing: at least 3 tables are needed but only 2 are available."],
+      message: "No seating arrangement is possible with the available table capacities and party sizes."
+    };
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice", attributes: {} }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "T1", zone_id: "ground", capacity: 10 }];
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => root.textContent.includes("at least 3 tables"));
+  assert.match(root.textContent, /Why no seating plan fits/);
+  assert.match(root.textContent, /Party packing/);
+  assert.doesNotMatch(root.textContent, /File:|capacity:T1/);
+});

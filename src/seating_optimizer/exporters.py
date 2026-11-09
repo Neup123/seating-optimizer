@@ -12,9 +12,9 @@ Renderer = Callable[[Plan], str | bytes]
 def render_table(plan: Plan) -> str:
     """Classic table-by-table human-readable seating list."""
     if plan.status not in ("optimal", "feasible"):
-        return f"Session {plan.session_id}: {plan.status.upper()}\n" + (
-            "\n".join(plan.conflicting_constraints) or plan.message
-        ) + "\n"
+        details = "\n".join(plan.conflicting_constraints)
+        return (f"Session {plan.session_id}: {plan.status.upper()}\n"
+                f"{plan.message}\n" + (details + "\n" if details else ""))
     lines = [f"Session: {plan.session_id} | Status: {plan.status} | Score: {plan.total_score}"]
     for table in plan.tables:
         lines.append("")
