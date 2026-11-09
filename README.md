@@ -97,6 +97,8 @@ Default auto-detection aliases are data in src/seating_optimizer/header_aliases.
 - POST /v1/solve: JSON Problem body. Returns Plan with status and reasons, even on infeasible cases.
 - POST /v1/exports/table: JSON Plan body. Returns text/plain table-by-table guest list with reasons and compromises.
 - POST /v1/exports/json: JSON Plan body. Returns the complete application/json Plan.
+- POST /v1/exports/people-list/html: solved Plan body; query `group_by=combined|floor` and `include_reasons=false|true`. Print-ready, downloadable HTML showing each person’s exact table and group assignment.
+- POST /v1/exports/table-list/html: solved Plan body; query `group_by=combined|table` and `include_reasons=false|true`. Print-ready, downloadable HTML showing the groups and people at each table (including empty tables).
 - POST /v1/layouts/import: JSON array of base64-encoded structured JSON and/or numbered SVG layout files; optional zones and tables validate references. Returns VenueLayout.
 - POST /v1/exports/floor-map/svg: Plan with layout; returns standalone SVG documents, one per floor, in a JSON bundle.
 - POST /v1/exports/floor-map/pdf: Plan with layout; returns a vector PDF with one page per floor.
@@ -201,3 +203,9 @@ Full real-browser golden E2E (also requires Chromium installed by Playwright):
     npm run test:browser
 
 The browser test launches the actual FastAPI server, uploads **60 two-person registrations (120 guests)**, imports two-floor/12-table layout data, sets chair capacities, creates hard and soft rules through the visual editor, calls the real CP-SAT solver, and visits all four plan views. It asserts zero hard violations and wheelchair-family propagation. The CI workflow runs Python 3.11/3.12 core tests plus DOM and Chromium browser tests; the golden browser E2E does not mock a solver.
+
+### Print or export people and table lists
+
+From the **Seating plan** page, choose **People list** (one combined table), **People by floor** (a separate list for each floor / room), **Table list** (one combined table of group-to-table assignments), or **Per-table lists** (a separate list for each table). Each view has an **Include written reasons** checkbox, initially unchecked when selecting a view. It controls the list preview, the **Print list** action (including the browser's Save as PDF option), and **Download list HTML**. The resulting HTML is self-contained and may be re-opened or printed elsewhere; table cards and floor maps are unchanged.
+
+These formats are stateless views of the exact solved `Plan` supplied to the API. Every guest ID/name, group ID, table ID and floor/room zone ID comes from that object; the reasons-on variant writes each recorded reason description **verbatim** (escaped only for safe HTML display), and the default omits all written reasons. The Plan has **table assignments but no individual chair / numbered seat field**; exports therefore show the recorded table rather than inventing seat numbers. Use `/v1/exports/json` for the lossless machine-readable Plan. An infeasible Plan cannot be printed as an assignment list.

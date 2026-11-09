@@ -101,6 +101,32 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await expect(page.getByText("Per-assignment explanations")).toBeVisible();
   await expect(page.getByText("Compromises and empty chairs")).toBeVisible();
 
+  // The same solved Plan is the source for all four printable list variants.
+  for (const [view, endpoint] of [
+    ["people", "people-list/html?group_by=combined"],
+    ["people-floor", "people-list/html?group_by=floor"],
+    ["groups", "table-list/html?group_by=combined"],
+    ["groups-table", "table-list/html?group_by=table"]
+  ]) {
+    const defaultRequest = page.waitForResponse(r =>
+      r.url().includes(endpoint + "&include_reasons=false"));
+    await page.locator("#view-" + view).click();
+    expect((await defaultRequest).status()).toBe(200);
+    await expect(page.locator("#print-reasons")).not.toBeChecked();
+    await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /<table>/);
+    const clean = await page.locator("#list-preview").getAttribute("srcdoc");
+    expect((clean.match(/data-guest-id=/g) || []).length).toBe(120);
+    expect(clean).not.toContain('class="reason"');
+    await expect(page.locator("#download-list")).toBeVisible();
+    await expect(page.locator("#print-list")).toBeVisible();
+    const withReasons = page.waitForResponse(r =>
+      r.url().includes(endpoint + "&include_reasons=true"));
+    await page.locator("#print-reasons").check();
+    expect((await withReasons).status()).toBe(200);
+    await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /class="reason"/);
+  }
+
+
   await page.locator("#view-floor").click();
   await expect(page.locator("#floor-preview")).toBeVisible();
   const firstSrc = await page.locator("#floor-preview").getAttribute("srcdoc");

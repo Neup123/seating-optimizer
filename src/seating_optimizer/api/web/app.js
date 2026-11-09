@@ -1,12 +1,15 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
-const VIEWS = [["table", "Table view"], ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+const VIEWS = [["table", "Table view"], ["people", "People list"], ["people-floor", "People by floor"],
+  ["groups", "Table list"], ["groups-table", "Per-table lists"],
+  ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table"]);
 const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "notice", "error", "templateName", "templateSelected"];
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "notice", "error", "templateName", "templateSelected"];
 
 function storedJSON(key, fallback) {
   try {
@@ -147,7 +150,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1,
+      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false,
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
       templateName: "", templateSelected: "", storageWarning: ""
     };
@@ -270,6 +273,13 @@ export function createApp(root, api = createGateway()) {
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
       layout: state.layout.floors.length ? state.layout : null
     };
+  }
+  function listEndpoint(view) {
+    const people = view === "people" || view === "people-floor";
+    const grouped = view === "people-floor" || view === "groups-table";
+    const by = people ? (grouped ? "floor" : "combined") : (grouped ? "table" : "combined");
+    return "/v1/exports/" + (people ? "people-list" : "table-list") +
+      "/html?group_by=" + by + "&include_reasons=" + Boolean(state.includeReasons);
   }
   function tableCardsEndpoint() {
     return "/v1/exports/table-cards/pdf" +
@@ -923,7 +933,40 @@ export function createApp(root, api = createGateway()) {
     });
     views.append(tabs);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
-    if (state.view === "table") {
+    if (LIST_VIEWS.has(state.view)) {
+      views.append(element("h3", "", state.view.startsWith("people") ? "People and their assigned tables" :
+        "Groups and their assigned tables"));
+      const toggle = element("label", "print-reasons-toggle");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = "print-reasons";
+      checkbox.checked = Boolean(state.includeReasons);
+      checkbox.addEventListener("change", () => {
+        state.includeReasons = checkbox.checked;
+        loadView(state.view);
+      });
+      toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
+      views.append(toggle);
+      if (typeof state.viewContent === "string") {
+        const frame = element("iframe", "print-preview list-preview");
+        frame.id = "list-preview";
+        frame.title = "Printable assignment list";
+        frame.srcdoc = state.viewContent;
+        views.append(frame);
+        views.append(row(
+          action("Print list", () => {
+            const target = document.getElementById("list-preview");
+            if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
+            target.contentWindow.focus();
+            target.contentWindow.print();
+          }, "primary", "print-list"),
+          action("Download list HTML", () => {
+            downloadBlob(state.viewContent, state.view + (state.includeReasons ? "-reasons" : "") + ".html",
+              "text/html;charset=utf-8");
+          }, "secondary", "download-list")
+        ));
+      } else views.append(element("p", "muted", "Loading printable list…"));
+    } else if (state.view === "table") {
       views.append(element("h3", "", "Table-by-table assignments"));
       views.append(element("pre", "", typeof state.viewContent === "string" ? state.viewContent : "Loading table view…"));
     } else if (state.view === "json") {
@@ -1006,6 +1049,7 @@ export function createApp(root, api = createGateway()) {
   }
 
   async function loadView(view) {
+    if (LIST_VIEWS.has(view) && state.view !== view) state.includeReasons = false;
     if (view === "floor" && state.plan?.layout?.floors?.length) {
       state.focusedFloor = state.plan.layout.floors[0].zone_id;
     }
@@ -1015,7 +1059,13 @@ export function createApp(root, api = createGateway()) {
     clearObjectUrl();
     render();
     try {
-      if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
+      if (LIST_VIEWS.has(view)) {
+        const reasons = state.includeReasons;
+        const content = await api.post(listEndpoint(view), state.plan, "text");
+        if (view !== state.view || reasons !== state.includeReasons) return;
+        state.viewContent = content;
+      }
+      else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
       else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
       else {

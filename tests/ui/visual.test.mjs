@@ -519,3 +519,40 @@ test("creating a table lets the owner set table tags without importing a guest l
   assert.deepEqual(app.state.tables[0].properties, ["quiet", "near-exit"]);
   assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["quiet", "near-exit"]);
 });
+
+test("printable list tabs fetch exact API views and toggle written reasons without affecting cards", async () => {
+  const printable = "<!DOCTYPE html><html><head></head><body><p>Exact plan HTML</p></body></html>";
+  const { app, $, dom, calls } = await setup(async (path) => {
+    if (path === "/v1/solve") return plan;
+    if (path === "/v1/exports/table") return "table output";
+    if (path.includes("/html?")) return printable;
+    if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"], { type: "application/pdf" });
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!app.state.plan);
+  for (const [tab, endpoint] of [
+    ["people", "people-list/html?group_by=combined"],
+    ["people-floor", "people-list/html?group_by=floor"],
+    ["groups", "table-list/html?group_by=combined"],
+    ["groups-table", "table-list/html?group_by=table"]
+  ]) {
+    click($("#view-" + tab));
+    await until(() => !!$("#list-preview"));
+    assert.equal($("#print-reasons").checked, false);
+    assert.equal($("#list-preview").srcdoc, printable);
+    assert.ok(calls.some(([path]) => path.includes(endpoint + "&include_reasons=false")));
+    const checkbox = $("#print-reasons");
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    await until(() => calls.some(([path]) => path.includes(endpoint + "&include_reasons=true")));
+    assert.equal($("#print-reasons").checked, true);
+  }
+  click($("#view-cards"));
+  await until(() => !!$("#cards-preview"));
+});
