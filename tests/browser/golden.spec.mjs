@@ -128,6 +128,7 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await page.locator("#nav-import").click();
   await expect(page.locator("#map-guest-name")).toHaveValue("name");
   await page.locator("#nav-map").click();
+  await page.locator("#floor-select").selectOption("ground");
   await expect(page.locator("#table-G-0-capacity")).toHaveValue("10");
   await page.locator("#nav-plan").click();
   await expect(page.getByText("Per-assignment explanations")).toBeVisible();
