@@ -77,6 +77,12 @@ function safeNumber(input) {
   const number = Number(input);
   return Number.isFinite(number) ? number : NaN;
 }
+function parseTableProperties(input) {
+  const tags = String(input || "").split(",").map(tag => tag.trim()).filter(Boolean);
+  if (new Set(tags.map(tag => tag.toLocaleLowerCase())).size !== tags.length)
+    throw Error("Table property names must be unique (case-insensitive).");
+  return tags;
+}
 function encodeBytes(bytes) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 8192) {
@@ -356,7 +362,11 @@ export function createApp(root, api = createGateway()) {
       section.append(header);
       section.append(grid(
         textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
-        selectField("Hard or weighted", spec.modes.map(m => [m, m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)"]),
+        selectField(rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
+          spec.modes.map(m => [m,
+            rule.shape === "table_property_need"
+              ? (m === "hard" ? "Require (hard)" : "Prefer (soft, weighted per affected guest)")
+              : (m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)")]),
           rule.mode, value => {
             rule.mode = value;
             rule.weight = value === "soft" ? (spec.default_weight || 1) : null;
@@ -425,7 +435,13 @@ export function createApp(root, api = createGateway()) {
         const old = state.tables.find(t => t.id === drawing.table_id);
         if (old && old.zone_id !== floor.zone_id)
           throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
-        if (!old) state.tables.push({ id: drawing.table_id, zone_id: floor.zone_id, capacity: null });
+        // Layout JSON carries portable tags; Table.properties is the solver input.
+        // Synchronize both copies without assigning tag weights.
+        if (old) old.properties = [...(drawing.properties || [])];
+        else state.tables.push({
+          id: drawing.table_id, zone_id: floor.zone_id, capacity: null,
+          properties: [...(drawing.properties || [])]
+        });
       }
     }
     state.focusedFloor = imported.floors[0].zone_id;
@@ -435,7 +451,7 @@ export function createApp(root, api = createGateway()) {
 
   function renderMap() {
     const area = element("div");
-    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Capacity is per table.");
+    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Add passive table tags (accessible, aisle-edge, quiet) to match guest needs — tags carry no score by themselves.");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
     file.addEventListener("change", () => attempt(async () => {
@@ -504,7 +520,9 @@ export function createApp(root, api = createGateway()) {
     const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
-    tableForm.append(grid(idInput, capacityInput, shapeInput));
+    const propertyInput = textField("Table tags (comma-separated)", "", () => {},
+      { id: "new-table-properties", placeholder: "accessible, aisle-edge" });
+    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput);
     const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
     tableForm.append(create);
     tableForm.addEventListener("submit", event => {
@@ -512,6 +530,9 @@ export function createApp(root, api = createGateway()) {
       const id = tableForm.querySelector("#new-table-id").value.trim();
       const capacity = Number(tableForm.querySelector("#new-table-capacity").value);
       const shape = tableForm.querySelector("#new-table-shape").value;
+      let properties;
+      try { properties = parseTableProperties(tableForm.querySelector("#new-table-properties").value); }
+      catch (error) { return announce(error.message, true); }
       if (!id || state.tables.some(t => t.id === id)) return announce("Each table requires a unique ID.", true);
       if (!Number.isInteger(capacity) || capacity < 1) return announce("Chair capacity must be a positive integer.", true);
       const width = Math.min(160, layout.width / 2);
@@ -519,8 +540,8 @@ export function createApp(root, api = createGateway()) {
       const x = 8 + (layout.tables.length % 3) * 14;
       const y = 8 + (layout.tables.length % 3) * 14;
       if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
-      state.tables.push({ id, zone_id: layout.zone_id, capacity });
-      layout.tables.push({ table_id: id, x, y, width, height, shape });
+      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties });
+      layout.tables.push({ table_id: id, x, y, width, height, shape, properties: [...properties] });
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -546,7 +567,9 @@ export function createApp(root, api = createGateway()) {
       }
       fields.append(selectField("Shape", ["rectangle", "ellipse", "circle"], drawing.shape,
         () => {}, { id: "table-" + drawing.table_id + "-shape" }));
-      editor.append(fields);
+      editor.append(fields, textField("Table tags (comma-separated)",
+        (table?.properties || drawing.properties || []).join(", "), () => {},
+        { id: "table-" + drawing.table_id + "-properties" }));
       const save = element("button", "secondary small", "Apply dimensions");
       save.type = "submit";
       const remove = action("Remove table", () => {
@@ -566,7 +589,14 @@ export function createApp(root, api = createGateway()) {
           return announce("Table drawing coordinates must be finite numbers.", true);
         if (!Number.isInteger(next.capacity) || next.capacity < 1)
           return announce("Chair capacity must be a positive integer.", true);
+        let properties;
+        try {
+          properties = parseTableProperties(editor.querySelector(
+            '[id="table-' + drawing.table_id + '-properties"]').value);
+        } catch (error) { return announce(error.message, true); }
         table.capacity = next.capacity;
+        table.properties = properties;
+        drawing.properties = [...properties];
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
         invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");
