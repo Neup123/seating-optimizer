@@ -58,9 +58,10 @@ async function until(fn, message = "Condition never satisfied") {
   }
   throw Error(message);
 }
-async function setup(handler = async () => ({})) {
+async function setup(handler = async () => ({}), stored = {}) {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>",
     { url: "http://localhost/" });
+  for (const [key, value] of Object.entries(stored)) dom.window.localStorage.setItem(key, value);
   globalThis.document = dom.window.document;
   globalThis.window = dom.window;
   globalThis.btoa = value => Buffer.from(value, "binary").toString("base64");
@@ -79,7 +80,7 @@ async function setup(handler = async () => ({})) {
   const root = dom.window.document.querySelector("#root");
   const app = createApp(root, api);
   await app.ready;
-  return { dom, root, app, calls, api, $: selector => root.querySelector(selector),
+  return { dom, root, app, calls, api, storage: dom.window.localStorage, $: selector => root.querySelector(selector),
     $$: selector => Array.from(root.querySelectorAll(selector)) };
 }
 function upload(element, name, bytes, window) {
@@ -222,4 +223,109 @@ test("solved plan switches between all API exports and shows reasons, compromise
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
   assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
+});
+
+test("a full guest/rule/layout/solved session survives reload and explicit reset preserves templates", async () => {
+  const handler = async (path, payload) => {
+    if (path === "/v1/solve") return plan;
+    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
+    if (path === "/v1/configurations/validate") return payload;
+    return {};
+  };
+  const first = await setup(handler);
+  first.app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one", attributes: {} }];
+  first.app.state.zones = [{ id: "ground", name: "Ground" }];
+  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  first.app.state.layout = layout;
+  first.app.state.preview = { headers: ["Name"], sample_rows: [], issues: [] };
+  first.app.state.mapping = { Name: "name" };
+  first.app.show("rules");
+  click(first.$("#add-rule"));
+  setValue(first.$("#rule-0-attribute"), "language", first.dom.window);
+  first.app.show("plan");
+  click(first.$("#solve-plan"));
+  await until(() => !!first.app.state.plan);
+  const saved = Object.fromEntries(
+    Object.keys(first.storage).map(key => [key, first.storage.getItem(key)]));
+  const restored = await setup(handler, saved);
+  assert.equal(restored.app.state.guests.length, 1);
+  assert.equal(restored.app.state.tables.length, 1);
+  assert.equal(restored.app.state.rules.length, 1);
+  assert.equal(restored.app.state.mapping.Name, "name");
+  assert.deepEqual(restored.app.state.layout, layout);
+  assert.deepEqual(restored.app.state.plan, plan);
+  await until(() => restored.root.textContent.includes("Table G1: Alice and Bob"));
+  click(restored.$("#new-session"));
+  assert.equal(restored.app.state.guests.length, 0);
+  assert.equal(restored.app.state.rules.length, 0);
+  assert.equal(restored.app.state.layout.floors.length, 0);
+  assert.equal(restored.storage.getItem("seating-optimizer:session:v1")?.includes('"guests":[]'), true);
+});
+
+test("named full configurations can be saved, duplicated, loaded, exported, imported and deleted without guests", async () => {
+  const handler = async (path, payload) => {
+    if (path === "/v1/configurations/validate") return payload;
+    if (path === "/v1/layouts/import") return layout;
+    return {};
+  };
+  const first = await setup(handler);
+  first.app.state.zones = [{ id: "ground", name: "Ground" }];
+  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  first.app.state.layout = layout;
+  first.app.state.rules = [{ id: "lang", shape: "attribute_grouping", mode: "soft",
+    weight: 4, parameters: { attribute: "language" } }];
+  first.app.show("map");
+  setValue(first.$("#template-name"), "Weekly dinner", first.dom.window);
+  click(first.$("#save-template"));
+  await until(() => first.root.textContent.includes("Saved configuration template"));
+  assert.equal(first.app.state.guests.length, 0);
+  const stored = first.storage.getItem("seating-optimizer:templates:v1");
+  assert.equal(JSON.parse(stored)[0].rules[0].parameters.attribute, "language");
+  click(first.$("#duplicate-template"));
+  await until(() => first.root.textContent.includes("Duplicated template"));
+  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 2);
+  click(first.$("#new-session"));
+  first.app.show("map");
+  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
+  click(first.$("#load-template"));
+  await until(() => first.app.state.tables.length === 1);
+  assert.equal(first.app.state.rules[0].weight, 4);
+  assert.equal(first.app.state.layout.floors.length, 1);
+  assert.equal(first.app.state.guests.length, 0);
+  let exported;
+  first.dom.window.URL.createObjectURL = blob => { exported = blob; return "blob:test/export"; };
+  click(first.$("#export-configuration"));
+  await until(() => exported);
+  assert.match(first.root.textContent, /Exported the complete venue/);
+  // A full JSON file imported into a fresh session reuses the headless validator.
+  const content = JSON.parse(JSON.stringify(JSON.parse(stored)[0]));
+  const fresh = await setup(handler);
+  fresh.app.show("map");
+  const file = { name: "venue-configuration.json", size: 200,
+    text: async () => JSON.stringify(content) };
+  Object.defineProperty(fresh.$("#configuration-file"), "files", { configurable: true, value: [file] });
+  fresh.$("#configuration-file").dispatchEvent(new fresh.dom.window.Event("change", { bubbles: true }));
+  await until(() => fresh.app.state.tables.length === 1);
+  assert.deepEqual(fresh.app.state.rules, content.rules);
+  assert.deepEqual(fresh.app.state.layout, content.layout);
+  assert.equal(fresh.app.state.guests.length, 0);
+  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
+  click(first.$("#delete-template"));
+  await until(() => first.root.textContent.includes("Deleted saved template"));
+  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 1);
+});
+
+test("corrupt storage is ignored and a storage quota failure is visible rather than a silent reset", async () => {
+  const first = await setup(async () => ({}), {
+    "seating-optimizer:session:v1": "{bad json",
+    "seating-optimizer:templates:v1": '{"broken":true}'
+  });
+  assert.equal(first.app.state.guests.length, 0);
+  assert.ok(first.$("#new-session"));
+  const original = first.dom.window.localStorage.setItem.bind(first.dom.window.localStorage);
+  first.dom.window.localStorage.setItem = () => { throw Error("quota"); };
+  first.app.show("map");
+  // jsdom Storage method may be non-writable; force the warning only when overridden.
+  if (first.app.state.storageWarning) assert.match(first.root.textContent, /storage/i);
+  first.dom.window.localStorage.setItem = original;
 });

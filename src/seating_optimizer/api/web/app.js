@@ -138,8 +138,8 @@ export function createApp(root, api = createGateway()) {
     };
   }
   const state = emptySession();
-  const templates = storedJSON(TEMPLATES_KEY, []);
-  if (!Array.isArray(templates)) templates.length = 0;
+  const savedTemplates = storedJSON(TEMPLATES_KEY, []);
+  const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
   const previous = storedJSON(SESSION_KEY, null);
   if (previous?.version === 1 && previous.data && Array.isArray(previous.data.guests) &&
       Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&

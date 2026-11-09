@@ -118,10 +118,62 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await page.locator("#view-json").click();
   await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
   await expect(page.locator("pre").first()).toContainText('"layout"');
+  // Reload must restore the original plan, mapping, guests, capacities and rules.
+  await page.reload();
+  await expect(page.locator(".pill").first()).toContainText("120 guests");
+  await expect(page.locator(".pill").nth(1)).toContainText("12 tables");
+  await expect(page.locator(".pill").nth(2)).toContainText("3 rules");
+  await expect(page.locator("#session-id")).toHaveValue("golden-ui-120");
+  await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
+  await page.locator("#nav-import").click();
+  await expect(page.locator("#map-guest-name")).toHaveValue("name");
+  await page.locator("#nav-map").click();
+  await expect(page.locator("#table-G-0-capacity")).toHaveValue("10");
+  await page.locator("#nav-plan").click();
+  await expect(page.getByText("Per-assignment explanations")).toBeVisible();
   expect(errors).toEqual([]);
   console.log("GOLDEN_UI_120 status=" + plan.status +
     " solver_seconds=" + plan.solve_seconds.toFixed(3) +
     " groups=" + plan.assignments.length +
     " floors=" + plan.layout.floors.length +
     " tables=" + plan.tables.length + " hard_violations=0");
+});
+
+test("single-floor venue and rules template prepared before import works in a new session", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#nav-map").click();
+  await page.locator('#floor-form input[name="id"]').fill("hall");
+  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator("#add-floor").click();
+  await page.locator("#new-table-id").fill("H1");
+  await page.locator("#new-table-capacity").fill("4");
+  await page.locator("#add-table").click();
+  await page.locator("#validate-layout").click();
+  await expect(page.locator("#notice")).toContainText("Venue layout validated");
+  await page.locator("#nav-rules").click();
+  await page.locator("#new-rule-shape").selectOption("fill_efficiency");
+  await page.locator("#add-rule").click();
+  await page.locator("#nav-map").click();
+  await page.locator("#template-name").fill("Hall dinner");
+  await page.locator("#save-template").click();
+  await expect(page.locator("#notice")).toContainText("Saved configuration template");
+  await page.locator("#new-session").click();
+  await page.locator("#nav-map").click();
+  await page.locator("#template-select").selectOption("Hall dinner");
+  await page.locator("#load-template").click();
+  await expect(page.locator("#notice")).toContainText("Loaded template");
+  await expect(page.locator("#table-H1-capacity")).toHaveValue("4");
+  await expect(page.locator(".pill").nth(2)).toContainText("1 rules");
+  await page.locator("#nav-import").click();
+  await page.locator("#guest-file").setInputFiles({
+    name: "one-hall.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Party Size\\nAlpha,2\\n")
+  });
+  await expect(page.locator("#map-guest-name")).toHaveValue("name");
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+  await page.locator("#nav-plan").click();
+  await page.locator("#solve-plan").click();
+  await expect(page.locator("#notice")).toContainText("Solver returned");
+  await expect(page.locator("pre").first()).toContainText("Table H1");
 });
