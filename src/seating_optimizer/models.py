@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Model(BaseModel):
@@ -15,10 +15,32 @@ class Zone(Model):
     name: str
 
 
+def _clean_properties(values: list[str]) -> list[str]:
+    """Normalize whitespace but do not assign scoring to passive table tags."""
+    tags: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        name = value.strip()
+        if not name:
+            raise ValueError("Table property names must be nonempty")
+        key = name.casefold()
+        if key in seen:
+            raise ValueError(f"Duplicate table property {name!r}")
+        seen.add(key)
+        tags.append(name)
+    return tags
+
+
 class Table(Model):
     id: str
     zone_id: str
     capacity: int = Field(gt=0)
+    properties: list[str] = Field(default_factory=list)
+
+    @field_validator("properties")
+    @classmethod
+    def valid_properties(cls, values: list[str]) -> list[str]:
+        return _clean_properties(values)
 
 
 class TableDrawing(Model):
@@ -33,6 +55,12 @@ class TableDrawing(Model):
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     shape: Literal["rectangle", "ellipse", "circle"] = "rectangle"
+    properties: list[str] = Field(default_factory=list)
+
+    @field_validator("properties")
+    @classmethod
+    def valid_properties(cls, values: list[str]) -> list[str]:
+        return _clean_properties(values)
 
     @model_validator(mode="after")
     def valid_circle(self) -> "TableDrawing":
@@ -94,7 +122,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "pair", "capacity", "fill_efficiency", "pin"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin"]
 
 
 class Rule(Model):

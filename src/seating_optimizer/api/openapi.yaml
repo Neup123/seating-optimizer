@@ -211,6 +211,12 @@ components:
         id: {type: string}
         zone_id: {type: string}
         capacity: {type: integer, minimum: 1}
+        properties:
+          type: array
+          description: Passive table tags; ignored unless a guest-need rule refers to one.
+          default: []
+          uniqueItems: true
+          items: {type: string, minLength: 1}
     TableDrawing:
       type: object
       additionalProperties: false
@@ -222,6 +228,12 @@ components:
         width: {type: number, exclusiveMinimum: 0}
         height: {type: number, exclusiveMinimum: 0}
         shape: {type: string, enum: [rectangle, ellipse, circle], default: rectangle}
+        properties:
+          type: array
+          description: Portable copy of table tags stored in layout JSON; the solver reads Table.properties.
+          default: []
+          uniqueItems: true
+          items: {type: string, minLength: 1}
     FloorLayout:
       type: object
       additionalProperties: false
@@ -310,7 +322,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard]}}
@@ -342,7 +354,7 @@ components:
         id: {type: string}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]
         mode: {type: string, enum: [soft, hard]}
         parameters: {type: object, additionalProperties: true}
         weight: {type: [integer, 'null'], minimum: 1}
