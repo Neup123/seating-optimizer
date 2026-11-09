@@ -713,6 +713,7 @@ def solve(problem: Problem) -> Plan:
                 group_id=gid, table_id=tables[placed[gid]].id,
                 guest_ids=[guest.id for guest in members],
                 guest_names=[guest.name for guest in members],
+                guest_attributes=[guest.attributes for guest in members],
                 reasons=reasons[gid],
                 points=round(sum(r.points for r in reasons[gid]), 5)))
             continue
@@ -732,6 +733,7 @@ def solve(problem: Problem) -> Plan:
                 group_id=gid, table_id=tables[j].id,
                 guest_ids=[g.id for g in subset],
                 guest_names=[g.name for g in subset],
+                guest_attributes=[g.attributes for g in subset],
                 reasons=item_reasons, points=round(sum(r.points for r in item_reasons), 5)))
 
     table_usage = [

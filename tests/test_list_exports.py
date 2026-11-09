@@ -26,12 +26,15 @@ def plan_fixture() -> Plan:
             Assignment(
                 group_id='family & <A>', table_id='G1',
                 guest_ids=['a:1', 'a:2'], guest_names=['Alice & Bob', 'Bea <C>'],
+                guest_attributes=[{'Language': 'English', 'Notes': 'near window'},
+                                  {'Language': 'Greek', 'Notes': 'near window'}],
                 reasons=[Reason(rule_id='pref:1', description='Near a window & friends <X>', points=2),
                          Reason(rule_id='access', description='Needs accessibility', points=0)],
             ),
             Assignment(
                 group_id='solo', table_id='U1',
                 guest_ids=['b:1'], guest_names=['David'],
+                guest_attributes=[{'Language': 'Hebrew'}],
                 reasons=[Reason(rule_id='zone:1', description='Upper floor preference', points=3)],
             ),
         ],
@@ -144,3 +147,38 @@ def test_list_export_rejects_nonfeasible_or_broken_plan_instead_of_dropping_assi
         render_people_list_html(plan)
     with pytest.raises(ValueError, match='Unknown assigned table'):
         render_table_list_html(plan)
+
+
+
+@pytest.mark.parametrize('mode', ['combined', 'floor'])
+def test_people_print_columns_and_group_sizes(mode):
+    root = xml(render_people_list_html(plan_fixture(), group_by=mode, fields=['Language', 'Notes']))
+    assert [head.text for head in root.findall('.//thead/tr/th')[:7]][5:] == ['Language', 'Notes']
+    rows = root.findall('.//tr[@data-guest-id]')
+    assert [row[5].text for row in rows] == ['English', 'Greek', 'Hebrew']
+    assert [row[6].text for row in rows] == ['near window', 'near window', '—']
+    assert '(2 people)' in rows[0][2].text
+    assert '(1 person)' in rows[-1][2].text
+
+
+@pytest.mark.parametrize('mode', ['combined', 'table'])
+def test_table_print_columns_preserve_distinct_and_missing_values(mode):
+    root = xml(render_table_list_html(plan_fixture(), group_by=mode, fields=['Language', 'Notes']))
+    rows = root.findall('.//tr[@data-group-id]')
+    assert rows[0][4].text == 'English / Greek'
+    assert rows[1][4].text == 'Hebrew'
+    assert '(2 people)' in rows[0][2].text
+    assert rows[0][5].text == 'near window'
+    assert rows[1][5].text == '—'
+
+
+def test_api_field_query_and_unknown_field_validation():
+    plan = plan_fixture()
+    client = TestClient(app)
+    response = client.post('/v1/exports/table-list/html',
+        params=[('fields', 'Language'), ('fields', 'Notes')],
+        json=plan.model_dump(mode='json'))
+    assert response.status_code == 200, response.text
+    assert 'English / Greek' in response.text
+    assert client.post('/v1/exports/people-list/html', params={'fields':'Absent'},
+        json=plan.model_dump(mode='json')).status_code == 422

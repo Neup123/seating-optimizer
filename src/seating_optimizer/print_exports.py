@@ -67,7 +67,7 @@ def _map_font(drawing: TableDrawing, line_count: int, longest: int) -> float:
 
 def _table_labels(assignments: dict, table_id: str) -> list[tuple[str, str]]:
     return [
-        (assignment.group_id, f"{assignment.group_id}: {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}")
+        (assignment.group_id, f"{assignment.group_id} ({len(assignment.guest_ids)}): {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}")
         for assignment in assignments[table_id]
     ]
 
@@ -147,7 +147,7 @@ def render_floor_pdf(plan: Plan) -> bytes:
     layout, assignments = _placed(plan)
     font_name = _pdf_font()
     labels = [
-        f"{assignment.group_id}: {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}"
+        f"{assignment.group_id} ({len(assignment.guest_ids)}): {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}"
         for assignment in plan.assignments
     ] + [table.table_id for table in plan.tables]
     _check_pdf_text(labels, font_name)
@@ -221,7 +221,7 @@ def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
             doc.drawCentredString(width / 2, height - 59,
                                   f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
             groups = cards[table.table_id]
-            entries = [f"{group.group_id}: {', '.join(group.guest_names)}" for group in groups]
+            entries = [f"{group.group_id} ({len(group.guest_ids)}): {', '.join(group.guest_names)}" for group in groups]
             if not entries:
                 entries = ["No assigned groups"]
             for fontsize in (11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0):
@@ -278,7 +278,7 @@ def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
             doc.drawCentredString(center_x, cell_height - 56,
                                   f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
             groups = cards[table.table_id]
-            entries = [f"{group.group_id}: {', '.join(group.guest_names)}" for group in groups]
+            entries = [f"{group.group_id} ({len(group.guest_ids)}): {', '.join(group.guest_names)}" for group in groups]
             if not entries:
                 entries = ["No assigned groups"]
             available_width = cell_width - 50

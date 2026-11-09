@@ -221,6 +221,17 @@ From the **Seating plan** page, choose **People list** (one combined table), **P
 These formats are stateless views of the exact solved `Plan` supplied to the API. Every guest ID/name, group ID, table ID and floor/room zone ID comes from that object; the reasons-on variant writes each recorded reason description **verbatim** (escaped only for safe HTML display), and the default omits all written reasons. The Plan has **table assignments but no individual chair / numbered seat field**; exports therefore show the recorded table rather than inventing seat numbers. Use `/v1/exports/json` for the lossless machine-readable Plan. An infeasible Plan cannot be printed as an assignment list.
 
 
+### Imported fields in printable lists
+
+People, people-by-floor, table, and per-table lists display group sizes next to
+identities. After solving, choose **Additional import columns** to include any
+imported guest attribute key in the screen preview, printed output, and HTML
+download. Existing columns remain the default. Group rows include all distinct
+member values and explicitly show missing values. Solved plans retain guest
+attributes for export without a second import. The HTML endpoints accept
+repeated `fields` query parameters. All other printable and text exports also
+include per-group sizes without inventing numbered seats.
+
 ### Sit-together requests and adjacent tables
 
 The `pair` rule's **together** relationship still means the **same table**
