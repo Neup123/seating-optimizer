@@ -131,8 +131,10 @@ export function createApp(root, api = createGateway()) {
   };
   let viewObjectUrl = null;
   let working = false;
+  let noticesIssued = 0;
 
   function announce(message, error = false) {
+    noticesIssued += 1;
     state.notice = message;
     state.error = error;
     render();
@@ -141,11 +143,12 @@ export function createApp(root, api = createGateway()) {
     if (working) return;
     working = true;
     state.retryAction = null;
+    const earlierNotices = noticesIssued;
     try {
       await task();
-      // Downloads have no separate success notice; clear the stale failure
-      // after a successful retry. loadView may register its own preview retry.
-      if (state.error && !state.retryAction)
+      // Downloads have no separate success notice, unlike a rejected import:
+      // preserve explicit validation notices while clearing stale network errors.
+      if (state.error && !state.retryAction && earlierNotices === noticesIssued)
         announce("Request completed successfully.", false);
     }
     catch (error) {
