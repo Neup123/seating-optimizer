@@ -167,6 +167,34 @@
           "required": true
         }
       ]
+    },
+    {
+      "shape": "global_pattern",
+      "title": "Global table-count pattern",
+      "description": "Compose a whole-plan rule from AND comparisons of groups at table, occupied seats and empty seats. Each matching table receives the chosen reward or penalty; optional and weighted. The editable default is the lonely-last-seat example, initially off.",
+      "modes": [
+        "soft"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "effect",
+          "label": "Effect per matching table",
+          "kind": "select",
+          "required": true,
+          "choices": [
+            "penalty",
+            "reward"
+          ]
+        },
+        {
+          "name": "conditions",
+          "label": "Conditions (all must match)",
+          "kind": "pattern",
+          "required": true
+        }
+      ]
     }
   ]
 }
