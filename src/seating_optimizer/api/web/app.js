@@ -2,6 +2,20 @@
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const VIEWS = [["table", "Table view"], ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+const SESSION_KEY = "seating-optimizer:session:v1";
+const TEMPLATES_KEY = "seating-optimizer:templates:v1";
+const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
+  "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
+  "focusedFloor", "sessionId", "seconds", "plan", "notice", "error", "templateName", "templateSelected"];
+
+function storedJSON(key, fallback) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch (_) { return fallback; }
+}
+function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+
 
 function element(tag, className, text) {
   const n = document.createElement(tag);
@@ -112,16 +126,92 @@ export function createGateway(fetcher = fetch) {
 }
 
 export function createApp(root, api = createGateway()) {
-  const state = {
-    screen: "import", view: "table", viewContent: null, viewError: "",
-    importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-    catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
-    zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-    sessionId: "meal-1", seconds: 5, plan: null,
-    notice: "Choose a CSV or XLSX guest list to begin.", error: false
-  };
+  function emptySession() {
+    return {
+      screen: "import", view: "table", viewContent: null, viewError: "",
+      importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
+      catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
+      zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
+      sessionId: "meal-1", seconds: 5, plan: null,
+      notice: "Choose a CSV or XLSX guest list to begin.", error: false,
+      templateName: "", templateSelected: "", storageWarning: ""
+    };
+  }
+  const state = emptySession();
+  const templates = storedJSON(TEMPLATES_KEY, []);
+  if (!Array.isArray(templates)) templates.length = 0;
+  const previous = storedJSON(SESSION_KEY, null);
+  if (previous?.version === 1 && previous.data && Array.isArray(previous.data.guests) &&
+      Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&
+      Array.isArray(previous.data.zones) && Array.isArray(previous.data.layout?.floors)) {
+    for (const key of SESSION_FIELDS) {
+      if (Object.hasOwn(previous.data, key)) state[key] = previous.data[key];
+    }
+    state.notice = "Restored your previous planning session.";
+    state.error = false;
+  }
   let viewObjectUrl = null;
   let working = false;
+
+  function saveSession() {
+    const data = {};
+    for (const key of SESSION_FIELDS) data[key] = state[key];
+    try {
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+      state.storageWarning = "";
+    } catch (_) {
+      // Import source data can exceed the per-origin quota; retain all imported
+      // guests, mapping, rules, layout and solution instead of losing the session.
+      if (data.importFile?.content_base64) {
+        data.importFile = { filename: data.importFile.filename };
+        try {
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+          state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
+          return;
+        } catch (_) { /* even the smaller snapshot did not fit */ }
+      }
+      state.storageWarning = "Browser storage is unavailable or full; this session may not survive a reload.";
+    }
+  }
+  function saveTemplates() {
+    try { window.localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); }
+    catch (_) { throw Error("Cannot save templates: browser storage is unavailable or full. Export the configuration instead."); }
+  }
+  function configuration(name) {
+    if (!name) throw Error("Enter a configuration name.");
+    if (!state.layout.floors.length || !state.tables.length)
+      throw Error("Add a floor and at least one table before saving a configuration.");
+    if (configuredTables().length !== state.tables.length)
+      throw Error("All configured tables need a positive chair capacity.");
+    return deepCopy({
+      version: 1, name, zones: state.zones, tables: state.tables,
+      layout: state.layout, rules: state.rules
+    });
+  }
+  function applyConfiguration(config) {
+    const copy = deepCopy(config);
+    state.zones = copy.zones;
+    state.tables = copy.tables;
+    state.layout = copy.layout;
+    state.rules = copy.rules;
+    state.nextRule = Math.max(1, ...state.rules.map(r => {
+      const match = /^rule-(\\d+)$/.exec(r.id);
+      return match ? Number(match[1]) + 1 : 1;
+    }));
+    state.focusedFloor = state.layout.floors[0]?.zone_id || "";
+    state.templateName = copy.name;
+    invalidate();
+  }
+  function newSession() {
+    const catalog = state.catalog;
+    clearObjectUrl();
+    Object.assign(state, emptySession(), { catalog });
+    if (catalog?.shapes?.length) state.selectedShape = catalog.shapes[0].shape;
+    announce("New empty session started. Saved configuration templates are still available.");
+  }
+  // Change handlers on inputs sometimes update state without re-rendering.
+  root.addEventListener("change", saveSession);
+
 
   function announce(message, error = false) {
     state.notice = message;
@@ -185,6 +275,7 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
+    saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -199,6 +290,8 @@ export function createApp(root, api = createGateway()) {
       element("span", "pill", state.rules.length + " rules"));
     header.append(text, stats);
     main.append(header);
+    main.append(row(action("New empty session", newSession, "danger small", "new-session")));
+    if (state.storageWarning) main.append(element("p", "problem", state.storageWarning));
     const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
     notice.setAttribute("role", "status");
     notice.id = "notice";
@@ -275,9 +368,11 @@ export function createApp(root, api = createGateway()) {
     });
     table.append(body); sheet.append(table); mappingCard.append(sheet);
     const buttons = row(action("Review corrected mapping", () => attempt(async () => {
+      if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to review its mapping.");
       state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       announce("Mapping checked by the API. Review any row-level issues below.");
     }), "secondary", "preview-mapping"), action("Import guests", () => attempt(async () => {
+      if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to import guests again.");
       const result = await api.post("/v1/import", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       state.importResult = result;
       if (result.issues.some(i => i.severity === "error")) {
@@ -435,6 +530,78 @@ export function createApp(root, api = createGateway()) {
 
   function renderMap() {
     const area = element("div");
+    const templatesCard = card("Reusable venue + rules configurations",
+      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable.");
+    templatesCard.append(textField("Configuration name", state.templateName, value => {
+      state.templateName = value;
+    }, { id: "template-name", placeholder: "e.g. Weekly dinner" }));
+    templatesCard.append(row(
+      action("Save as template", () => attempt(async () => {
+        const name = document.getElementById("template-name").value.trim();
+        if (templates.some(t => t.name === name)) throw Error("A template with this name already exists. Choose a new name.");
+        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        templates.push(validated);
+        try { saveTemplates(); } catch (error) { templates.pop(); throw error; }
+        state.templateSelected = name;
+        announce("Saved configuration template: " + name);
+      }), "primary", "save-template"),
+      action("Export full configuration JSON", () => attempt(async () => {
+        const name = document.getElementById("template-name").value.trim() || "Venue configuration";
+        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        downloadBlob(JSON.stringify(validated, null, 2), "venue-configuration.json", "application/json");
+        announce("Exported the complete venue, capacities and rules.");
+      }), "secondary", "export-configuration")
+    ));
+    templatesCard.append(selectField("Saved templates",
+      [["", "Choose saved template"], ...templates.map(t => [t.name, t.name])],
+      state.templateSelected, value => { state.templateSelected = value; }, { id: "template-select" }));
+    templatesCard.append(row(
+      action("Load template", () => attempt(async () => {
+        const found = templates.find(t => t.name === state.templateSelected);
+        if (!found) throw Error("Choose a saved configuration template.");
+        const validated = await api.post("/v1/configurations/validate", found);
+        applyConfiguration(validated);
+        announce("Loaded template " + found.name + ". Import guests whenever ready.");
+      }), "secondary", "load-template"),
+      action("Duplicate template", () => attempt(async () => {
+        const found = templates.find(t => t.name === state.templateSelected);
+        if (!found) throw Error("Choose a template to duplicate.");
+        let name = found.name + " (copy)";
+        for (let number = 2; templates.some(t => t.name === name); number++)
+          name = found.name + " (copy " + number + ")";
+        const copy = deepCopy(found);
+        copy.name = name;
+        templates.push(copy);
+        try { saveTemplates(); } catch (error) { templates.pop(); throw error; }
+        state.templateSelected = name;
+        announce("Duplicated template as " + name);
+      }), "secondary", "duplicate-template"),
+      action("Delete template", () => attempt(async () => {
+        const index = templates.findIndex(t => t.name === state.templateSelected);
+        if (index === -1) throw Error("Choose a template to delete.");
+        const [removed] = templates.splice(index, 1);
+        try { saveTemplates(); } catch (error) { templates.splice(index, 0, removed); throw error; }
+        state.templateSelected = "";
+        announce("Deleted saved template " + removed.name + ".");
+      }), "danger small", "delete-template")
+    ));
+    const importLabel = element("label", "field");
+    importLabel.append(element("span", "", "Import full configuration JSON"));
+    const configFile = document.createElement("input");
+    configFile.id = "configuration-file";
+    configFile.type = "file";
+    configFile.accept = ".json,application/json";
+    configFile.addEventListener("change", () => attempt(async () => {
+      const file = configFile.files?.[0];
+      if (!file) return;
+      if (file.size > 2_000_000) throw Error("Configuration JSON must be smaller than 2 MB.");
+      const incoming = JSON.parse(await file.text());
+      const validated = await api.post("/v1/configurations/validate", incoming);
+      applyConfiguration(validated);
+      announce("Imported complete configuration " + validated.name + ".");
+    }));
+    templatesCard.append(append(importLabel, configFile));
+    area.append(templatesCard);
     const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Capacity is per table.");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
@@ -788,16 +955,19 @@ export function createApp(root, api = createGateway()) {
   const ready = (async () => {
     try {
       state.catalog = await api.get("/v1/rules/catalog");
-      if (state.catalog.shapes?.length) state.selectedShape = state.catalog.shapes[0].shape;
+      if (state.catalog.shapes?.length &&
+          !state.catalog.shapes.some(shape => shape.shape === state.selectedShape))
+        state.selectedShape = state.catalog.shapes[0].shape;
     } catch (error) {
       state.notice = "Could not load rule catalog: " + error.message;
       state.error = true;
     }
     render();
+    if (state.plan) await loadView(state.view);
   })();
   render();
   return { state, ready, render, show: screen => { state.screen = screen; render(); },
-           loadView, validateLayout, loadLayoutFiles, projectProblem };
+           loadView, validateLayout, loadLayoutFiles, projectProblem, newSession };
 }
 
 if (typeof document !== "undefined") {
