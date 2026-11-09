@@ -21,6 +21,12 @@ def _matched(guest, rule):
     )
 
 
+def _has_table_property(table, name: str) -> bool:
+    """Tags are passive; only guest-need rules may query them."""
+    expected = name.strip().casefold()
+    return any(tag.casefold() == expected for tag in table.properties)
+
+
 def _values(guest, rule):
     key = rule.parameters["attribute"]
     if key not in guest.attributes:
@@ -57,12 +63,15 @@ def _prepare(problem):
     for rule in problem.rules:
         p = rule.parameters
         try:
-            if rule.shape in ("attribute_grouping", "zone_restriction"):
+            if rule.shape in ("attribute_grouping", "zone_restriction", "table_property_need"):
                 if not isinstance(p["attribute"], str) or not p["attribute"]:
                     raise ValueError("nonempty attribute required")
             if rule.shape == "zone_restriction":
                 if not _allowed_zones(rule) <= zones:
                     raise ValueError("unknown zone")
+            if rule.shape == "table_property_need":
+                if not isinstance(p["property"], str) or not p["property"].strip():
+                    raise ValueError("nonempty table property required")
             if rule.shape == "pair":
                 if p["left"] not in lookup or p["right"] not in lookup:
                     raise ValueError("unknown guest/group target")
@@ -124,6 +133,19 @@ def solve(problem: Problem) -> Plan:
                     if table.zone_id in allowed:
                         if rule.mode == "soft":
                             terms.append(rule.weight * matches * x[gid, j])
+                    elif rule.mode == "hard":
+                        model.Add(x[gid, j] == 0).OnlyEnforceIf(hard(f"rule:{rule.id}"))
+        elif rule.shape == "table_property_need":
+            # The weight belongs to each affected GUEST. Table tags cannot
+            # grant points by themselves, and families remain atomic.
+            for gid, members in groups.items():
+                count = sum(_matched(guest, rule) for guest in members)
+                if not count:
+                    continue
+                for j, table in enumerate(tables):
+                    if _has_table_property(table, p["property"]):
+                        if rule.mode == "soft":
+                            terms.append(rule.weight * count * x[gid, j])
                     elif rule.mode == "hard":
                         model.Add(x[gid, j] == 0).OnlyEnforceIf(hard(f"rule:{rule.id}"))
         elif rule.shape == "pair":
@@ -271,6 +293,34 @@ def solve(problem: Problem) -> Plan:
                              "Affected groups are outside their preferred zone.")
                     ),
                     lost_points=total_matches * rule.weight - points))
+        elif rule.shape == "table_property_need":
+            need = p["attribute"] + (("=" + str(p["value"])) if "value" in p else " (any value)")
+            for gid, members in groups.items():
+                count = sum(_matched(guest, rule) for guest in members)
+                if not count:
+                    continue
+                table = tables[placed[gid]]
+                has_tag = _has_table_property(table, p["property"])
+                earned = rule.weight * count if rule.mode == "soft" and has_tag else 0
+                points += earned
+                if has_tag:
+                    reasons[gid].append(Reason(
+                        rule_id=rule.id,
+                        description=(f"Guest need {need} met: table {table.id} has "
+                                     f"property {p['property']} ({count} affected guest(s))."),
+                        points=earned))
+                elif rule.mode == "soft":
+                    lost = rule.weight * count
+                    reasons[gid].append(Reason(
+                        rule_id=rule.id,
+                        description=(f"Guest need {need} not met at table {table.id}: "
+                                     f"missing property {p['property']} ({lost} preference points unavailable)."),
+                        points=0))
+                    compromises.append(Compromise(
+                        rule_id=rule.id,
+                        description=(f"Group {gid} needs {need} at a table with property "
+                                     f"{p['property']}, but sits at {table.id}."),
+                        lost_points=lost))
         elif rule.shape == "pair":
             a, b = lookup[p["left"]], lookup[p["right"]]
             satisfied = (placed[a] == placed[b]) == (p["relation"] == "together")

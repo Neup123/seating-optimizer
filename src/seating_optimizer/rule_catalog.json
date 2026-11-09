@@ -57,6 +57,37 @@
       ]
     },
     {
+      "shape": "table_property_need",
+      "title": "Guest need → table property",
+      "description": "Only guests with the selected attribute value need this table tag. Soft preferences earn the rule's weight per affected guest; hard requirements forbid untagged tables. Table tags have no score of their own.",
+      "modes": [
+        "soft",
+        "hard"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "attribute",
+          "label": "Guest attribute (e.g. mobility)",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "value",
+          "label": "Guest value (optional, e.g. wheelchair)",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "property",
+          "label": "Required table property (e.g. accessible)",
+          "kind": "text",
+          "required": true
+        }
+      ]
+    },
+    {
       "shape": "pair",
       "title": "Pair together / apart",
       "description": "Keep two guests or groups together or apart.",

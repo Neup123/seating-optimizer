@@ -131,3 +131,26 @@ def test_openapi_phase2_operations_and_media_types_match_implementation():
             document["components"]["schemas"][key]
         )
     assert "@scalar/api-reference" in client.get("/docs").text
+
+def test_table_card_api_query_is_optional_and_documents_supported_densities():
+    from test_print_exports import example_plan
+    plan = example_plan().model_dump(mode="json")
+    for density, expected_pages in ((None, 3), (1, 3), (2, 2), (4, 1)):
+        query = "" if density is None else f"?cards_per_page={density}"
+        response = client.post("/v1/exports/table-cards/pdf" + query, json=plan)
+        assert response.status_code == 200, response.text
+        reader = PdfReader(BytesIO(response.content))
+        assert len(reader.pages) == expected_pages
+        all_text = " ".join(page.extract_text() for page in reader.pages)
+        assert all(name in all_text for name in ("Table G1", "Table G2",
+                                                "Table U1", "Alice Red", "Bob Red",
+                                                "Cara Blue", "Dan Blue"))
+    for invalid in ("0", "3", "5", "bogus"):
+        response = client.post("/v1/exports/table-cards/pdf?cards_per_page=" + invalid, json=plan)
+        assert response.status_code == 422
+    parameters = spec()["paths"]["/v1/exports/table-cards/pdf"]["post"]["parameters"]
+    assert parameters == [{
+        "name": "cards_per_page", "in": "query", "required": False,
+        "description": "Number of complete table cards to print on a physical page.",
+        "schema": {"type": "integer", "enum": [1, 2, 4], "default": 1}
+    }]
