@@ -214,7 +214,9 @@ export function createApp(root, api = createGateway()) {
     state.layout = copy.layout;
     for (const floor of state.layout.floors) for (const drawing of floor.tables) {
       const table = state.tables.find(t => t.id === drawing.table_id);
-      if (table) drawing.small_group_priority = Boolean(table.small_group_priority);
+      if (table && (Object.hasOwn(table, "small_group_priority") ||
+          Object.hasOwn(drawing, "small_group_priority")))
+        drawing.small_group_priority = Boolean(table.small_group_priority);
     }
     state.rules = copy.rules;
     state.nextRule = Math.max(1, ...state.rules.map(r => {
