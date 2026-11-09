@@ -170,7 +170,13 @@ paths:
   /v1/exports/table-cards/pdf:
     post:
       operationId: exportTableCardsPdf
-      summary: Print one A5 card per table with assigned families
+      summary: Print cards in a one-per-page A5 layout or an A4 2/4-card cutting grid
+      parameters:
+        - name: cards_per_page
+          in: query
+          required: false
+          description: Number of complete table cards to print on a physical page.
+          schema: {type: integer, enum: [1, 2, 4], default: 1}
       requestBody:
         required: true
         content:
@@ -178,7 +184,7 @@ paths:
             schema: {$ref: '#/components/schemas/Plan'}
       responses:
         '200':
-          description: Printable PDF, one page per table including empty tables
+          description: Printable PDF including empty tables; one card per A5 by default, or 2/4 on each A4 sheet
           content:
             application/pdf:
               schema: {type: string, format: binary}
