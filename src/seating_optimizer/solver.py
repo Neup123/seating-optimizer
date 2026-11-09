@@ -166,13 +166,39 @@ def solve(problem: Problem) -> Plan:
     }
     neighbours = neighbouring_tables(problem.layout, tables)
     for gid in sorted(split_groups):
-        if largest_connected_capacity(neighbours, tables) < len(groups[gid]):
+        # Prune forbidden drawings BEFORE testing connected capacity. A route
+        # through a forbidden or unoccupied intermediary does not qualify.
+        admissible = set(range(len(tables)))
+        blockers = []
+        for rule in problem.rules:
+            p = rule.parameters
+            if rule.mode != "hard":
+                continue
+            if rule.shape == "zone_restriction" and any(
+                    _matched(guest, rule) for guest in groups[gid]):
+                admissible &= {j for j, table in enumerate(tables)
+                               if table.zone_id in _allowed_zones(rule)}
+                blockers.append(rule.id)
+            elif rule.shape == "table_property_need" and any(
+                    _matched(guest, rule) for guest in groups[gid]):
+                admissible &= {j for j, table in enumerate(tables)
+                               if _has_table_property(table, p["property"])}
+                blockers.append(rule.id)
+            elif rule.shape == "pin" and lookup[p["target"]] == gid:
+                admissible &= {j for j, table in enumerate(tables)
+                               if table.id == p["table"]}
+                blockers.append(rule.id)
+        reachable = {j: neighbours[j] & admissible for j in admissible}
+        if largest_connected_capacity(reachable, tables) < len(groups[gid]):
+            detail = (f" Hard rules limiting usable tables: {', '.join(blockers)}."
+                      if blockers else "")
             return Plan(
                 session_id=problem.session_id, status="infeasible",
                 conflicting_constraints=[
                     f"Party too large — not achievable: group {gid} has {len(groups[gid])} "
                     "guests, no single table fits, and no connected adjacent-table "
-                    "set on one drawn floor has sufficient capacity."
+                    "set on one drawn floor has sufficient permitted capacity."
+                    + detail
                 ],
                 message="The oversized group cannot be seated at adjacent tables.",
                 solve_seconds=perf_counter() - start, layout=problem.layout,
