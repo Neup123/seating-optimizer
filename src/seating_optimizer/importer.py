@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from difflib import SequenceMatcher
 from io import BytesIO, StringIO
 from zipfile import BadZipFile
 from xml.etree.ElementTree import ParseError
@@ -45,18 +46,62 @@ def _normalize(value: str) -> str:
 
 
 def detect_headers(headers: list[str], aliases: dict[str, list[str]] | None = None) -> tuple[dict[str, str], list[ImportIssue]]:
-    """Return source-column -> canonical target; ambiguous matches are errors."""
+    """Map confident aliases and small header typos; leave ambiguity for manual mapping.
+
+    Exact canonical/alias matches outrank fuzzy matches. Short labels like
+    "Side" must never fuzzy-match "Size". At most one source column is
+    auto-mapped to a canonical target; other columns remain available to map.
+    """
     aliases = default_aliases() if aliases is None else aliases
-    detected = {}
-    issues = []
+    candidates: dict[str, tuple[str, float]] = {}
+    issues: list[ImportIssue] = []
+    normalized = {target: {_normalize(v) for v in [target, *choices]}
+                  for target, choices in aliases.items()}
     for header in headers:
-        matches = [target for target, choices in aliases.items()
-                   if _normalize(header) in {_normalize(v) for v in [target, *choices]}]
-        if len(matches) == 1:
-            detected[header] = matches[0]
-        elif len(matches) > 1:
-            issues.append(ImportIssue(row=1, column=header, severity="error",
-                                      message=f"Ambiguous header {header!r}: {', '.join(matches)}"))
+        label = _normalize(header)
+        if not label:
+            continue
+        scored = {}
+        for target, choices in normalized.items():
+            if label == _normalize(target):
+                scored[target] = 3.0
+            elif label in choices:
+                scored[target] = 2.0
+            elif len(label) >= 6:
+                # Restrict fuzzy detection to same-length-ish substantial labels.
+                # A typo must be very close to a known name, not merely related.
+                similarity = max(
+                    (SequenceMatcher(None, label, choice).ratio()
+                     for choice in choices
+                     if len(choice) >= 6 and abs(len(label) - len(choice)) <= 2),
+                    default=0.0,
+                )
+                if similarity >= 0.88:
+                    scored[target] = similarity
+        if not scored:
+            continue
+        best = max(scored.values())
+        winners = [target for target, score in scored.items() if best - score < 0.02]
+        if len(winners) == 1:
+            candidates[header] = (winners[0], best)
+        else:
+            issues.append(ImportIssue(row=1, column=header, severity="warning",
+                                      message=f"Ambiguous header {header!r}: {', '.join(winners)}. Map it manually."))
+
+    detected: dict[str, str] = {}
+    for target in aliases:
+        matches = [(header, score) for header, (candidate, score) in candidates.items()
+                   if candidate == target]
+        if not matches:
+            continue
+        highest = max(score for _, score in matches)
+        winners = [header for header, score in matches if score == highest]
+        if len(winners) == 1:
+            detected[winners[0]] = target
+        else:
+            issues.append(ImportIssue(row=1, column=None, severity="warning",
+                                      message=(f"Multiple matching columns for {target}: "
+                                               f"{', '.join(winners)}. Select one manually.")))
     return detected, issues
 
 
@@ -242,7 +287,15 @@ def preview_registrations(
         })
     imported = import_registrations(content, filename, mapping=mapping, aliases=choices)
     result.mapping = imported.mapping
-    result.issues = imported.issues
-    # Detection issues are already contained in import diagnostics, including
-    # missing name/size mappings; preview never silently commits partial data.
+    # The preview remains editable when a required column was not detected.
+    # Final import still validates size/name strictly; never invent group sizes.
+    result.issues = [
+        ImportIssue(row=issue.row, column=issue.column,
+                    severity="warning" if issue.message.startswith("Missing required mapping:") else issue.severity,
+                    message=(issue.message + ". Select a source column under Map columns "
+                             "or add the missing column to the spreadsheet."
+                             if issue.message.startswith("Missing required mapping:") else issue.message))
+        for issue in imported.issues
+    ]
+    # Detection warnings are already included by import_registrations.
     return result
