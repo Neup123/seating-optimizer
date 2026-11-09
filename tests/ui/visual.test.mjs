@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createApp } from "../../src/seating_optimizer/api/web/app.js";
+import { createApp, createGateway, friendlyApiError } from "../../src/seating_optimizer/api/web/app.js";
 
 const catalog = {
   shapes: [
@@ -12,6 +12,11 @@ const catalog = {
       modes: ["hard","soft"], default_mode: "hard", default_weight: 3,
       fields: [{ name: "attribute", label: "Attribute", kind: "text", required: true, choices: [] },
                { name: "zone", label: "Zone", kind: "zone", required: true, choices: [] }] },
+    { shape: "table_property_need", title: "Guest need → table property", description: "Only guests carry points",
+      modes: ["soft","hard"], default_mode: "soft", default_weight: 2,
+      fields: [{ name: "attribute", label: "Guest attribute", kind: "text", required: true, choices: [] },
+               { name: "value", label: "Guest value", kind: "text", required: false, choices: [] },
+               { name: "property", label: "Table property", kind: "text", required: true, choices: [] }] },
     { shape: "pair", title: "Pair rules", description: "Pairs",
       modes: ["soft","hard"], default_mode: "soft", default_weight: 3,
       fields: [{ name: "left", label: "Left", kind: "target", required: true, choices: [] },
@@ -58,9 +63,10 @@ async function until(fn, message = "Condition never satisfied") {
   }
   throw Error(message);
 }
-async function setup(handler = async () => ({})) {
+async function setup(handler = async () => ({}), stored = {}) {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>",
     { url: "http://localhost/" });
+  for (const [key, value] of Object.entries(stored)) dom.window.localStorage.setItem(key, value);
   globalThis.document = dom.window.document;
   globalThis.window = dom.window;
   globalThis.btoa = value => Buffer.from(value, "binary").toString("base64");
@@ -79,7 +85,7 @@ async function setup(handler = async () => ({})) {
   const root = dom.window.document.querySelector("#root");
   const app = createApp(root, api);
   await app.ready;
-  return { dom, root, app, calls, api, $: selector => root.querySelector(selector),
+  return { dom, root, app, calls, api, storage: dom.window.localStorage, $: selector => root.querySelector(selector),
     $$: selector => Array.from(root.querySelectorAll(selector)) };
 }
 function upload(element, name, bytes, window) {
@@ -131,14 +137,14 @@ test("guest import shows detected headers, lets owner override mapping, and neve
   assert.equal(req.mapping.Count, "size");
 });
 
-test("all six rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
+test("all seven rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
   const { app, dom, $, $$ } = await setup();
   app.show("rules");
   for (const shape of catalog.shapes.map(s => s.shape)) {
     setValue($("#new-rule-shape"), shape, dom.window);
     click($("#add-rule"));
   }
-  assert.equal(app.state.rules.length, 6);
+  assert.equal(app.state.rules.length, 7);
   assert.deepEqual(app.state.rules.map(r => r.shape), catalog.shapes.map(s => s.shape));
   assert.equal(app.state.rules.find(r => r.shape === "pin").mode, "hard");
   assert.equal(app.state.rules.find(r => r.shape === "capacity").weight, null);
@@ -154,7 +160,7 @@ test("all six rule shapes are rendered from API metadata; CRUD and new instances
   click($("#add-rule"));
   assert.equal(app.state.rules.filter(r => r.shape === "attribute_grouping").length, 2);
   click($("#delete-rule-1"));
-  assert.equal(app.state.rules.length, 6);
+  assert.equal(app.state.rules.length, 7);
 });
 
 test("map editor imports structured geometry, edits capacity/position, validates round-trip over API, and drags tables", async () => {
@@ -194,7 +200,7 @@ test("solved plan switches between all API exports and shows reasons, compromise
     if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
     if (path === "/v1/exports/floor-map/svg") return { pages: [{zone_id: "ground",
       svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>family-one</text></svg>'}] };
-    if (path === "/v1/exports/table-cards/pdf") return new Blob(["%PDF"],{type:"application/pdf"});
+    if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"],{type:"application/pdf"});
     if (path === "/v1/exports/json") return plan;
     throw Error("Unexpected request " + path);
   });
@@ -217,9 +223,277 @@ test("solved plan switches between all API exports and shows reasons, compromise
   click($("#view-cards"));
   await until(() => !!$("#cards-preview"));
   assert.equal($("#cards-preview").src, "blob:test/print");
+  assert.equal($("#cards-per-page").value, "1");
+  setValue($("#cards-per-page"), "4", dom.window);
+  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4"));
+  await until(() => !!$("#cards-preview"));
+  click($("#download-cards"));
+  await until(() => calls.filter(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4").length === 2);
+  setValue($("#cards-per-page"), "2", dom.window);
+  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=2"));
+  await until(() => !!$("#cards-preview"));
+  // Let the download task settle before navigating (actions are serialized).
+  await new Promise(resolve => setTimeout(resolve, 10));
   click($("#view-json"));
   await until(() => root.textContent.includes('"score_breakdown"'));
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
   assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
+});
+
+test("a full guest/rule/layout/solved session survives reload and explicit reset preserves templates", async () => {
+  const handler = async (path, payload) => {
+    if (path === "/v1/solve") return plan;
+    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
+    if (path === "/v1/configurations/validate") return payload;
+    return {};
+  };
+  const first = await setup(handler);
+  first.app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one", attributes: {} }];
+  first.app.state.zones = [{ id: "ground", name: "Ground" }];
+  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  first.app.state.layout = layout;
+  first.app.state.preview = { headers: ["Name"], sample_rows: [], issues: [] };
+  first.app.state.mapping = { Name: "name" };
+  first.app.show("rules");
+  click(first.$("#add-rule"));
+  setValue(first.$("#rule-0-attribute"), "language", first.dom.window);
+  first.app.show("plan");
+  click(first.$("#solve-plan"));
+  await until(() => !!first.app.state.plan);
+  const saved = Object.fromEntries(
+    Object.keys(first.storage).map(key => [key, first.storage.getItem(key)]));
+  const restored = await setup(handler, saved);
+  assert.equal(restored.app.state.guests.length, 1);
+  assert.equal(restored.app.state.tables.length, 1);
+  assert.equal(restored.app.state.rules.length, 1);
+  assert.equal(restored.app.state.mapping.Name, "name");
+  assert.deepEqual(restored.app.state.layout, layout);
+  assert.deepEqual(restored.app.state.plan, plan);
+  await until(() => restored.root.textContent.includes("Table G1: Alice and Bob"));
+  click(restored.$("#new-session"));
+  assert.equal(restored.app.state.guests.length, 0);
+  assert.equal(restored.app.state.rules.length, 0);
+  assert.equal(restored.app.state.layout.floors.length, 0);
+  assert.equal(restored.storage.getItem("seating-optimizer:session:v1")?.includes('"guests":[]'), true);
+});
+
+test("named full configurations can be saved, duplicated, loaded, exported, imported and deleted without guests", async () => {
+  const handler = async (path, payload) => {
+    if (path === "/v1/configurations/validate") return payload;
+    if (path === "/v1/layouts/import") return layout;
+    return {};
+  };
+  const first = await setup(handler);
+  first.app.state.zones = [{ id: "ground", name: "Ground" }];
+  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  first.app.state.layout = layout;
+  first.app.state.rules = [{ id: "lang", shape: "attribute_grouping", mode: "soft",
+    weight: 4, parameters: { attribute: "language" } }];
+  first.app.show("map");
+  setValue(first.$("#template-name"), "Weekly dinner", first.dom.window);
+  click(first.$("#save-template"));
+  await until(() => first.root.textContent.includes("Saved configuration template"));
+  assert.equal(first.app.state.guests.length, 0);
+  const stored = first.storage.getItem("seating-optimizer:templates:v1");
+  assert.equal(JSON.parse(stored)[0].rules[0].parameters.attribute, "language");
+  click(first.$("#duplicate-template"));
+  await until(() => first.root.textContent.includes("Duplicated template"));
+  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 2);
+  click(first.$("#new-session"));
+  first.app.show("map");
+  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
+  click(first.$("#load-template"));
+  await until(() => first.app.state.tables.length === 1);
+  assert.equal(first.app.state.rules[0].weight, 4);
+  assert.equal(first.app.state.layout.floors.length, 1);
+  assert.equal(first.app.state.guests.length, 0);
+  let exported;
+  first.dom.window.URL.createObjectURL = blob => { exported = blob; return "blob:test/export"; };
+  click(first.$("#export-configuration"));
+  await until(() => exported);
+  assert.match(first.root.textContent, /Exported the complete venue/);
+  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
+  click(first.$("#delete-template"));
+  await until(() => first.root.textContent.includes("Deleted saved template"));
+  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 1);
+  // A full JSON file imported into a fresh session reuses the headless validator.
+  const content = JSON.parse(JSON.stringify(JSON.parse(stored)[0]));
+  const fresh = await setup(handler);
+  fresh.app.show("map");
+  const file = { name: "venue-configuration.json", size: 200,
+    text: async () => JSON.stringify(content) };
+  Object.defineProperty(fresh.$("#configuration-file"), "files", { configurable: true, value: [file] });
+  fresh.$("#configuration-file").dispatchEvent(new fresh.dom.window.Event("change", { bubbles: true }));
+  await until(() => fresh.app.state.tables.length === 1);
+  assert.deepEqual(fresh.app.state.rules, content.rules);
+  assert.deepEqual(fresh.app.state.layout, content.layout);
+  assert.equal(fresh.app.state.guests.length, 0);
+});
+
+test("corrupt storage is ignored and a storage quota failure is visible rather than a silent reset", async () => {
+  const first = await setup(async () => ({}), {
+    "seating-optimizer:session:v1": "{bad json",
+    "seating-optimizer:templates:v1": '{"broken":true}'
+  });
+  assert.equal(first.app.state.guests.length, 0);
+  assert.ok(first.$("#new-session"));
+  const proto = first.dom.window.Storage.prototype;
+  const original = proto.setItem;
+  proto.setItem = () => { throw Error("quota"); };
+  try {
+    first.app.show("map");
+    assert.match(first.root.textContent, /Browser storage is unavailable or full/);
+  } finally { proto.setItem = original; }
+});
+
+test("gateway sanitizes raw fetch/network exceptions but preserves meaningful HTTP diagnostics", async () => {
+  const gateway = createGateway(async () => { throw new TypeError("Failed to fetch"); });
+  await assert.rejects(() => gateway.get("/v1/rules/catalog"),
+    /Could not reach the server.*try again/);
+  assert.equal(friendlyApiError(Error("NetworkError when attempting to fetch resource.")),
+    "Could not reach the server — check your connection and try again.");
+  const bad = createGateway(async () => ({
+    ok: false, status: 422, text: async () => JSON.stringify({ detail: "Invalid layout geometry" })
+  }));
+  await assert.rejects(() => bad.post("/v1/layouts/import", {}), /Invalid layout geometry/);
+});
+
+test("import, venue validation, solve and export retry only the failed request without losing state", async () => {
+  const offline = new Set(["/v1/import/preview"]);
+  const handler = async (path, payload) => {
+    if (offline.has(path)) throw new TypeError("Failed to fetch");
+    if (path === "/v1/import/preview") return {
+      headers: ["Guest Name", "Party Size"], mapping: { "Guest Name": "name", "Party Size": "size" },
+      sample_rows: [], issues: []
+    };
+    if (path === "/v1/import") return {
+      guests: [{ id: "g1", name: "Alice", attributes: {}, group_id: "family" }],
+      rows_imported: 1, issues: []
+    };
+    if (path === "/v1/layouts/import") return layout;
+    if (path === "/v1/solve") return plan;
+    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
+    if (path === "/v1/exports/table-cards/pdf") return new Blob(["%PDF"], { type: "application/pdf" });
+    return {};
+  };
+  const { app, dom, $, root, calls } = await setup(handler);
+  upload($("#guest-file"), "guests.csv", new TextEncoder().encode("Guest Name,Party Size\nAlice,1\n"), dom.window);
+  await until(() => !!$("#retry-action"));
+  assert.match($("#notice").textContent, /Could not reach the server/);
+  assert.doesNotMatch(root.textContent, /Failed to fetch/);
+  assert.equal(app.state.preview, null);
+  offline.delete("/v1/import/preview");
+  click($("#retry-action"));
+  await until(() => !!$("#map-guest-name"));
+  assert.equal(calls.filter(([path]) => path === "/v1/import/preview").length, 2);
+  click($("#import-guests"));
+  await until(() => app.state.guests.length === 1);
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("map");
+  offline.add("/v1/layouts/import");
+  click($("#validate-layout"));
+  await until(() => !!$("#retry-action"));
+  assert.deepEqual(app.state.layout, layout);
+  offline.delete("/v1/layouts/import");
+  click($("#retry-action"));
+  await until(() => root.textContent.includes("Venue layout validated"));
+  app.show("plan");
+  offline.add("/v1/solve");
+  click($("#solve-plan"));
+  await until(() => !!$("#retry-action"));
+  assert.equal(app.state.plan, null);
+  offline.delete("/v1/solve");
+  click($("#retry-action"));
+  await until(() => !!app.state.plan);
+  assert.match(root.textContent, /Table G1: Alice and Bob/);
+  // An export-preview failure offers Retry for that export, not re-solve.
+  offline.add("/v1/exports/table-cards/pdf");
+  click($("#view-cards"));
+  await until(() => !!$("#retry-action"));
+  assert.ok(app.state.plan);
+  assert.doesNotMatch(root.textContent, /Failed to fetch/);
+  offline.delete("/v1/exports/table-cards/pdf");
+  click($("#retry-action"));
+  await until(() => !!$("#cards-preview"));
+  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 2);
+  app.show("map");
+  offline.add("/v1/layouts/import");
+  click($("#export-layout"));
+  await until(() => !!$("#retry-action"));
+  offline.delete("/v1/layouts/import");
+  click($("#retry-action"));
+  await until(() => root.textContent.includes("Venue layout validated") || !$("#retry-action"));
+  assert.equal(calls.filter(([path]) => path === "/v1/layouts/import").length, 4);
+});
+
+test("layout tags are edited and imported as passive facts, while a guest-need rule carries weight", async () => {
+  const imported = { floors: [{ zone_id: "hall", width: 400, height: 300, tables: [
+    { table_id: "A", x: 15, y: 20, width: 150, height: 110, shape: "rectangle",
+      properties: ["aisle-edge"] }
+  ] }] };
+  const { app, dom, root, $, calls } = await setup(async (path, payload) => {
+    if (path === "/v1/layouts/import") {
+      return JSON.parse(Buffer.from(payload.files[0].content_base64, "base64").toString("utf8"));
+    }
+    return {};
+  });
+  app.show("map");
+  upload($("#layout-file"), "hall.json", new TextEncoder().encode(JSON.stringify(imported)), dom.window);
+  await until(() => !!$("#table-A-properties"));
+  assert.deepEqual(app.state.tables[0].properties, ["aisle-edge"]);
+  assert.equal($("#table-A-properties").value, "aisle-edge");
+  setValue($("#table-A-capacity"), "4", dom.window);
+  setValue($("#table-A-properties"), "accessible, aisle-edge", dom.window);
+  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
+  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
+  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
+  click($("#validate-layout"));
+  await until(() => root.textContent.includes("Venue layout validated"));
+  const check = calls.filter(([path]) => path === "/v1/layouts/import").at(-1)[1];
+  assert.deepEqual(check.tables[0].properties, ["accessible", "aisle-edge"]);
+  const encoded = JSON.parse(Buffer.from(check.files[0].content_base64, "base64").toString("utf8"));
+  assert.deepEqual(encoded.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
+
+  app.show("rules");
+  setValue($("#new-rule-shape"), "table_property_need", dom.window);
+  click($("#add-rule"));
+  setValue($("#rule-0-attribute"), "mobility", dom.window);
+  setValue($("#rule-0-value"), "wheelchair", dom.window);
+  setValue($("#rule-0-property"), "accessible", dom.window);
+  setValue($("#rule-weight-0"), "7", dom.window);
+  assert.equal(app.state.rules[0].parameters.property, "accessible");
+  assert.equal(app.state.rules[0].weight, 7);
+  setValue($("#rule-mode-0"), "hard", dom.window);
+  assert.equal(app.state.rules[0].weight, null);
+  assert.equal(app.state.rules[0].mode, "hard");
+  app.state.guests = [{ id: "g1", name: "Guest", attributes: { mobility: "wheelchair" } }];
+  const request = app.projectProblem();
+  assert.deepEqual(request.tables[0].properties, ["accessible", "aisle-edge"]);
+  assert.equal(request.rules[0].shape, "table_property_need");
+  assert.equal(request.rules[0].weight, null);
+
+  app.show("map");
+  setValue($("#table-A-properties"), "ACCESSIBLE, accessible", dom.window);
+  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
+  assert.match(root.textContent, /property names must be unique/i);
+  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
+});
+
+test("creating a table lets the owner set table tags without importing a guest list", async () => {
+  const { app, dom, $, root } = await setup();
+  app.show("map");
+  const form = $("#floor-form");
+  setValue(form.querySelector('[name="id"]'), "hall", dom.window);
+  setValue(form.querySelector('[name="name"]'), "Main hall", dom.window);
+  click($("#add-floor"));
+  setValue($("#new-table-id"), "T1", dom.window);
+  setValue($("#new-table-capacity"), "5", dom.window);
+  setValue($("#new-table-properties"), "quiet, near-exit", dom.window);
+  click($("#add-table"));
+  assert.equal(app.state.guests.length, 0);
+  assert.deepEqual(app.state.tables[0].properties, ["quiet", "near-exit"]);
+  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["quiet", "near-exit"]);
 });

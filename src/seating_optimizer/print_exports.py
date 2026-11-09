@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
-from reportlab.lib.pagesizes import A5, landscape
+from reportlab.lib.pagesizes import A4, A5, landscape
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -191,8 +191,10 @@ def _wrap_card(text: str, font: str, font_size: float, max_width: float) -> list
     return lines
 
 
-def render_table_cards_pdf(plan: Plan) -> bytes:
-    """One physical printable A5 landscape card per table, even if empty."""
+def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
+    """Print one A5 card by default, or an A4 cut-ready grid of 2 or 4 cards."""
+    if cards_per_page not in (1, 2, 4):
+        raise ValueError("cards_per_page must be 1, 2 or 4")
     if plan.status not in ("optimal", "feasible"):
         raise ValueError("Table cards require a feasible plan")
     font = _pdf_font()
@@ -207,35 +209,96 @@ def render_table_cards_pdf(plan: Plan) -> bytes:
     output = BytesIO()
     doc = canvas.Canvas(output, pagesize=landscape(A5), pageCompression=1)
     width, height = landscape(A5)
-    for table in plan.tables:
-        doc.setPageSize((width, height))
-        doc.setTitle(f"Table cards — {plan.session_id}")
-        doc.setLineWidth(1)
-        doc.roundRect(14, 14, width - 28, height - 28, 8)
-        doc.setFont(font, 18)
-        doc.drawCentredString(width / 2, height - 43, f"Table {table.table_id}")
-        doc.setFont(font, 10)
-        doc.drawCentredString(width / 2, height - 59,
-                              f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
-        groups = cards[table.table_id]
-        entries = [f"{group.group_id}: {', '.join(group.guest_names)}" for group in groups]
-        if not entries:
-            entries = ["No assigned groups"]
-        for fontsize in (11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0):
-            try:
-                lines = [line for entry in entries for line in
-                         _wrap_card(entry, font, fontsize, width - 70)]
-            except ValueError:
-                continue
-            if len(lines) * fontsize * 1.3 <= height - 95:
-                break
-        else:
-            raise ValueError(f"Table {table.table_id} has too much text for one printable card")
-        doc.setFont(font, fontsize)
-        start_y = height - 85
-        for line in lines:
-            doc.drawString(35, start_y, line)
-            start_y -= fontsize * 1.3
-        doc.showPage()
+    if cards_per_page == 1:
+        for table in plan.tables:
+            doc.setPageSize((width, height))
+            doc.setTitle(f"Table cards — {plan.session_id}")
+            doc.setLineWidth(1)
+            doc.roundRect(14, 14, width - 28, height - 28, 8)
+            doc.setFont(font, 18)
+            doc.drawCentredString(width / 2, height - 43, f"Table {table.table_id}")
+            doc.setFont(font, 10)
+            doc.drawCentredString(width / 2, height - 59,
+                                  f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
+            groups = cards[table.table_id]
+            entries = [f"{group.group_id}: {', '.join(group.guest_names)}" for group in groups]
+            if not entries:
+                entries = ["No assigned groups"]
+            for fontsize in (11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0):
+                try:
+                    lines = [line for entry in entries for line in
+                             _wrap_card(entry, font, fontsize, width - 70)]
+                except ValueError:
+                    continue
+                if len(lines) * fontsize * 1.3 <= height - 95:
+                    break
+            else:
+                raise ValueError(f"Table {table.table_id} has too much text for one printable card")
+            doc.setFont(font, fontsize)
+            start_y = height - 85
+            for line in lines:
+                doc.drawString(35, start_y, line)
+                start_y -= fontsize * 1.3
+            doc.showPage()
+    else:
+        # Keep the previous A5 drawing path untouched for cards_per_page=1.
+        # Two landscape A5 signs fit on portrait A4; four smaller cards
+        # occupy an A4 landscape 2 x 2 cutting grid.
+        cols = 1 if cards_per_page == 2 else 2
+        rows = 2
+        page_width, page_height = A4 if cards_per_page == 2 else landscape(A4)
+        cell_width, cell_height = page_width / cols, page_height / rows
+
+        for index, table in enumerate(plan.tables):
+            slot = index % cards_per_page
+            if slot == 0:
+                if index:
+                    doc.showPage()
+                doc.setPageSize((page_width, page_height))
+                doc.setTitle(f"Table cards — {plan.session_id}")
+                # Light dotted cutting guides between the bordered cards.
+                doc.saveState()
+                doc.setStrokeColorRGB(0.65, 0.65, 0.65)
+                doc.setLineWidth(0.5)
+                doc.setDash(3, 3)
+                doc.line(0, cell_height, page_width, cell_height)
+                if cols == 2:
+                    doc.line(cell_width, 0, cell_width, page_height)
+                doc.restoreState()
+            col = slot % cols
+            row = slot // cols
+            doc.saveState()
+            doc.translate(col * cell_width, page_height - (row + 1) * cell_height)
+            doc.setLineWidth(0.9)
+            doc.roundRect(10, 10, cell_width - 20, cell_height - 20, 5)
+            center_x = cell_width / 2
+            doc.setFont(font, 18 if cards_per_page == 2 else 15)
+            doc.drawCentredString(center_x, cell_height - 39, f"Table {table.table_id}")
+            doc.setFont(font, 10 if cards_per_page == 2 else 9)
+            doc.drawCentredString(center_x, cell_height - 56,
+                                  f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
+            groups = cards[table.table_id]
+            entries = [f"{group.group_id}: {', '.join(group.guest_names)}" for group in groups]
+            if not entries:
+                entries = ["No assigned groups"]
+            available_width = cell_width - 50
+            start_y = cell_height - 76
+            for fontsize in (11.0, 10.0, 9.0, 8.0, 7.0, 6.0):
+                try:
+                    lines = [line for entry in entries for line in
+                             _wrap_card(entry, font, fontsize, available_width)]
+                except ValueError:
+                    continue
+                if len(lines) * fontsize * 1.3 <= start_y - 22:
+                    break
+            else:
+                raise ValueError(f"Table {table.table_id} has too much text for {cards_per_page} cards per page")
+            doc.setFont(font, fontsize)
+            for line in lines:
+                doc.drawString(25, start_y, line)
+                start_y -= fontsize * 1.3
+            doc.restoreState()
+        if plan.tables:
+            doc.showPage()
     doc.save()
     return output.getvalue()

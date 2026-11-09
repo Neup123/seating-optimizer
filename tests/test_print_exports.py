@@ -115,3 +115,40 @@ def test_incomplete_layout_never_silently_drops_tables_or_groups():
     plan.status = "infeasible"
     with pytest.raises(ValueError, match="feasible"):
         render_table_cards_pdf(plan)
+
+@pytest.mark.parametrize("density, pages", [(1, 5), (2, 3), (4, 2)])
+def test_multi_card_pdf_page_count_and_complete_labels(density, pages):
+    plan = example_plan()
+    # Five signs exercise the partial final sheet and all three densities.
+    for number in (4, 5):
+        plan.tables.append(TableUsage(table_id=f"E{number}", zone_id="upper",
+                                      capacity=8, occupied=0, empty_seats=8))
+    pdf = read_pdf(render_table_cards_pdf(plan, cards_per_page=density))
+    assert len(pdf.pages) == pages
+    texts = [page.extract_text() for page in pdf.pages]
+    full_text = "\n".join(texts)
+    for title in ("Table G1", "Table G2", "Table U1", "Table E4", "Table E5"):
+        assert full_text.count(title) == 1
+    for name in ("Alice Red", "Bob Red", "Cara Blue", "Dan Blue", "family-red",
+                 "family-blue", "Zone ground | 2/4 chairs", "Zone upper | 2/2 chairs",
+                 "No assigned groups"):
+        assert name in full_text
+    if density == 4:
+        assert all(f"Table {table}" in texts[0] for table in ("G1", "G2", "U1", "E4"))
+        assert "Table E5" in texts[1] and "Table E5" not in texts[0]
+        assert (round(float(pdf.pages[0].mediabox.width)),
+                round(float(pdf.pages[0].mediabox.height))) == (842, 595)
+    if density == 2:
+        assert all(f"Table {table}" in texts[0] for table in ("G1", "G2"))
+        assert "Table U1" not in texts[0]
+        assert (round(float(pdf.pages[0].mediabox.width)),
+                round(float(pdf.pages[0].mediabox.height))) == (595, 842)
+    if density == 1:
+        assert "Table U1" not in texts[0]
+        assert round(float(pdf.pages[0].mediabox.height)) == 420
+
+
+@pytest.mark.parametrize("density", [0, 3, 5, -1])
+def test_multi_card_renderer_rejects_unsupported_densities(density):
+    with pytest.raises(ValueError, match="cards_per_page"):
+        render_table_cards_pdf(example_plan(), cards_per_page=density)

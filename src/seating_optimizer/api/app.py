@@ -6,12 +6,12 @@ import binascii
 from importlib.resources import files
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
 from pydantic import BaseModel, Field
 
 from seating_optimizer import (
-    Plan, Problem, Table, Zone, VenueLayout, SvgFloorBundle, import_layout_files,
+    Plan, Problem, Table, Zone, VenueLayout, VenueConfiguration, SvgFloorBundle, import_layout_files,
     import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
     render_json, render_table, solve, preview_registrations, rule_catalog,
     ImportPreview, RuleCatalog,
@@ -88,6 +88,11 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.post("/v1/configurations/validate", response_model=VenueConfiguration)
+    def validate_configuration(configuration: VenueConfiguration) -> VenueConfiguration:
+        """Validate a portable guest-free configuration without saving it server-side."""
+        return configuration
+
     @app.post("/v1/solve", response_model=Plan)
     def solve_problem(problem: Problem) -> Plan:
         try:
@@ -120,9 +125,13 @@ def create_app() -> FastAPI:
                         headers={"Content-Disposition": 'attachment; filename="floor-maps.pdf"'})
 
     @app.post("/v1/exports/table-cards/pdf")
-    def table_cards_pdf_export(plan: Plan) -> Response:
+    def table_cards_pdf_export(
+        plan: Plan, cards_per_page: int = Query(default=1)
+    ) -> Response:
+        if cards_per_page not in (1, 2, 4):
+            raise HTTPException(status_code=422, detail="cards_per_page must be 1, 2 or 4")
         try:
-            pdf = render_table_cards_pdf(plan)
+            pdf = render_table_cards_pdf(plan, cards_per_page=cards_per_page)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return Response(content=pdf, media_type="application/pdf",

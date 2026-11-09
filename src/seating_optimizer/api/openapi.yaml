@@ -86,6 +86,24 @@ paths:
           description: Invalid base64 input
         '422':
           description: Invalid layout geometry or references
+  /v1/configurations/validate:
+    post:
+      operationId: validateVenueConfiguration
+      summary: Validate a portable named venue, capacities and rules without guests
+      description: Stateless validation; callers can store, export, duplicate or load the returned JSON independently of guest import.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VenueConfiguration'}
+      responses:
+        '200':
+          description: Validated, portable guest-free configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VenueConfiguration'}
+        '422':
+          description: Invalid capacities, rule parameters, geometry or references
   /v1/solve:
     post:
       operationId: solveSession
@@ -170,7 +188,13 @@ paths:
   /v1/exports/table-cards/pdf:
     post:
       operationId: exportTableCardsPdf
-      summary: Print one A5 card per table with assigned families
+      summary: Print cards in a one-per-page A5 layout or an A4 2/4-card cutting grid
+      parameters:
+        - name: cards_per_page
+          in: query
+          required: false
+          description: Number of complete table cards to print on a physical page.
+          schema: {type: integer, enum: [1, 2, 4], default: 1}
       requestBody:
         required: true
         content:
@@ -178,7 +202,7 @@ paths:
             schema: {$ref: '#/components/schemas/Plan'}
       responses:
         '200':
-          description: Printable PDF, one page per table including empty tables
+          description: Printable PDF including empty tables; one card per A5 by default, or 2/4 on each A4 sheet
           content:
             application/pdf:
               schema: {type: string, format: binary}
@@ -211,6 +235,12 @@ components:
         id: {type: string}
         zone_id: {type: string}
         capacity: {type: integer, minimum: 1}
+        properties:
+          type: array
+          description: Passive table tags; ignored unless a guest-need rule refers to one.
+          default: []
+          uniqueItems: true
+          items: {type: string, minLength: 1}
     TableDrawing:
       type: object
       additionalProperties: false
@@ -222,6 +252,12 @@ components:
         width: {type: number, exclusiveMinimum: 0}
         height: {type: number, exclusiveMinimum: 0}
         shape: {type: string, enum: [rectangle, ellipse, circle], default: rectangle}
+        properties:
+          type: array
+          description: Portable copy of table tags stored in layout JSON; the solver reads Table.properties.
+          default: []
+          uniqueItems: true
+          items: {type: string, minLength: 1}
     FloorLayout:
       type: object
       additionalProperties: false
@@ -310,7 +346,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard]}}
@@ -323,6 +359,17 @@ components:
       required: [shapes]
       properties:
         shapes: {type: array, items: {$ref: '#/components/schemas/RuleShapeSpec'}}
+    VenueConfiguration:
+      type: object
+      additionalProperties: false
+      required: [version, name, zones, tables, layout, rules]
+      properties:
+        version: {type: integer, const: 1}
+        name: {type: string, minLength: 1}
+        zones: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Zone'}}
+        tables: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Table'}}
+        layout: {$ref: '#/components/schemas/VenueLayout'}
+        rules: {type: array, items: {$ref: '#/components/schemas/Rule'}}
     Guest:
       type: object
       additionalProperties: false
@@ -342,7 +389,7 @@ components:
         id: {type: string}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, pair, capacity, fill_efficiency, pin]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]
         mode: {type: string, enum: [soft, hard]}
         parameters: {type: object, additionalProperties: true}
         weight: {type: [integer, 'null'], minimum: 1}

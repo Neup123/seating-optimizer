@@ -2,6 +2,20 @@
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const VIEWS = [["table", "Table view"], ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+const SESSION_KEY = "seating-optimizer:session:v1";
+const TEMPLATES_KEY = "seating-optimizer:templates:v1";
+const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
+  "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "notice", "error", "templateName", "templateSelected"];
+
+function storedJSON(key, fallback) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch (_) { return fallback; }
+}
+function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+
 
 function element(tag, className, text) {
   const n = document.createElement(tag);
@@ -77,6 +91,12 @@ function safeNumber(input) {
   const number = Number(input);
   return Number.isFinite(number) ? number : NaN;
 }
+function parseTableProperties(input) {
+  const tags = String(input || "").split(",").map(tag => tag.trim()).filter(Boolean);
+  if (new Set(tags.map(tag => tag.toLocaleLowerCase())).size !== tags.length)
+    throw Error("Table property names must be unique (case-insensitive).");
+  return tags;
+}
 function encodeBytes(bytes) {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 8192) {
@@ -90,14 +110,23 @@ async function encodeFile(file) {
 }
 function encodeText(text) { return encodeBytes(new TextEncoder().encode(text)); }
 
+export function friendlyApiError(error) {
+  const message = typeof error?.message === "string" ? error.message : String(error || "");
+  if (error instanceof TypeError || /failed to fetch|fetch failed|networkerror|network request failed|load failed|err_name_not_resolved/i.test(message))
+    return "Could not reach the server — check your connection and try again.";
+  return message || "The server could not complete this request. Please try again.";
+}
+
 export function createGateway(fetcher = fetch) {
   async function request(path, options, resultType = "json") {
-    const response = await fetcher(path, options);
+    let response;
+    try { response = await fetcher(path, options); }
+    catch (error) { throw Error(friendlyApiError(error), { cause: error }); }
     if (!response.ok) {
       let detail = await response.text();
       try { const parsed = JSON.parse(detail); detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail); }
       catch (_) { /* preserve human-readable HTTP error */ }
-      throw Error(detail || "Request failed (" + response.status + ")");
+      throw Error(friendlyApiError(Error(detail || "Server returned HTTP " + response.status + ". Please try again.")));
     }
     return resultType === "blob" ? response.blob() :
       resultType === "text" ? response.text() : response.json();
@@ -112,18 +141,96 @@ export function createGateway(fetcher = fetch) {
 }
 
 export function createApp(root, api = createGateway()) {
-  const state = {
-    screen: "import", view: "table", viewContent: null, viewError: "",
-    importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-    catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
-    zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-    sessionId: "meal-1", seconds: 5, plan: null,
-    notice: "Choose a CSV or XLSX guest list to begin.", error: false
-  };
+  function emptySession() {
+    return {
+      screen: "import", view: "table", viewContent: null, viewError: "",
+      importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
+      catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
+      zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
+      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1,
+      notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
+      templateName: "", templateSelected: "", storageWarning: ""
+    };
+  }
+  const state = emptySession();
+  const savedTemplates = storedJSON(TEMPLATES_KEY, []);
+  const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
+  const previous = storedJSON(SESSION_KEY, null);
+  if (previous?.version === 1 && previous.data && Array.isArray(previous.data.guests) &&
+      Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&
+      Array.isArray(previous.data.zones) && Array.isArray(previous.data.layout?.floors)) {
+    for (const key of SESSION_FIELDS) {
+      if (Object.hasOwn(previous.data, key)) state[key] = previous.data[key];
+    }
+    state.notice = "Restored your previous planning session.";
+    state.error = false;
+  }
   let viewObjectUrl = null;
   let working = false;
+  let noticesIssued = 0;
+
+  function saveSession() {
+    const data = {};
+    for (const key of SESSION_FIELDS) data[key] = state[key];
+    try {
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+      state.storageWarning = "";
+    } catch (_) {
+      // Import source data can exceed the per-origin quota; retain all imported
+      // guests, mapping, rules, layout and solution instead of losing the session.
+      if (data.importFile?.content_base64) {
+        data.importFile = { filename: data.importFile.filename };
+        try {
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+          state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
+          return;
+        } catch (_) { /* even the smaller snapshot did not fit */ }
+      }
+      state.storageWarning = "Browser storage is unavailable or full; this session may not survive a reload.";
+    }
+  }
+  function saveTemplates() {
+    try { window.localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); }
+    catch (_) { throw Error("Cannot save templates: browser storage is unavailable or full. Export the configuration instead."); }
+  }
+  function configuration(name) {
+    if (!name) throw Error("Enter a configuration name.");
+    if (!state.layout.floors.length || !state.tables.length)
+      throw Error("Add a floor and at least one table before saving a configuration.");
+    if (configuredTables().length !== state.tables.length)
+      throw Error("All configured tables need a positive chair capacity.");
+    return deepCopy({
+      version: 1, name, zones: state.zones, tables: state.tables,
+      layout: state.layout, rules: state.rules
+    });
+  }
+  function applyConfiguration(config) {
+    const copy = deepCopy(config);
+    state.zones = copy.zones;
+    state.tables = copy.tables;
+    state.layout = copy.layout;
+    state.rules = copy.rules;
+    state.nextRule = Math.max(1, ...state.rules.map(r => {
+      const match = /^rule-(\d+)$/.exec(r.id);
+      return match ? Number(match[1]) + 1 : 1;
+    }));
+    state.focusedFloor = state.layout.floors[0]?.zone_id || "";
+    state.templateName = copy.name;
+    invalidate();
+  }
+  function newSession() {
+    const catalog = state.catalog;
+    clearObjectUrl();
+    Object.assign(state, emptySession(), { catalog });
+    if (catalog?.shapes?.length) state.selectedShape = catalog.shapes[0].shape;
+    announce("New empty session started. Saved configuration templates are still available.");
+  }
+  // Change handlers on inputs sometimes update state without re-rendering.
+  root.addEventListener("change", saveSession);
+
 
   function announce(message, error = false) {
+    noticesIssued += 1;
     state.notice = message;
     state.error = error;
     render();
@@ -131,8 +238,19 @@ export function createApp(root, api = createGateway()) {
   async function attempt(task) {
     if (working) return;
     working = true;
-    try { await task(); }
-    catch (error) { announce(error.message || String(error), true); }
+    state.retryAction = null;
+    const earlierNotices = noticesIssued;
+    try {
+      await task();
+      // Downloads have no separate success notice, unlike a rejected import:
+      // preserve explicit validation notices while clearing stale network errors.
+      if (state.error && !state.retryAction && earlierNotices === noticesIssued)
+        announce("Request completed successfully.", false);
+    }
+    catch (error) {
+      state.retryAction = task;
+      announce(friendlyApiError(error), true);
+    }
     finally { working = false; }
   }
   function invalidate() { state.plan = null; state.viewContent = null; }
@@ -145,12 +263,17 @@ export function createApp(root, api = createGateway()) {
     return {
       session_id: state.sessionId,
       zones: state.zones.map(z => ({ id: z.id, name: z.name })),
-      tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id, capacity: Number(t.capacity) })),
+      tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id,
+        capacity: Number(t.capacity), properties: [...(t.properties || [])] })),
       guests: state.guests,
       rules: state.rules,
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
       layout: state.layout.floors.length ? state.layout : null
     };
+  }
+  function tableCardsEndpoint() {
+    return "/v1/exports/table-cards/pdf" +
+      (state.cardsPerPage === 1 ? "" : "?cards_per_page=" + state.cardsPerPage);
   }
   function clearObjectUrl() {
     if (viewObjectUrl && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(viewObjectUrl);
@@ -185,6 +308,7 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
+    saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -199,10 +323,16 @@ export function createApp(root, api = createGateway()) {
       element("span", "pill", state.rules.length + " rules"));
     header.append(text, stats);
     main.append(header);
+    main.append(row(action("New empty session", newSession, "danger small", "new-session")));
+    if (state.storageWarning) main.append(element("p", "problem", state.storageWarning));
     const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
     notice.setAttribute("role", "status");
     notice.id = "notice";
     main.append(notice);
+    if (state.error && state.retryAction) {
+      main.append(row(action("Retry failed action", () => attempt(state.retryAction),
+        "primary", "retry-action")));
+    }
     if (state.screen === "import") main.append(renderImport());
     else if (state.screen === "rules") main.append(renderRules());
     else if (state.screen === "map") main.append(renderMap());
@@ -222,9 +352,11 @@ export function createApp(root, api = createGateway()) {
       const selected = file.files && file.files[0];
       if (!selected) return;
       const base64 = await encodeFile(selected);
-      state.importFile = { filename: selected.name, content_base64: base64 };
-      state.preview = await api.post("/v1/import/preview", state.importFile);
-      state.mapping = { ...state.preview.mapping };
+      const uploaded = { filename: selected.name, content_base64: base64 };
+      const preview = await api.post("/v1/import/preview", uploaded);
+      state.importFile = uploaded;
+      state.preview = preview;
+      state.mapping = { ...preview.mapping };
       state.importResult = null;
       state.guests = [];
       invalidate();
@@ -275,9 +407,11 @@ export function createApp(root, api = createGateway()) {
     });
     table.append(body); sheet.append(table); mappingCard.append(sheet);
     const buttons = row(action("Review corrected mapping", () => attempt(async () => {
+      if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to review its mapping.");
       state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       announce("Mapping checked by the API. Review any row-level issues below.");
     }), "secondary", "preview-mapping"), action("Import guests", () => attempt(async () => {
+      if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to import guests again.");
       const result = await api.post("/v1/import", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       state.importResult = result;
       if (result.issues.some(i => i.severity === "error")) {
@@ -322,7 +456,7 @@ export function createApp(root, api = createGateway()) {
     const area = element("div");
     const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
     if (!state.catalog) {
-      form.append(element("p", "problem", "Rule catalog is unavailable. Reload the page."));
+      form.append(element("p", "problem", "Rule catalog is unavailable. Use Retry above."));
       return append(area, form);
     }
     const shapes = state.catalog.shapes;
@@ -356,7 +490,11 @@ export function createApp(root, api = createGateway()) {
       section.append(header);
       section.append(grid(
         textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
-        selectField("Hard or weighted", spec.modes.map(m => [m, m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)"]),
+        selectField(rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
+          spec.modes.map(m => [m,
+            rule.shape === "table_property_need"
+              ? (m === "hard" ? "Require (hard)" : "Prefer (soft, weighted per affected guest)")
+              : (m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)")]),
           rule.mode, value => {
             rule.mode = value;
             rule.weight = value === "soft" ? (spec.default_weight || 1) : null;
@@ -425,7 +563,13 @@ export function createApp(root, api = createGateway()) {
         const old = state.tables.find(t => t.id === drawing.table_id);
         if (old && old.zone_id !== floor.zone_id)
           throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
-        if (!old) state.tables.push({ id: drawing.table_id, zone_id: floor.zone_id, capacity: null });
+        // Layout JSON carries portable tags; Table.properties is the solver input.
+        // Synchronize both copies without assigning tag weights.
+        if (old) old.properties = [...(drawing.properties || [])];
+        else state.tables.push({
+          id: drawing.table_id, zone_id: floor.zone_id, capacity: null,
+          properties: [...(drawing.properties || [])]
+        });
       }
     }
     state.focusedFloor = imported.floors[0].zone_id;
@@ -435,7 +579,79 @@ export function createApp(root, api = createGateway()) {
 
   function renderMap() {
     const area = element("div");
-    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Capacity is per table.");
+    const templatesCard = card("Reusable venue + rules configurations",
+      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable.");
+    templatesCard.append(textField("Configuration name", state.templateName, value => {
+      state.templateName = value;
+    }, { id: "template-name", placeholder: "e.g. Weekly dinner" }));
+    templatesCard.append(row(
+      action("Save as template", () => attempt(async () => {
+        const name = document.getElementById("template-name").value.trim();
+        if (templates.some(t => t.name === name)) throw Error("A template with this name already exists. Choose a new name.");
+        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        templates.push(validated);
+        try { saveTemplates(); } catch (error) { templates.pop(); throw error; }
+        state.templateSelected = name;
+        announce("Saved configuration template: " + name);
+      }), "primary", "save-template"),
+      action("Export full configuration JSON", () => attempt(async () => {
+        const name = document.getElementById("template-name").value.trim() || "Venue configuration";
+        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        downloadBlob(JSON.stringify(validated, null, 2), "venue-configuration.json", "application/json");
+        announce("Exported the complete venue, capacities and rules.");
+      }), "secondary", "export-configuration")
+    ));
+    templatesCard.append(selectField("Saved templates",
+      [["", "Choose saved template"], ...templates.map(t => [t.name, t.name])],
+      state.templateSelected, value => { state.templateSelected = value; }, { id: "template-select" }));
+    templatesCard.append(row(
+      action("Load template", () => attempt(async () => {
+        const found = templates.find(t => t.name === state.templateSelected);
+        if (!found) throw Error("Choose a saved configuration template.");
+        const validated = await api.post("/v1/configurations/validate", found);
+        applyConfiguration(validated);
+        announce("Loaded template " + found.name + ". Import guests whenever ready.");
+      }), "secondary", "load-template"),
+      action("Duplicate template", () => attempt(async () => {
+        const found = templates.find(t => t.name === state.templateSelected);
+        if (!found) throw Error("Choose a template to duplicate.");
+        let name = found.name + " (copy)";
+        for (let number = 2; templates.some(t => t.name === name); number++)
+          name = found.name + " (copy " + number + ")";
+        const copy = deepCopy(found);
+        copy.name = name;
+        templates.push(copy);
+        try { saveTemplates(); } catch (error) { templates.pop(); throw error; }
+        state.templateSelected = name;
+        announce("Duplicated template as " + name);
+      }), "secondary", "duplicate-template"),
+      action("Delete template", () => attempt(async () => {
+        const index = templates.findIndex(t => t.name === state.templateSelected);
+        if (index === -1) throw Error("Choose a template to delete.");
+        const [removed] = templates.splice(index, 1);
+        try { saveTemplates(); } catch (error) { templates.splice(index, 0, removed); throw error; }
+        state.templateSelected = "";
+        announce("Deleted saved template " + removed.name + ".");
+      }), "danger small", "delete-template")
+    ));
+    const importLabel = element("label", "field");
+    importLabel.append(element("span", "", "Import full configuration JSON"));
+    const configFile = document.createElement("input");
+    configFile.id = "configuration-file";
+    configFile.type = "file";
+    configFile.accept = ".json,application/json";
+    configFile.addEventListener("change", () => attempt(async () => {
+      const file = configFile.files?.[0];
+      if (!file) return;
+      if (file.size > 2_000_000) throw Error("Configuration JSON must be smaller than 2 MB.");
+      const incoming = JSON.parse(await file.text());
+      const validated = await api.post("/v1/configurations/validate", incoming);
+      applyConfiguration(validated);
+      announce("Imported complete configuration " + validated.name + ".");
+    }));
+    templatesCard.append(append(importLabel, configFile));
+    area.append(templatesCard);
+    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Add passive table tags (accessible, aisle-edge, quiet) to match guest needs — tags carry no score by themselves.");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
     file.addEventListener("change", () => attempt(async () => {
@@ -504,7 +720,9 @@ export function createApp(root, api = createGateway()) {
     const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
-    tableForm.append(grid(idInput, capacityInput, shapeInput));
+    const propertyInput = textField("Table tags (comma-separated)", "", () => {},
+      { id: "new-table-properties", placeholder: "accessible, aisle-edge" });
+    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput);
     const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
     tableForm.append(create);
     tableForm.addEventListener("submit", event => {
@@ -512,6 +730,9 @@ export function createApp(root, api = createGateway()) {
       const id = tableForm.querySelector("#new-table-id").value.trim();
       const capacity = Number(tableForm.querySelector("#new-table-capacity").value);
       const shape = tableForm.querySelector("#new-table-shape").value;
+      let properties;
+      try { properties = parseTableProperties(tableForm.querySelector("#new-table-properties").value); }
+      catch (error) { return announce(error.message, true); }
       if (!id || state.tables.some(t => t.id === id)) return announce("Each table requires a unique ID.", true);
       if (!Number.isInteger(capacity) || capacity < 1) return announce("Chair capacity must be a positive integer.", true);
       const width = Math.min(160, layout.width / 2);
@@ -519,8 +740,8 @@ export function createApp(root, api = createGateway()) {
       const x = 8 + (layout.tables.length % 3) * 14;
       const y = 8 + (layout.tables.length % 3) * 14;
       if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
-      state.tables.push({ id, zone_id: layout.zone_id, capacity });
-      layout.tables.push({ table_id: id, x, y, width, height, shape });
+      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties });
+      layout.tables.push({ table_id: id, x, y, width, height, shape, properties: [...properties] });
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -546,7 +767,9 @@ export function createApp(root, api = createGateway()) {
       }
       fields.append(selectField("Shape", ["rectangle", "ellipse", "circle"], drawing.shape,
         () => {}, { id: "table-" + drawing.table_id + "-shape" }));
-      editor.append(fields);
+      editor.append(fields, textField("Table tags (comma-separated)",
+        (table?.properties || drawing.properties || []).join(", "), () => {},
+        { id: "table-" + drawing.table_id + "-properties" }));
       const save = element("button", "secondary small", "Apply dimensions");
       save.type = "submit";
       const remove = action("Remove table", () => {
@@ -566,7 +789,14 @@ export function createApp(root, api = createGateway()) {
           return announce("Table drawing coordinates must be finite numbers.", true);
         if (!Number.isInteger(next.capacity) || next.capacity < 1)
           return announce("Chair capacity must be a positive integer.", true);
+        let properties;
+        try {
+          properties = parseTableProperties(editor.querySelector(
+            '[id="table-' + drawing.table_id + '-properties"]').value);
+        } catch (error) { return announce(error.message, true); }
         table.capacity = next.capacity;
+        table.properties = properties;
+        drawing.properties = [...properties];
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
         invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");
@@ -716,13 +946,22 @@ export function createApp(root, api = createGateway()) {
       }
     } else {
       views.append(element("h3", "", "Printable table cards"));
+      views.append(selectField("Cards per page", [
+        ["1", "1 per page (A5, current default)"],
+        ["2", "2 per page (A4)"],
+        ["4", "4 per page (A4)"]
+      ], state.cardsPerPage, value => {
+        state.cardsPerPage = Number(value);
+        // Density previews are read-only; allow changes while a download is in flight.
+        loadView("cards");
+      }, { id: "cards-per-page" }));
       if (viewObjectUrl) {
         const frame = element("iframe", "print-preview");
         frame.id = "cards-preview"; frame.title = "Printable PDF table cards"; frame.src = viewObjectUrl;
         views.append(frame);
       } else views.append(element("p", "muted", "Loading printable PDF…"));
       views.append(action("Download table cards PDF", () => attempt(async () => {
-        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
         downloadBlob(blob, "table-cards.pdf", "application/pdf");
       }), "secondary", "download-cards"));
     }
@@ -775,29 +1014,51 @@ export function createApp(root, api = createGateway()) {
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
       else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
       else {
-        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        const density = state.cardsPerPage;
+        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
+        if (density !== state.cardsPerPage || state.view !== "cards") return;
         if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
         viewObjectUrl = URL.createObjectURL(blob);
       }
     } catch (error) {
-      state.viewError = error.message || String(error);
+      state.viewError = friendlyApiError(error);
+      state.notice = state.viewError;
+      state.error = true;
+      state.retryAction = () => loadView(view);
+      render();
+      return;
     }
+    if (state.error) {
+      state.error = false;
+      state.notice = "Export preview loaded successfully.";
+    }
+    state.retryAction = null;
     render();
   }
 
   const ready = (async () => {
     try {
       state.catalog = await api.get("/v1/rules/catalog");
-      if (state.catalog.shapes?.length) state.selectedShape = state.catalog.shapes[0].shape;
+      if (state.catalog.shapes?.length &&
+          !state.catalog.shapes.some(shape => shape.shape === state.selectedShape))
+        state.selectedShape = state.catalog.shapes[0].shape;
     } catch (error) {
-      state.notice = "Could not load rule catalog: " + error.message;
+      state.notice = friendlyApiError(error);
       state.error = true;
+      state.retryAction = async () => {
+        state.catalog = await api.get("/v1/rules/catalog");
+        if (state.catalog.shapes?.length &&
+            !state.catalog.shapes.some(shape => shape.shape === state.selectedShape))
+          state.selectedShape = state.catalog.shapes[0].shape;
+        announce("Rule catalog loaded successfully.");
+      };
     }
     render();
+    if (state.plan && state.catalog) await loadView(state.view);
   })();
   render();
   return { state, ready, render, show: screen => { state.screen = screen; render(); },
-           loadView, validateLayout, loadLayoutFiles, projectProblem };
+           loadView, validateLayout, loadLayoutFiles, projectProblem, newSession };
 }
 
 if (typeof document !== "undefined") {

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Model(BaseModel):
@@ -15,10 +15,32 @@ class Zone(Model):
     name: str
 
 
+def _clean_properties(values: list[str]) -> list[str]:
+    """Normalize whitespace but do not assign scoring to passive table tags."""
+    tags: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        name = value.strip()
+        if not name:
+            raise ValueError("Table property names must be nonempty")
+        key = name.casefold()
+        if key in seen:
+            raise ValueError(f"Duplicate table property {name!r}")
+        seen.add(key)
+        tags.append(name)
+    return tags
+
+
 class Table(Model):
     id: str
     zone_id: str
     capacity: int = Field(gt=0)
+    properties: list[str] = Field(default_factory=list)
+
+    @field_validator("properties")
+    @classmethod
+    def valid_properties(cls, values: list[str]) -> list[str]:
+        return _clean_properties(values)
 
 
 class TableDrawing(Model):
@@ -33,6 +55,12 @@ class TableDrawing(Model):
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     shape: Literal["rectangle", "ellipse", "circle"] = "rectangle"
+    properties: list[str] = Field(default_factory=list)
+
+    @field_validator("properties")
+    @classmethod
+    def valid_properties(cls, values: list[str]) -> list[str]:
+        return _clean_properties(values)
 
     @model_validator(mode="after")
     def valid_circle(self) -> "TableDrawing":
@@ -87,6 +115,37 @@ def validate_layout_references(layout: VenueLayout, zones: list[Zone], tables: l
                 raise ValueError(f"Table {drawing.table_id} belongs to {table_zones[drawing.table_id]}, not {floor.zone_id}")
 
 
+class VenueConfiguration(Model):
+    """Versioned, guest-independent, portable venue/rules configuration."""
+    version: Literal[1] = 1
+    name: str = Field(min_length=1)
+    zones: list[Zone] = Field(min_length=1)
+    tables: list[Table] = Field(min_length=1)
+    layout: VenueLayout
+    rules: list["Rule"] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "VenueConfiguration":
+        for label, ids in (
+            ("zone", [z.id for z in self.zones]),
+            ("table", [t.id for t in self.tables]),
+            ("rule", [r.id for r in self.rules]),
+        ):
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"Duplicate {label}")
+        zone_ids = {z.id for z in self.zones}
+        if any(table.zone_id not in zone_ids for table in self.tables):
+            raise ValueError("Every table must reference an existing zone")
+        if {floor.zone_id for floor in self.layout.floors} != zone_ids:
+            raise ValueError("Configuration floors must exactly match zones")
+        validate_layout_references(self.layout, self.zones, self.tables)
+        if {drawing.table_id for floor in self.layout.floors for drawing in floor.tables} != {
+            table.id for table in self.tables
+        }:
+            raise ValueError("Each configured table must have a layout drawing")
+        return self
+
+
 class Guest(Model):
     id: str
     name: str
@@ -94,7 +153,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "pair", "capacity", "fill_efficiency", "pin"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin"]
 
 
 class Rule(Model):
