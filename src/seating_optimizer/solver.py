@@ -7,6 +7,7 @@ from time import perf_counter
 
 from ortools.sat.python import cp_model
 
+from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .models import Assignment, Compromise, Plan, Problem, Reason, ScoreItem, TableUsage
 
 
@@ -98,8 +99,8 @@ def _capacity_obstruction(groups, tables):
     largest = max(sizes)
     max_table = max(table.capacity for table in tables)
     if largest > max_table:
-        return (f"Party too large: a party of {largest} must stay together, "
-                f"but the largest table seats only {max_table}.")
+        return (f"Party too large — not achievable: an atomic group of {largest} cannot be "
+                f"split across tables, but the largest table seats only {max_table}.")
     if len({table.capacity for table in tables}) == 1:
         capacity = tables[0].capacity
         # Parties above half a table cannot share with each other or with
@@ -180,6 +181,61 @@ def solve(problem: Problem) -> Plan:
         seats[j] = sum(len(groups[gid]) * x[gid, j] for gid in ids)
         model.Add(seats[j] <= table.capacity)  # Physical limits are unconditional, not diagnostic assumptions.
 
+    # Exception path only: a connected cluster of distinct groups whose total
+    # exceeds the capacity of *every* single table. Individual groups stay atomic.
+    # A Boolean enables adjacency for soft requests (and earns their pair points);
+    # hard together requests force that Boolean via diagnostic assumptions.
+    neighbours = neighbouring_tables(problem.layout, tables)
+    fallback_by_rule = {}
+    maximum_table = max(table.capacity for table in tables)
+    for cluster_index, (members, cluster_rules) in enumerate(
+            together_clusters(ids, lookup, problem.rules)):
+        party_size = sum(len(groups[gid]) for gid in members)
+        if party_size <= maximum_table:
+            continue  # Same table remains the only qualifying together outcome.
+        compulsory = [rule for rule in cluster_rules if rule.mode == "hard"]
+        if compulsory and largest_connected_capacity(neighbours, tables) < party_size:
+            return Plan(
+                session_id=problem.session_id, status="infeasible",
+                conflicting_constraints=[
+                    f"Not achievable: together-linked party of {party_size} people has "
+                    "no connected adjacent-table cluster on a single drawn floor "
+                    "with enough chairs. Keep each group whole and adjust the layout."
+                ],
+                message="The requested adjacent-table fallback cannot fit on this layout.",
+                solve_seconds=perf_counter() - start, layout=problem.layout,
+            )
+        active = model.NewBoolVar(f"adjacent-fallback:{cluster_index}")
+        for rule in compulsory:
+            model.Add(active == 1).OnlyEnforceIf(hard(f"rule:{rule.id}"))
+        for rule in cluster_rules:
+            fallback_by_rule[rule.id] = (active, party_size, members)
+        # The occupied table subset must be connected. Pick exactly one root,
+        # and give every other occupied table an edge from a lower-rank parent;
+        # strictly increasing ranks exclude disconnected cycles.
+        occupied = {}
+        roots = {}
+        ranks = {}
+        incoming = {j: [] for j in range(n)}
+        for j in range(n):
+            count = sum(x[gid, j] for gid in members)
+            occupied[j] = model.NewBoolVar(f"fallback-used:{cluster_index}:{j}")
+            roots[j] = model.NewBoolVar(f"fallback-root:{cluster_index}:{j}")
+            ranks[j] = model.NewIntVar(0, n, f"fallback-rank:{cluster_index}:{j}")
+            model.Add(count >= 1).OnlyEnforceIf([active, occupied[j]])
+            model.Add(count == 0).OnlyEnforceIf([active, occupied[j].Not()])
+            model.Add(roots[j] <= occupied[j]).OnlyEnforceIf(active)
+            model.Add(ranks[j] == 0).OnlyEnforceIf([active, roots[j]])
+        for i, neighbours_of_i in neighbours.items():
+            for j in neighbours_of_i:
+                arc = model.NewBoolVar(f"fallback-parent:{cluster_index}:{i}:{j}")
+                incoming[j].append(arc)
+                model.Add(arc <= occupied[i]).OnlyEnforceIf(active)
+                model.Add(ranks[j] >= ranks[i] + 1).OnlyEnforceIf([active, arc])
+        model.Add(sum(roots.values()) == 1).OnlyEnforceIf(active)
+        for j in range(n):
+            model.Add(sum(incoming[j]) + roots[j] == occupied[j]).OnlyEnforceIf(active)
+
     terms = []
     for rule in problem.rules:
         p = rule.parameters
@@ -215,6 +271,10 @@ def solve(problem: Problem) -> Plan:
                     elif rule.mode == "hard":
                         model.Add(x[gid, j] == 0).OnlyEnforceIf(hard(f"rule:{rule.id}"))
         elif rule.shape == "pair":
+            if rule.id in fallback_by_rule:
+                if rule.mode == "soft":
+                    terms.append(rule.weight * fallback_by_rule[rule.id][0])
+                continue
             a, b = lookup[p["left"]], lookup[p["right"]]
             together = p["relation"] == "together"
             if rule.mode == "hard":
@@ -395,25 +455,47 @@ def solve(problem: Problem) -> Plan:
                         lost_points=lost))
         elif rule.shape == "pair":
             a, b = lookup[p["left"]], lookup[p["right"]]
-            satisfied = (placed[a] == placed[b]) == (p["relation"] == "together")
-            if satisfied:
-                points = rule.weight if rule.mode == "soft" else 0
-                for gid in {a, b}:
-                    reasons[gid].append(Reason(rule_id=rule.id,
-                        description=f"Pair preference met: {p['left']} and {p['right']} are {p['relation']}.",
-                        points=points / len({a, b})))
-            elif rule.mode == "soft":
-                compromises.append(Compromise(rule_id=rule.id,
-                    description=(f"Pair preference not met: {p['left']} at {tables[placed[a]].id} "
-                                 f"and {p['right']} at {tables[placed[b]].id} "
-                                 f"should be {p['relation']}. "
-                                 + ("Hard pins involved: " + ", ".join(r.id for r in problem.rules
-                                      if r.shape == "pin" and r.mode == "hard" and
-                                      lookup[r.parameters["target"]] in {a, b})
-                                    if any(r.shape == "pin" and r.mode == "hard" and
-                                           lookup[r.parameters["target"]] in {a, b}
-                                           for r in problem.rules) else "")),
-                    lost_points=rule.weight))
+            if rule.id in fallback_by_rule:
+                active, party_size, members = fallback_by_rule[rule.id]
+                if solver.Value(active):
+                    points = rule.weight if rule.mode == "soft" else 0
+                    tables_used = ", ".join(sorted({tables[placed[gid]].id for gid in members}))
+                    for gid in {a, b}:
+                        reasons[gid].append(Reason(rule_id=rule.id,
+                            description=(f"Sit together: split across adjacent tables {tables_used} "
+                                         f"because no single table fits the {party_size}-person linked party."),
+                            points=points / len({a, b})))
+                elif rule.mode == "soft":
+                    for gid in {a, b}:
+                        reasons[gid].append(Reason(rule_id=rule.id,
+                            description=(f"Sit together not achievable: no single table fits the "
+                                         f"{party_size}-person party and adjacent placement was not achieved.")))
+                    compromises.append(Compromise(rule_id=rule.id,
+                        description=(f"Sit together not achievable for the linked "
+                                     f"{party_size}-person party: no adjacent-table placement."),
+                        lost_points=rule.weight))
+            else:
+                satisfied = (placed[a] == placed[b]) == (p["relation"] == "together")
+                if satisfied:
+                    points = rule.weight if rule.mode == "soft" else 0
+                    for gid in {a, b}:
+                        description = (f"Sit together achieved at the same table {tables[placed[a]].id}."
+                                       if p["relation"] == "together"
+                                       else f"Pair apart achieved at different tables.")
+                        reasons[gid].append(Reason(rule_id=rule.id,
+                            description=description, points=points / len({a, b})))
+                elif rule.mode == "soft":
+                    compromises.append(Compromise(rule_id=rule.id,
+                        description=(f"Pair preference not met: {p['left']} at {tables[placed[a]].id} "
+                                     f"and {p['right']} at {tables[placed[b]].id} "
+                                     f"should be {p['relation']}. "
+                                     + ("Hard pins involved: " + ", ".join(r.id for r in problem.rules
+                                          if r.shape == "pin" and r.mode == "hard" and
+                                          lookup[r.parameters["target"]] in {a, b})
+                                        if any(r.shape == "pin" and r.mode == "hard" and
+                                               lookup[r.parameters["target"]] in {a, b}
+                                               for r in problem.rules) else "")),
+                        lost_points=rule.weight))
         elif rule.shape == "pin":
             gid = lookup[p["target"]]
             reasons[gid].append(Reason(rule_id=rule.id,
