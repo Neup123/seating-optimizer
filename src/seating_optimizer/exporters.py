@@ -23,7 +23,7 @@ def render_table(plan: Plan) -> str:
                      f"{table.occupied}/{table.capacity} chairs | {table.empty_seats} empty")
         for entry in plan.assignments:
             if entry.table_id == table.table_id:
-                lines.append(f"  {entry.group_id}: {', '.join(entry.guest_names)}")
+                lines.append(f"  {entry.group_id} ({len(entry.guest_ids)} people): {', '.join(entry.guest_names)}")
                 for reason in entry.reasons:
                     lines.append(f"    - {reason.description} ({reason.points:+g} points)")
     if plan.compromises:

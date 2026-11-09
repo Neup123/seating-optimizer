@@ -438,6 +438,7 @@ def solve(problem: Problem) -> Plan:
         Assignment(group_id=gid, table_id=tables[placed[gid]].id,
                    guest_ids=[guest.id for guest in members],
                    guest_names=[guest.name for guest in members],
+                   guest_attributes=[guest.attributes for guest in members],
                    reasons=reasons[gid],
                    points=round(sum(r.points for r in reasons[gid]), 5))
         for gid, members in groups.items()
