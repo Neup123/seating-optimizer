@@ -153,7 +153,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern"]
 
 
 class Rule(Model):
@@ -171,8 +171,8 @@ class Rule(Model):
             raise ValueError("Hard rules must not carry a weight")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
-        if self.shape == "fill_efficiency" and self.mode != "soft":
-            raise ValueError("Fill efficiency must be soft")
+        if self.shape in {"fill_efficiency", "global_pattern"} and self.mode != "soft":
+            raise ValueError("Fill efficiency and global patterns must be soft")
         return self
 
 
@@ -235,6 +235,13 @@ class ScoreItem(Model):
     points: int
 
 
+class PatternMatch(Model):
+    rule_id: str
+    table_id: str
+    description: str
+    points: int
+
+
 class Compromise(Model):
     rule_id: str
     description: str
@@ -256,6 +263,7 @@ class Plan(Model):
     assignments: list[Assignment] = Field(default_factory=list)
     tables: list[TableUsage] = Field(default_factory=list)
     score_breakdown: list[ScoreItem] = Field(default_factory=list)
+    pattern_matches: list[PatternMatch] = Field(default_factory=list)
     compromises: list[Compromise] = Field(default_factory=list)
     conflicting_constraints: list[str] = Field(default_factory=list)
     solve_seconds: float = 0
