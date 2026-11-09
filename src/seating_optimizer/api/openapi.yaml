@@ -163,6 +163,12 @@ paths:
         - in: query
           name: include_reasons
           schema: {type: boolean, default: false}
+        - in: query
+          name: fields
+          description: Repeat for each imported guest attribute column to display; omitted by default.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
       requestBody:
         required: true
         content:
@@ -188,6 +194,12 @@ paths:
         - in: query
           name: include_reasons
           schema: {type: boolean, default: false}
+        - in: query
+          name: fields
+          description: Repeat for each imported guest attribute column to display; omitted by default.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
       requestBody:
         required: true
         content:
@@ -509,6 +521,12 @@ components:
         table_id: {type: string}
         guest_ids: {type: array, items: {type: string}}
         guest_names: {type: array, items: {type: string}}
+        guest_attributes:
+          description: Imported attributes aligned with guest_ids and guest_names.
+          type: array
+          items:
+            type: object
+            additionalProperties: {type: [string, integer, number, boolean]}
         reasons: {type: array, items: {$ref: '#/components/schemas/Reason'}}
         points: {type: number}
     ScoreItem:

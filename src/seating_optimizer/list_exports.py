@@ -23,6 +23,30 @@ def _reasons(entry: Assignment) -> str:
     ) + "</div>"
 
 
+def _selected_fields(plan: Plan, fields: list[str] | None) -> list[str]:
+    """Restrict column selection to keys present in imported guest data."""
+    selected = list(dict.fromkeys(fields or []))
+    available = {key for entry in plan.assignments for attrs in entry.guest_attributes for key in attrs}
+    unknown = set(selected) - available
+    if unknown:
+        raise ValueError("Unknown imported field(s): " + ", ".join(sorted(unknown)))
+    for entry in plan.assignments:
+        if (len(entry.guest_ids) == len(entry.guest_names) and entry.guest_attributes
+                and len(entry.guest_attributes) != len(entry.guest_ids)):
+            raise ValueError(f"Guest attributes differ for group {entry.group_id}")
+    return selected
+
+
+def _field_value(attrs: dict, field: str) -> str:
+    value = attrs.get(field)
+    return "—" if value is None or value == "" else str(value)
+
+
+def _group_label(entry: Assignment) -> str:
+    count = len(entry.guest_ids)
+    return f"{entry.group_id} ({count} {'person' if count == 1 else 'people'})"
+
+
 def _document(title: str, session_id: str, sections: list[str], split: bool) -> str:
     return """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
@@ -43,13 +67,14 @@ a{color:inherit}}
 
 def render_people_list_html(
     plan: Plan, *, group_by: Literal["combined", "floor"] = "combined",
-    include_reasons: bool = False,
+    include_reasons: bool = False, fields: list[str] | None = None,
 ) -> str:
     """One row per recorded guest; floor grouping uses plan.tables zone IDs."""
     if plan.status not in ("optimal", "feasible"):
         raise ValueError("Printable lists require a feasible plan")
     if group_by not in ("combined", "floor"):
         raise ValueError("people list group_by must be combined or floor")
+    selected = _selected_fields(plan, fields)
     table_zones = {table.table_id: table.zone_id for table in plan.tables}
     if len(table_zones) != len(plan.tables):
         raise ValueError("Duplicate table IDs in plan")
@@ -68,17 +93,20 @@ def render_people_list_html(
     for zone, heading, entries in grouped:
         attrs = '' if zone is None else f' data-zone-id="{_text(zone)}"'
         cols = "<th>Guest</th><th>Guest ID</th><th>Group</th><th>Table</th><th>Floor / room</th>"
+        cols += "".join(f"<th>{_text(field)}</th>" for field in selected)
         if include_reasons:
             cols += "<th>Written reasons</th>"
         rows = []
         for entry in entries:
-            for guest_id, guest_name in zip(entry.guest_ids, entry.guest_names):
+            guest_attributes = entry.guest_attributes or [{} for _ in entry.guest_ids]
+            for guest_id, guest_name, guest_attrs in zip(entry.guest_ids, entry.guest_names, guest_attributes):
                 rows.append(
                     f'<tr data-guest-id="{_text(guest_id)}" data-group-id="{_text(entry.group_id)}" '
                     f'data-table-id="{_text(entry.table_id)}">'
                     f'<td>{_text(guest_name)}</td><td>{_text(guest_id)}</td>'
-                    f'<td>{_text(entry.group_id)}</td><td>{_text(entry.table_id)}</td>'
+                    f'<td>{_text(_group_label(entry))}</td><td>{_text(entry.table_id)}</td>'
                     f'<td>{_text(table_zones[entry.table_id])}</td>'
+                    + "".join(f"<td>{_text(_field_value(guest_attrs, field))}</td>" for field in selected)
                     + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
                 )
         sections.append(f'<section class="print-group {"split" if group_by == "floor" else ""}"{attrs}>'
@@ -89,13 +117,14 @@ def render_people_list_html(
 
 def render_table_list_html(
     plan: Plan, *, group_by: Literal["combined", "table"] = "combined",
-    include_reasons: bool = False,
+    include_reasons: bool = False, fields: list[str] | None = None,
 ) -> str:
     """One row per assigned group; show empty tables without fabricating groups."""
     if plan.status not in ("optimal", "feasible"):
         raise ValueError("Printable lists require a feasible plan")
     if group_by not in ("combined", "table"):
         raise ValueError("table list group_by must be combined or table")
+    selected = _selected_fields(plan, fields)
     table_by_id = {table.table_id: table for table in plan.tables}
     if len(table_by_id) != len(plan.tables):
         raise ValueError("Duplicate table IDs in plan")
@@ -111,6 +140,7 @@ def render_table_list_html(
     for table_id, heading, tables in scopes:
         attrs = '' if table_id is None else f' data-table-id="{_text(table_id)}"'
         cols = "<th>Table</th><th>Floor / room</th><th>Group</th><th>People</th>"
+        cols += "".join(f"<th>{_text(field)}</th>" for field in selected)
         if include_reasons:
             cols += "<th>Written reasons</th>"
         rows = []
@@ -119,17 +149,22 @@ def render_table_list_html(
             if not entries:
                 rows.append(f'<tr class="empty" data-table-id="{_text(table.table_id)}">'
                             f'<td>{_text(table.table_id)}</td><td>{_text(table.zone_id)}</td>'
-                            f'<td colspan="{3 if include_reasons else 2}">No assigned groups</td></tr>')
+                            f'<td colspan="{2 + len(selected) + int(include_reasons)}">No assigned groups</td></tr>')
             for entry in entries:
                 people = ", ".join(
                     f'<span class="person" data-guest-id="{_text(guest_id)}">{_text(name)}</span>'
                     for guest_id, name in zip(entry.guest_ids, entry.guest_names)
                 )
+                guest_attrs = entry.guest_attributes or [{} for _ in entry.guest_ids]
+                cells = "".join(
+                    f"<td>{_text(' / '.join(dict.fromkeys(_field_value(attrs, field) for attrs in guest_attrs)))}</td>"
+                    for field in selected
+                )
                 rows.append(
                     f'<tr data-group-id="{_text(entry.group_id)}" data-table-id="{_text(table.table_id)}">'
                     f'<td>{_text(table.table_id)}</td><td>{_text(table.zone_id)}</td>'
-                    f'<td>{_text(entry.group_id)}</td><td>{people}</td>'
-                    + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
+                    f'<td>{_text(_group_label(entry))}</td><td>{people}</td>'
+                    + cells + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
                 )
         sections.append(f'<section class="print-group {"split" if group_by == "table" else ""}"{attrs}>'
                         f'<h2>{_text(heading)}</h2><table><thead><tr>{cols}</tr></thead>'
