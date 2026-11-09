@@ -602,3 +602,32 @@ test("printable list tabs fetch exact API views and toggle written reasons witho
   click($("#view-cards"));
   await until(() => !!$("#cards-preview"));
 });
+
+
+test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
+  const printable = "<!DOCTYPE html><html><head></head><body><table></table></body></html>";
+  const { app, $, dom, calls } = await setup(async path => {
+    if (path === "/v1/solve") return { ...plan, assignments: plan.assignments.map(a => ({
+      ...a, guest_attributes: a.guest_ids.map(() => ({ Language: "Greek", Notes: "Door" }))
+    })) };
+    if (path === "/v1/exports/table") return "table output";
+    if (path.includes("/html?")) return printable;
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!app.state.plan);
+  click($("#view-people"));
+  await until(() => !!$(".list-field-picker"));
+  const input = [...$(".list-field-picker").querySelectorAll("input")].find(el => el.value === "Language");
+  assert.ok(input, "picker includes original imported field");
+  input.checked = true;
+  input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await until(() => calls.some(([path]) => path.includes("fields=Language")));
+  assert.ok($("#list-preview"), "printable preview remains available");
+  assert.ok(app.state.listFields.includes("Language"));
+});

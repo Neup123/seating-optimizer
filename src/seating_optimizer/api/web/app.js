@@ -9,7 +9,7 @@ const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "notice", "error", "templateName", "templateSelected"];
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected"];
 
 function storedJSON(key, fallback) {
   try {
@@ -150,7 +150,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false,
+      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
       templateName: "", templateSelected: "", storageWarning: ""
     };
@@ -278,8 +278,11 @@ export function createApp(root, api = createGateway()) {
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
     const by = people ? (grouped ? "floor" : "combined") : (grouped ? "table" : "combined");
-    return "/v1/exports/" + (people ? "people-list" : "table-list") +
-      "/html?group_by=" + by + "&include_reasons=" + Boolean(state.includeReasons);
+    const available = new Set((state.plan?.assignments || []).flatMap(
+      entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))));
+    const query = new URLSearchParams({group_by: by, include_reasons: String(Boolean(state.includeReasons))});
+    for (const field of (state.listFields || [])) if (available.has(field)) query.append("fields", field);
+    return "/v1/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
   }
   function tableCardsEndpoint() {
     return "/v1/exports/table-cards/pdf" +
@@ -978,6 +981,28 @@ export function createApp(root, api = createGateway()) {
       });
       toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
       views.append(toggle);
+      const available = [...new Set((plan.assignments || []).flatMap(
+        entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
+      if (available.length) {
+        const picker = element("fieldset", "list-field-picker");
+        picker.append(element("legend", "", "Additional import columns"));
+        for (const key of available) {
+          const label = element("label", "list-field-choice");
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = key;
+          checkbox.checked = (state.listFields || []).includes(key);
+          checkbox.addEventListener("change", () => {
+            state.listFields = checkbox.checked
+              ? [...(state.listFields || []).filter(k => available.includes(k)), key]
+              : (state.listFields || []).filter(k => k !== key);
+            loadView(state.view);
+          });
+          label.append(checkbox, element("span", "", key));
+          picker.append(label);
+        }
+        views.append(picker);
+      }
       if (typeof state.viewContent === "string") {
         const frame = element("iframe", "print-preview list-preview");
         frame.id = "list-preview";
@@ -1068,7 +1093,7 @@ export function createApp(root, api = createGateway()) {
     const list = element("div", "reasons");
     (plan.assignments || []).forEach(a => {
       const part = element("article", "reason-card");
-      part.append(element("h4", "", a.group_id + " → " + a.table_id),
+      part.append(element("h4", "", a.group_id + " (" + a.guest_ids.length + " people) → " + a.table_id),
         element("p", "muted", a.guest_names.join(", ") + " · " + Number(a.points).toFixed(2) + " points"));
       const ul = document.createElement("ul");
       (a.reasons || []).forEach(r => ul.append(element("li", "",
@@ -1092,8 +1117,10 @@ export function createApp(root, api = createGateway()) {
     try {
       if (LIST_VIEWS.has(view)) {
         const reasons = state.includeReasons;
+        const fields = JSON.stringify(state.listFields || []);
         const content = await api.post(listEndpoint(view), state.plan, "text");
-        if (view !== state.view || reasons !== state.includeReasons) return;
+        if (view !== state.view || reasons !== state.includeReasons ||
+            fields !== JSON.stringify(state.listFields || [])) return;
         state.viewContent = content;
       }
       else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
