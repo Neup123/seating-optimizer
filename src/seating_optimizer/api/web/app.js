@@ -90,14 +90,23 @@ async function encodeFile(file) {
 }
 function encodeText(text) { return encodeBytes(new TextEncoder().encode(text)); }
 
+export function friendlyApiError(error) {
+  const message = typeof error?.message === "string" ? error.message : String(error || "");
+  if (error instanceof TypeError || /failed to fetch|fetch failed|networkerror|network request failed|load failed|err_name_not_resolved/i.test(message))
+    return "Could not reach the server — check your connection and try again.";
+  return message || "The server could not complete this request. Please try again.";
+}
+
 export function createGateway(fetcher = fetch) {
   async function request(path, options, resultType = "json") {
-    const response = await fetcher(path, options);
+    let response;
+    try { response = await fetcher(path, options); }
+    catch (error) { throw Error(friendlyApiError(error), { cause: error }); }
     if (!response.ok) {
       let detail = await response.text();
       try { const parsed = JSON.parse(detail); detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail); }
       catch (_) { /* preserve human-readable HTTP error */ }
-      throw Error(detail || "Request failed (" + response.status + ")");
+      throw Error(friendlyApiError(Error(detail || "Server returned HTTP " + response.status + ". Please try again.")));
     }
     return resultType === "blob" ? response.blob() :
       resultType === "text" ? response.text() : response.json();
@@ -118,7 +127,7 @@ export function createApp(root, api = createGateway()) {
     catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
     zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
     sessionId: "meal-1", seconds: 5, plan: null,
-    notice: "Choose a CSV or XLSX guest list to begin.", error: false
+    notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null
   };
   let viewObjectUrl = null;
   let working = false;
@@ -131,8 +140,12 @@ export function createApp(root, api = createGateway()) {
   async function attempt(task) {
     if (working) return;
     working = true;
+    state.retryAction = null;
     try { await task(); }
-    catch (error) { announce(error.message || String(error), true); }
+    catch (error) {
+      state.retryAction = task;
+      announce(friendlyApiError(error), true);
+    }
     finally { working = false; }
   }
   function invalidate() { state.plan = null; state.viewContent = null; }
@@ -203,6 +216,10 @@ export function createApp(root, api = createGateway()) {
     notice.setAttribute("role", "status");
     notice.id = "notice";
     main.append(notice);
+    if (state.error && state.retryAction) {
+      main.append(row(action("Retry failed action", () => attempt(state.retryAction),
+        "primary", "retry-action")));
+    }
     if (state.screen === "import") main.append(renderImport());
     else if (state.screen === "rules") main.append(renderRules());
     else if (state.screen === "map") main.append(renderMap());
@@ -222,9 +239,11 @@ export function createApp(root, api = createGateway()) {
       const selected = file.files && file.files[0];
       if (!selected) return;
       const base64 = await encodeFile(selected);
-      state.importFile = { filename: selected.name, content_base64: base64 };
-      state.preview = await api.post("/v1/import/preview", state.importFile);
-      state.mapping = { ...state.preview.mapping };
+      const uploaded = { filename: selected.name, content_base64: base64 };
+      const preview = await api.post("/v1/import/preview", uploaded);
+      state.importFile = uploaded;
+      state.preview = preview;
+      state.mapping = { ...preview.mapping };
       state.importResult = null;
       state.guests = [];
       invalidate();
@@ -322,7 +341,7 @@ export function createApp(root, api = createGateway()) {
     const area = element("div");
     const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
     if (!state.catalog) {
-      form.append(element("p", "problem", "Rule catalog is unavailable. Reload the page."));
+      form.append(element("p", "problem", "Rule catalog is unavailable. Use Retry above."));
       return append(area, form);
     }
     const shapes = state.catalog.shapes;
@@ -780,8 +799,18 @@ export function createApp(root, api = createGateway()) {
         viewObjectUrl = URL.createObjectURL(blob);
       }
     } catch (error) {
-      state.viewError = error.message || String(error);
+      state.viewError = friendlyApiError(error);
+      state.notice = state.viewError;
+      state.error = true;
+      state.retryAction = () => loadView(view);
+      render();
+      return;
     }
+    if (state.error) {
+      state.error = false;
+      state.notice = "Export preview loaded successfully.";
+    }
+    state.retryAction = null;
     render();
   }
 
@@ -790,8 +819,13 @@ export function createApp(root, api = createGateway()) {
       state.catalog = await api.get("/v1/rules/catalog");
       if (state.catalog.shapes?.length) state.selectedShape = state.catalog.shapes[0].shape;
     } catch (error) {
-      state.notice = "Could not load rule catalog: " + error.message;
+      state.notice = friendlyApiError(error);
       state.error = true;
+      state.retryAction = async () => {
+        state.catalog = await api.get("/v1/rules/catalog");
+        if (state.catalog.shapes?.length) state.selectedShape = state.catalog.shapes[0].shape;
+        announce("Rule catalog loaded successfully.");
+      };
     }
     render();
   })();
