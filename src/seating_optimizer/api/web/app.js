@@ -352,7 +352,7 @@ export function createApp(root, api = createGateway()) {
   }
 
   function renderImport() {
-    const area = element("div");
+    const area = element("div", "form-measure import-flow");
     const form = card("Upload guest registrations", "CSV or XLSX. The server detects headers; you can override every column before importing.");
     const fileLabel = element("label", "");
     fileLabel.append(element("span", "", "Guest list spreadsheet"));
@@ -463,7 +463,7 @@ export function createApp(root, api = createGateway()) {
   }
 
   function renderRules() {
-    const area = element("div");
+    const area = element("div", "form-measure rules-flow");
     const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
     if (!state.catalog) {
       form.append(element("p", "problem", "Rule catalog is unavailable. Use Retry above."));
@@ -613,6 +613,7 @@ export function createApp(root, api = createGateway()) {
     const area = element("div");
     const templatesCard = card("Reusable venue + rules configurations",
       "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable. Saving an existing name updates that template.");
+    templatesCard.classList.add("form-measure");
     templatesCard.append(textField("Configuration name", state.templateName, value => {
       state.templateName = value;
     }, { id: "template-name", placeholder: "e.g. Weekly dinner" }));
@@ -690,6 +691,7 @@ export function createApp(root, api = createGateway()) {
     templatesCard.append(append(importLabel, configFile));
     area.append(templatesCard);
     const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Add passive table tags (accessible, aisle-edge, quiet) to match guest needs — tags carry no score by themselves.");
+    intro.classList.add("form-measure");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
     file.addEventListener("change", () => attempt(async () => {
@@ -707,6 +709,7 @@ export function createApp(root, api = createGateway()) {
     ));
     area.append(intro);
     const floorForm = card("Add floor", "Zones identify the floor for solver restrictions and printable pages.");
+    floorForm.classList.add("form-measure");
     const addFloor = element("form", "grid three");
     addFloor.id = "floor-form";
     const inputs = {};

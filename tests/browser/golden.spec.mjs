@@ -345,3 +345,39 @@ test("guest-side property preference seats wheelchair family at tagged table and
   await expect(page.locator(".reasons")).toContainText("Guest need mobility=wheelchair");
   expect(errors).toEqual([]);
 });
+
+
+test("import mapping and sibling form screens are centred at a comfortable width on desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/");
+  await page.locator("#guest-file").setInputFiles({
+    name: "mapping-measure.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Party Size,Language\\nAlice,2,English\\n".replaceAll("\\n", "\n"))
+  });
+  await expect(page.locator("#map-guest-name")).toBeVisible();
+  const check = async selector => {
+    const metrics = await page.locator(selector).evaluate(node => {
+      const parent = node.closest(".workspace").getBoundingClientRect();
+      const rect = node.getBoundingClientRect();
+      return { width: rect.width, delta: Math.abs((rect.left + rect.right) / 2 -
+        (parent.left + parent.right) / 2) };
+    });
+    expect(metrics.width).toBeLessThanOrEqual(925);
+    expect(metrics.delta).toBeLessThanOrEqual(4);
+  };
+  await check(".import-flow");
+  await expect(page.locator("#map-guest-name")).toBeVisible();
+  const mappingField = await page.locator("#map-guest-name").boundingBox();
+  expect(mappingField.width).toBeLessThanOrEqual(315);
+  await page.locator("#nav-rules").click();
+  await check(".rules-flow");
+  await page.locator("#nav-map").click();
+  await check(".card.form-measure"); // The reusable template card is first.
+  await check("#floor-form >> xpath=.."); // The add-floor form is inside a measured card.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator("#nav-import").click();
+  await expect(page.locator("#guest-file")).toBeVisible();
+  const mobile = await page.locator(".import-flow").boundingBox();
+  expect(mobile.x).toBeGreaterThanOrEqual(0);
+  expect(mobile.x + mobile.width).toBeLessThanOrEqual(391);
+});
