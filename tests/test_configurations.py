@@ -55,3 +55,15 @@ def test_configuration_endpoint_is_documented_in_static_openapi():
     operation = spec()["paths"]["/v1/configurations/validate"]["post"]
     assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/VenueConfiguration"}
+
+
+def test_small_group_priority_survives_configuration_json_validation():
+    payload = configuration()
+    payload["tables"][0]["small_group_priority"] = True
+    payload["layout"]["floors"][0]["tables"][0]["small_group_priority"] = True
+    response = client.post("/v1/configurations/validate", json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["tables"][0]["small_group_priority"] is True
+    assert response.json()["layout"]["floors"][0]["tables"][0]["small_group_priority"] is True
+    loaded = VenueConfiguration.model_validate_json(response.text)
+    assert loaded.tables[0].small_group_priority

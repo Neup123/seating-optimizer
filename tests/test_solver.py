@@ -234,3 +234,37 @@ def test_unrelated_hard_rule_is_not_reported_as_a_conflict():
     assert out.status == "infeasible"
     assert {"rule:only_ground", "rule:only_upper"} <= set(out.conflicting_constraints)
     assert "rule:harmless" not in out.conflicting_constraints
+
+
+def test_small_group_priority_is_soft_one_point_per_group():
+    tables = [Table(id="ordinary", zone_id="ground", capacity=4),
+              Table(id="preferred", zone_id="upper", capacity=4, small_group_priority=True)]
+    for size in (1, 2):
+        people = [Guest(id=f"small-{i}", name=f"Small {i}", group_id="together")
+                  for i in range(size)]
+        plan = solve(make_problem(people, tables=tables))
+        good(plan)
+        assert plan.assignments[0].table_id == "preferred"
+        assert plan.total_score == 1
+        assert any(x.rule_id == "venue:small-group-priority" and x.points == 1
+                   for x in plan.score_breakdown)
+        assert any(x.rule_id == "venue:small-group-priority" and x.points == 1
+                   for x in plan.assignments[0].reasons)
+
+
+def test_small_group_priority_off_by_default_and_other_groups_not_excluded():
+    guests = [Guest(id="a", name="Alice"), Guest(id="b", name="Bob", group_id="big"),
+              Guest(id="c", name="Carla", group_id="big"),
+              Guest(id="d", name="David", group_id="big")]
+    unmarked = [Table(id="G", zone_id="ground", capacity=4),
+                Table(id="U", zone_id="upper", capacity=4)]
+    result = solve(make_problem(guests, tables=unmarked))
+    good(result)
+    assert result.total_score == 0
+    assert not any(x.rule_id == "venue:small-group-priority" for x in result.score_breakdown)
+    pinned = solve(make_problem(guests,
+        [rule("pin_big", "pin", "hard", target="big", table="G")],
+        tables=[Table(id="G", zone_id="ground", capacity=4, small_group_priority=True),
+                Table(id="U", zone_id="upper", capacity=4)]))
+    good(pinned)
+    assert next(a for a in pinned.assignments if a.group_id == "big").table_id == "G"

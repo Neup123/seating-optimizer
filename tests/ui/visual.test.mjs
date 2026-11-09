@@ -660,6 +660,28 @@ test("global pattern rule editor composes a different count pattern, score and o
 });
 
 
+test("table priority checkbox persists between creation, editing, layout and solve payload", async () => {
+  const { app, dom, $, root } = await setup();
+  app.show("map");
+  const form = $("#floor-form");
+  setValue(form.querySelector('[name="id"]'), "hall", dom.window);
+  setValue(form.querySelector('[name="name"]'), "Hall", dom.window);
+  click($("#add-floor"));
+  setValue($("#new-table-id"), "T1", dom.window);
+  $("#new-table-small-priority").checked = true;
+  click($("#add-table"));
+  assert.equal(app.state.tables[0].small_group_priority, true);
+  assert.equal(app.state.layout.floors[0].tables[0].small_group_priority, true);
+  app.state.guests = [{ id: "alice", name: "Alice" }];
+  assert.equal(app.projectProblem().tables[0].small_group_priority, true);
+  const check = $("#table-T1-small-priority");
+  check.checked = false;
+  click(root.querySelector('form[data-table-id="T1"] button[type="submit"]'));
+  assert.equal(app.state.tables[0].small_group_priority, false);
+  assert.equal(app.state.layout.floors[0].tables[0].small_group_priority, false);
+});
+
+
 test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
   const printable = "<!DOCTYPE html><html><head></head><body><table></table></body></html>";
   const { app, $, dom, calls } = await setup(async path => {

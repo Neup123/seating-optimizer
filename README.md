@@ -221,6 +221,20 @@ From the **Seating plan** page, choose **People list** (one combined table), **P
 These formats are stateless views of the exact solved `Plan` supplied to the API. Every guest ID/name, group ID, table ID and floor/room zone ID comes from that object; the reasons-on variant writes each recorded reason description **verbatim** (escaped only for safe HTML display), and the default omits all written reasons. The Plan has **table assignments but no individual chair / numbered seat field**; exports therefore show the recorded table rather than inventing seat numbers. Use `/v1/exports/json` for the lossless machine-readable Plan. An infeasible Plan cannot be printed as an assignment list.
 
 
+### Couples and singles table priority
+
+In **Venue map**, check **Priority for couples and singles (soft)** when adding
+or editing a table. The setting is a first-class Boolean on each `Table`
+(`small_group_priority`, default `false`), not a passive property tag. It earns
+**one additional score point per group of one or two guests assigned to a marked
+table**. Points add to all other soft rule scores, including weighted fill
+efficiency; hard constraints are never weakened. Larger groups may still occupy
+marked tables. The score breakdown reports `venue:small-group-priority`, and
+unmet preferences appear among compromises. The flag is mirrored in each
+table drawing so layout JSON and annotated SVG drafts can carry it, as do full
+configuration JSON files and saved templates. Legacy layouts default to off.
+
+
 ### Composable global table-count rules
 
 On **Rules**, select **Global table-count pattern**. The new rule starts with
