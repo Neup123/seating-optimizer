@@ -1,8 +1,67 @@
 {
-  "name": ["name", "guest", "guest name", "full name", "registration name", "registrant"],
-  "size": ["size", "group size", "party size", "guests", "number of guests", "attendees", "people", "seats"],
-  "group_id": ["group id", "family id", "party id", "registration id"],
-  "attribute.language": ["language", "preferred language"],
-  "attribute.age_layer": ["age", "age layer", "age category", "age group"],
-  "attribute.mobility": ["mobility", "accessibility", "wheelchair"]
+  "name": [
+    "name",
+    "guest",
+    "guest name",
+    "full name",
+    "registration name",
+    "registrant",
+    "guest full name",
+    "full guest name",
+    "attendee name",
+    "participant name"
+  ],
+  "size": [
+    "size",
+    "group size",
+    "party size",
+    "guests",
+    "number of guests",
+    "attendees",
+    "people",
+    "seats",
+    "party count",
+    "guest count",
+    "group count",
+    "count",
+    "members count",
+    "member count",
+    "household size",
+    "pax",
+    "headcount",
+    "total guests",
+    "number of people",
+    "number in party"
+  ],
+  "group_id": [
+    "group id",
+    "family id",
+    "party id",
+    "registration id",
+    "family",
+    "family group",
+    "family group id",
+    "family code",
+    "household",
+    "household id",
+    "household name",
+    "party name",
+    "group",
+    "booking group"
+  ],
+  "attribute.language": [
+    "language",
+    "preferred language"
+  ],
+  "attribute.age_layer": [
+    "age",
+    "age layer",
+    "age category",
+    "age group"
+  ],
+  "attribute.mobility": [
+    "mobility",
+    "accessibility",
+    "wheelchair"
+  ]
 }

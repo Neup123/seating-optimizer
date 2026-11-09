@@ -106,7 +106,7 @@ def test_hard_need_reports_infeasible_when_only_tagged_table_too_small():
     assert any("rule:mobility-needs-accessible" == name
                for name in result.conflicting_constraints)
     assert not result.assignments
-    assert "No plan satisfies" in result.message
+    assert "These hard rules cannot all be satisfied" in result.message
 
     untagged = solve(problem(tags=False, rules=[need(mode="hard")]))
     assert untagged.status == "infeasible"

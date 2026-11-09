@@ -104,3 +104,29 @@ def test_import_invalid_base64_and_infeasible_api_report():
     assert response.json()["status"] == "infeasible"
     assert {"rule:one", "rule:two"} <= set(response.json()["conflicting_constraints"])
     validate(response.json(), "Plan")
+
+
+
+def test_packing_conflict_api_explains_party_sizes_without_per_table_noise():
+    # Three six-person parties need three ten-chair tables despite 18 <= 20 seats.
+    problem = {
+        "session_id": "packing", "zones": [{"id": "floor", "name": "Floor"}],
+        "tables": [
+            {"id": "T1", "zone_id": "floor", "capacity": 10},
+            {"id": "T2", "zone_id": "floor", "capacity": 10},
+        ],
+        "guests": [
+            {"id": f"{g}-{i}", "name": f"Guest {g}-{i}", "group_id": f"family-{g}"}
+            for g in range(3) for i in range(6)
+        ],
+        "rules": [],
+    }
+    response = client.post("/v1/solve", json=problem)
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["status"] == "infeasible"
+    assert len(plan["conflicting_constraints"]) == 1
+    assert "at least 3 tables" in plan["conflicting_constraints"][0]
+    assert "2 tables" in plan["conflicting_constraints"][0]
+    assert not any("capacity:T" in line for line in plan["conflicting_constraints"])
+    validate(plan, "Plan")

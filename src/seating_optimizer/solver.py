@@ -85,11 +85,77 @@ def _prepare(problem):
     return groups, lookup
 
 
+def _capacity_obstruction(groups, tables):
+    """A sufficient (not guessed) capacity/party-packing explanation, if available."""
+    sizes = [len(members) for members in groups.values()]
+    if not sizes:
+        return None
+    guests = sum(sizes)
+    chairs = sum(table.capacity for table in tables)
+    if guests > chairs:
+        return (f"Not enough chairs: {guests} guests need seats, but only {chairs} chairs "
+                f"are available across {len(tables)} tables (short by {guests - chairs}).")
+    largest = max(sizes)
+    max_table = max(table.capacity for table in tables)
+    if largest > max_table:
+        return (f"Party too large: a party of {largest} must stay together, "
+                f"but the largest table seats only {max_table}.")
+    if len({table.capacity for table in tables}) == 1:
+        capacity = tables[0].capacity
+        # Parties above half a table cannot share with each other or with
+        # exactly-half-table parties. Two half-table parties can share.
+        large = sum(2 * size > capacity for size in sizes)
+        half = sum(2 * size == capacity for size in sizes)
+        minimum_tables = large + (half + 1) // 2
+        if minimum_tables > len(tables):
+            return (f"Party packing: at least {minimum_tables} tables of {capacity} chairs "
+                    f"are needed for these {len(sizes)} parties ({guests} guests), "
+                    f"but only {len(tables)} tables ({chairs} chairs) are available. "
+                    "Unused chairs at different tables cannot be combined while parties stay together.")
+    return None
+
+
+def _party_packing_summary(groups, tables):
+    guests = sum(len(members) for members in groups.values())
+    chairs = sum(table.capacity for table in tables)
+    return (f"Party packing: {len(groups)} parties ({guests} guests) cannot be placed "
+            f"at {len(tables)} tables ({chairs} chairs) while keeping each party together. "
+            "Reconsider table sizes/counts or party grouping; total chairs alone do not guarantee a fit.")
+
+
+def _conflicting_rules(model, assumptions, problem):
+    """Use a single-worker feasibility solve for a useful assumption core.
+
+    Optimizing or running multiple workers can return *all* assumptions, including
+    irrelevant ones. Return None if the diagnostic solve cannot prove a core.
+    """
+    if not assumptions:
+        return []
+    model.clear_objective()
+    diagnostic = cp_model.CpSolver()
+    diagnostic.parameters.num_search_workers = 1
+    diagnostic.parameters.max_time_in_seconds = min(problem.config.time_limit_seconds, 5.0)
+    diagnostic.parameters.random_seed = problem.config.random_seed
+    if diagnostic.Solve(model) != cp_model.INFEASIBLE:
+        return None
+    names = {lit.Index(): name for name, lit in assumptions.items()}
+    return [names[int(index)] for index in diagnostic.SufficientAssumptionsForInfeasibility()
+            if int(index) in names]
+
+
 def solve(problem: Problem) -> Plan:
     """Solve one session. A separate Problem is used for each meal sitting."""
     start = perf_counter()
     groups, lookup = _prepare(problem)
     tables = problem.tables
+    proven_obstruction = _capacity_obstruction(groups, tables)
+    if proven_obstruction:
+        return Plan(
+            session_id=problem.session_id, status="infeasible",
+            conflicting_constraints=[proven_obstruction],
+            message="No seating arrangement is possible with the available table capacities and party sizes.",
+            solve_seconds=perf_counter() - start, layout=problem.layout,
+        )
     model = cp_model.CpModel()
     ids = list(groups)
     n = len(tables)
@@ -112,7 +178,7 @@ def solve(problem: Problem) -> Plan:
     seats = {}
     for j, table in enumerate(tables):
         seats[j] = sum(len(groups[gid]) * x[gid, j] for gid in ids)
-        model.Add(seats[j] <= table.capacity).OnlyEnforceIf(hard(f"capacity:{table.id}"))
+        model.Add(seats[j] <= table.capacity)  # Physical limits are unconditional, not diagnostic assumptions.
 
     terms = []
     for rule in problem.rules:
@@ -205,20 +271,26 @@ def solve(problem: Problem) -> Plan:
     elapsed = perf_counter() - start
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         conflicts = []
+        message = "Time limit reached without a feasible plan; infeasibility is unproven."
         if status == cp_model.INFEASIBLE:
-            names = {lit.Index(): name for name, lit in assumptions.items()}
-            conflicts = [names.get(int(i), f"hard-assumption:{i}")
-                         for i in solver.SufficientAssumptionsForInfeasibility()]
-            if not conflicts:
-                conflicts = ["group placement / structural hard constraints"]
+            core = _conflicting_rules(model, assumptions, problem)
+            if core is None:
+                message = ("No seating plan satisfies all hard constraints. "
+                           "The conflicting rules could not be isolated within the diagnostic time limit.")
+            elif core:
+                conflicts = core
+                message = ("These hard rules cannot all be satisfied together with the "
+                           "table capacities and party grouping.")
+            else:
+                conflicts = [_party_packing_summary(groups, tables)]
+                message = "The table capacities and whole-party placement prevent a seating plan."
         return Plan(
             session_id=problem.session_id,
             status="infeasible" if status == cp_model.INFEASIBLE else "unknown",
             conflicting_constraints=conflicts,
-            solve_seconds=elapsed,
+            solve_seconds=perf_counter() - start,
             layout=problem.layout,
-            message=("No plan satisfies all hard constraints." if status == cp_model.INFEASIBLE
-                     else "Time limit reached without a feasible plan; infeasibility is unproven."),
+            message=message,
         )
 
     placed = {gid: solver.Value(loc[gid]) for gid in ids}
