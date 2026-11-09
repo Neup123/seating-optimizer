@@ -87,6 +87,37 @@ def validate_layout_references(layout: VenueLayout, zones: list[Zone], tables: l
                 raise ValueError(f"Table {drawing.table_id} belongs to {table_zones[drawing.table_id]}, not {floor.zone_id}")
 
 
+class VenueConfiguration(Model):
+    """Versioned, guest-independent, portable venue/rules configuration."""
+    version: Literal[1] = 1
+    name: str = Field(min_length=1)
+    zones: list[Zone] = Field(min_length=1)
+    tables: list[Table] = Field(min_length=1)
+    layout: VenueLayout
+    rules: list["Rule"] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "VenueConfiguration":
+        for label, ids in (
+            ("zone", [z.id for z in self.zones]),
+            ("table", [t.id for t in self.tables]),
+            ("rule", [r.id for r in self.rules]),
+        ):
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"Duplicate {label}")
+        zone_ids = {z.id for z in self.zones}
+        if any(table.zone_id not in zone_ids for table in self.tables):
+            raise ValueError("Every table must reference an existing zone")
+        if {floor.zone_id for floor in self.layout.floors} != zone_ids:
+            raise ValueError("Configuration floors must exactly match zones")
+        validate_layout_references(self.layout, self.zones, self.tables)
+        if {drawing.table_id for floor in self.layout.floors for drawing in floor.tables} != {
+            table.id for table in self.tables
+        }:
+            raise ValueError("Each configured table must have a layout drawing")
+        return self
+
+
 class Guest(Model):
     id: str
     name: str

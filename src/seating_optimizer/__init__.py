@@ -6,14 +6,14 @@ from .importer import ImportIssue, ImportResult, ImportPreview, default_aliases,
 from .rule_catalog import RuleCatalog, RuleField, RuleShapeSpec, rule_catalog
 from .models import (
     Assignment, Compromise, FloorLayout, Guest, Plan, Problem, Reason, Rule,
-    TableDrawing, VenueLayout, validate_layout_references,
+    TableDrawing, VenueLayout, VenueConfiguration, validate_layout_references,
     ScoreItem, SolverConfig, Table, TableUsage, Zone,
 )
 from .solver import solve
 
 __all__ = [
     "Assignment", "Compromise", "Guest", "Plan", "Problem", "Reason", "Rule",
-    "FloorLayout", "TableDrawing", "VenueLayout", "validate_layout_references",
+    "FloorLayout", "TableDrawing", "VenueLayout", "VenueConfiguration", "validate_layout_references",
     "import_layout", "import_layout_files", "SvgFloorBundle", "SvgFloorPage",
     "render_floor_pdf", "render_floor_svg", "render_table_cards_pdf",
     "ScoreItem", "SolverConfig", "Table", "TableUsage", "Zone", "solve",

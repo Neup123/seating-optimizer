@@ -86,6 +86,24 @@ paths:
           description: Invalid base64 input
         '422':
           description: Invalid layout geometry or references
+  /v1/configurations/validate:
+    post:
+      operationId: validateVenueConfiguration
+      summary: Validate a portable named venue, capacities and rules without guests
+      description: Stateless validation; callers can store, export, duplicate or load the returned JSON independently of guest import.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VenueConfiguration'}
+      responses:
+        '200':
+          description: Validated, portable guest-free configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/VenueConfiguration'}
+        '422':
+          description: Invalid capacities, rule parameters, geometry or references
   /v1/solve:
     post:
       operationId: solveSession
@@ -323,6 +341,17 @@ components:
       required: [shapes]
       properties:
         shapes: {type: array, items: {$ref: '#/components/schemas/RuleShapeSpec'}}
+    VenueConfiguration:
+      type: object
+      additionalProperties: false
+      required: [version, name, zones, tables, layout, rules]
+      properties:
+        version: {type: integer, const: 1}
+        name: {type: string, minLength: 1}
+        zones: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Zone'}}
+        tables: {type: array, minItems: 1, items: {$ref: '#/components/schemas/Table'}}
+        layout: {$ref: '#/components/schemas/VenueLayout'}
+        rules: {type: array, items: {$ref: '#/components/schemas/Rule'}}
     Guest:
       type: object
       additionalProperties: false

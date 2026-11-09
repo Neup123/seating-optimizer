@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileRes
 from pydantic import BaseModel, Field
 
 from seating_optimizer import (
-    Plan, Problem, Table, Zone, VenueLayout, SvgFloorBundle, import_layout_files,
+    Plan, Problem, Table, Zone, VenueLayout, VenueConfiguration, SvgFloorBundle, import_layout_files,
     import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
     render_json, render_table, solve, preview_registrations, rule_catalog,
     ImportPreview, RuleCatalog,
@@ -87,6 +87,11 @@ def create_app() -> FastAPI:
             return import_layout_files(sources, zones=request.zones, tables=request.tables)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/configurations/validate", response_model=VenueConfiguration)
+    def validate_configuration(configuration: VenueConfiguration) -> VenueConfiguration:
+        """Validate a portable guest-free configuration without saving it server-side."""
+        return configuration
 
     @app.post("/v1/solve", response_model=Plan)
     def solve_problem(problem: Problem) -> Plan:
