@@ -90,7 +90,7 @@
     {
       "shape": "pair",
       "title": "Pair together / apart",
-      "description": "Keep two guests or groups together or apart.",
+      "description": "Together means the same table. Only when a linked party exceeds every individual table can multiple atomic groups use connected adjacent tables drawn on one floor. Geometry is required. A lone group that fits no individual table may split only across connected adjacent tables on one floor, while all other groups remain atomic. Apart means different tables.",
       "modes": [
         "soft",
         "hard"
