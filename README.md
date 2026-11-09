@@ -204,6 +204,10 @@ Full real-browser golden E2E (also requires Chromium installed by Playwright):
 
 The browser test launches the actual FastAPI server, uploads **60 two-person registrations (120 guests)**, imports two-floor/12-table layout data, sets chair capacities, creates hard and soft rules through the visual editor, calls the real CP-SAT solver, and visits all four plan views. It asserts zero hard violations and wheelchair-family propagation. The CI workflow runs Python 3.11/3.12 core tests plus DOM and Chromium browser tests; the golden browser E2E does not mock a solver.
 
+### Form width and responsive layout
+
+The guest-upload, header-mapping and validation flow is centred at a comfortable reading measure on wide screens; individual inputs and selects are capped rather than stretched across the workspace. Rules, reusable configuration templates, venue-file input and add-floor forms follow the same measure. The canvas and dense plan/table information may use additional workspace width. At mobile widths, form sections use the available viewport width without a horizontal page push; wide spreadsheet tables scroll inside their own container.
+
 ### Configuration template updates and rule types
 
 Saving a named configuration template replaces its previously saved configuration (floors, tables, capacities and rules) when the name already exists, rather than silently retaining the old copy. The client shows “Updated configuration template” for replacements and “Saved configuration template” for new names. Templates are stored in the current browser; export JSON for a portable copy.
