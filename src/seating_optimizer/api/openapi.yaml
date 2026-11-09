@@ -451,7 +451,7 @@ components:
         id: {type: string}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]
         mode: {type: string, enum: [soft, hard]}
         parameters: {type: object, additionalProperties: true}
         weight: {type: [integer, 'null'], minimum: 1}
