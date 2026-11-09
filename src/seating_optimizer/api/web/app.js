@@ -470,19 +470,28 @@ export function createApp(root, api = createGateway()) {
       return append(area, form);
     }
     const shapes = state.catalog.shapes;
-    form.append(row(selectField("New consideration", shapes.map(s => [s.shape, s.title]), state.selectedShape,
-      next => { state.selectedShape = next; }, { id: "new-rule-shape" }),
-      action("Add consideration", () => {
-        const spec = shapes.find(s => s.shape === state.selectedShape);
-        const parameters = {};
-        spec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
-        state.rules.push({
-          id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
-          weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters
-        });
-        invalidate();
-        announce("Added a " + spec.title + " rule. Set its parameters below.");
-      }, "primary", "add-rule")));
+    const newRuleForm = element("fieldset", "new-rule-form");
+    newRuleForm.append(element("legend", "", "Add a new consideration — select its type first"));
+    const chosenShape = shapes.find(s => s.shape === state.selectedShape) || shapes[0];
+    newRuleForm.append(selectField("Step 1 — Type of the rule you want to create",
+      shapes.map(s => [s.shape, s.title]), chosenShape.shape,
+      next => { state.selectedShape = next; render(); }, { id: "new-rule-shape" }));
+    newRuleForm.append(element("p", "muted", chosenShape.description ||
+      "Choose a type to see the new rule's fields."));
+    newRuleForm.append(action("Step 2 — Add " + chosenShape.title + " rule", () => {
+      const spec = shapes.find(s => s.shape === state.selectedShape);
+      const parameters = {};
+      spec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
+      state.rules.push({
+        id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
+        weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters
+      });
+      invalidate();
+      announce("Added a " + spec.title + " rule. Set its parameters below.");
+    }, "primary", "add-rule"));
+    newRuleForm.append(element("p", "muted",
+      "Step 1 sets the NEW rule's type only. Existing rules below have their own type control."));
+    form.append(newRuleForm);
     area.append(form);
     if (!state.rules.length) {
       area.append(append(card("No considerations yet"), element("p", "muted",
@@ -498,6 +507,19 @@ export function createApp(root, api = createGateway()) {
         state.rules.splice(i, 1); invalidate(); announce("Rule removed.");
       }, "danger small", "delete-rule-" + i));
       section.append(header);
+      section.append(selectField("Type of this existing rule (changing resets its fields)",
+        shapes.map(s => [s.shape, s.title]), rule.shape, value => {
+          if (value === rule.shape) return;
+          const nextSpec = shapes.find(s => s.shape === value);
+          const parameters = {};
+          nextSpec.fields.forEach(f => { if (f.kind === "select" && f.choices.length) parameters[f.name] = f.choices[0]; });
+          rule.shape = nextSpec.shape;
+          rule.mode = nextSpec.default_mode;
+          rule.weight = nextSpec.default_mode === "soft" ? nextSpec.default_weight : null;
+          rule.parameters = parameters;
+          invalidate();
+          render();
+        }, { id: "rule-shape-" + i }));
       section.append(grid(
         textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
         selectField(rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
@@ -590,19 +612,25 @@ export function createApp(root, api = createGateway()) {
   function renderMap() {
     const area = element("div");
     const templatesCard = card("Reusable venue + rules configurations",
-      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable.");
+      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable. Saving an existing name updates that template.");
     templatesCard.append(textField("Configuration name", state.templateName, value => {
       state.templateName = value;
     }, { id: "template-name", placeholder: "e.g. Weekly dinner" }));
     templatesCard.append(row(
-      action("Save as template", () => attempt(async () => {
+      action("Save / update template", () => attempt(async () => {
         const name = document.getElementById("template-name").value.trim();
-        if (templates.some(t => t.name === name)) throw Error("A template with this name already exists. Choose a new name.");
         const validated = await api.post("/v1/configurations/validate", configuration(name));
-        templates.push(validated);
-        try { saveTemplates(); } catch (error) { templates.pop(); throw error; }
+        const index = templates.findIndex(t => t.name === name);
+        const oldValue = index < 0 ? null : templates[index];
+        if (index < 0) templates.push(validated);
+        else templates[index] = validated;
+        try { saveTemplates(); } catch (error) {
+          if (index < 0) templates.pop();
+          else templates[index] = oldValue;
+          throw error;
+        }
         state.templateSelected = name;
-        announce("Saved configuration template: " + name);
+        announce((index < 0 ? "Saved" : "Updated") + " configuration template: " + name);
       }), "primary", "save-template"),
       action("Export full configuration JSON", () => attempt(async () => {
         const name = document.getElementById("template-name").value.trim() || "Venue configuration";

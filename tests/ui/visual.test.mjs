@@ -520,6 +520,52 @@ test("creating a table lets the owner set table tags without importing a guest l
   assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["quiet", "near-exit"]);
 });
 
+test("re-saving a named template updates the stored configuration and reloads corrected values", async () => {
+  const { app, dom, $, storage, root } = await setup(async (path, payload) =>
+    path === "/v1/configurations/validate" ? payload : {});
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.state.rules = [{ id: "lang", shape: "attribute_grouping", mode: "soft",
+    weight: 2, parameters: { attribute: "language" } }];
+  app.show("map");
+  setValue($("#template-name"), "Dinner", dom.window);
+  click($("#save-template"));
+  await until(() => root.textContent.includes("Saved configuration template: Dinner"));
+  app.state.rules[0].weight = 9;
+  app.state.tables[0].capacity = 7;
+  click($("#save-template"));
+  await until(() => root.textContent.includes("Updated configuration template: Dinner"));
+  const stored = JSON.parse(storage.getItem("seating-optimizer:templates:v1"));
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].rules[0].weight, 9);
+  assert.equal(stored[0].tables[0].capacity, 7);
+  app.state.rules[0].weight = 1;
+  app.state.tables[0].capacity = 2;
+  setValue($("#template-select"), "Dinner", dom.window);
+  click($("#load-template"));
+  await until(() => root.textContent.includes("Loaded template Dinner"));
+  assert.equal(app.state.rules[0].weight, 9);
+  assert.equal(app.state.tables[0].capacity, 7);
+});
+
+test("rule creation exposes a type-first form and existing rules can change type", async () => {
+  const { app, dom, $, root } = await setup();
+  app.show("rules");
+  assert.match(root.textContent, /select its type first/i);
+  setValue($("#new-rule-shape"), "table_property_need", dom.window);
+  assert.match($("#add-rule").textContent, /Guest need/);
+  click($("#add-rule"));
+  assert.equal(app.state.rules[0].shape, "table_property_need");
+  setValue($("#rule-shape-0"), "attribute_grouping", dom.window);
+  assert.equal(app.state.rules[0].shape, "attribute_grouping");
+  setValue($("#rule-0-attribute"), "language", dom.window);
+  setValue($("#rule-shape-0"), "table_property_need", dom.window);
+  assert.deepEqual(app.state.rules[0].parameters, {});
+  assert.equal(app.state.rules[0].weight, 2);
+  assert.ok($("#rule-0-property"), "converted rule shows guest-need fields");
+});
+
 test("printable list tabs fetch exact API views and toggle written reasons without affecting cards", async () => {
   const printable = "<!DOCTYPE html><html><head></head><body><p>Exact plan HTML</p></body></html>";
   const { app, $, dom, calls } = await setup(async (path) => {

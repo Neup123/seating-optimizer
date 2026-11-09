@@ -204,6 +204,12 @@ Full real-browser golden E2E (also requires Chromium installed by Playwright):
 
 The browser test launches the actual FastAPI server, uploads **60 two-person registrations (120 guests)**, imports two-floor/12-table layout data, sets chair capacities, creates hard and soft rules through the visual editor, calls the real CP-SAT solver, and visits all four plan views. It asserts zero hard violations and wheelchair-family propagation. The CI workflow runs Python 3.11/3.12 core tests plus DOM and Chromium browser tests; the golden browser E2E does not mock a solver.
 
+### Configuration template updates and rule types
+
+Saving a named configuration template replaces its previously saved configuration (floors, tables, capacities and rules) when the name already exists, rather than silently retaining the old copy. The client shows “Updated configuration template” for replacements and “Saved configuration template” for new names. Templates are stored in the current browser; export JSON for a portable copy.
+
+To add a consideration, first select its shape in the **Add a new consideration** form and then select **Add … rule**. Its type and fields come from the server's rule catalog. Every existing rule also has its own **Type of this existing rule** selector; changing it resets that rule's parameters, mode and weight to the new type's catalog defaults. It does not affect other rules.
+
 ### Print or export people and table lists
 
 From the **Seating plan** page, choose **People list** (one combined table), **People by floor** (a separate list for each floor / room), **Table list** (one combined table of group-to-table assignments), or **Per-table lists** (a separate list for each table). Each view has an **Include written reasons** checkbox, initially unchecked when selecting a view. It controls the list preview, the **Print list** action (including the browser's Save as PDF option), and **Download list HTML**. The resulting HTML is self-contained and may be re-opened or printed elsewhere; table cards and floor maps are unchanged.
