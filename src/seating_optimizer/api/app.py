@@ -5,6 +5,7 @@ import base64
 import binascii
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
@@ -13,7 +14,8 @@ from pydantic import BaseModel, Field
 from seating_optimizer import (
     Plan, Problem, Table, Zone, VenueLayout, VenueConfiguration, SvgFloorBundle, import_layout_files,
     import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
-    render_json, render_table, solve, preview_registrations, rule_catalog,
+    render_json, render_table, render_people_list_html, render_table_list_html,
+    solve, preview_registrations, rule_catalog,
     ImportPreview, RuleCatalog,
 )
 from seating_optimizer.importer import ImportResult
@@ -107,6 +109,30 @@ def create_app() -> FastAPI:
     @app.post("/v1/exports/json")
     def json_export(plan: Plan) -> Response:
         return Response(content=render_json(plan), media_type="application/json")
+
+    @app.post("/v1/exports/people-list/html", response_class=HTMLResponse)
+    def people_list_export(
+        plan: Plan, group_by: Literal["combined", "floor"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_people_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/exports/table-list/html", response_class=HTMLResponse)
+    def table_list_export(
+        plan: Plan, group_by: Literal["combined", "table"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_table_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/v1/exports/floor-map/svg", response_model=SvgFloorBundle)
     def floor_map_svg_export(plan: Plan) -> SvgFloorBundle:

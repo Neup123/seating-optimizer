@@ -151,6 +151,56 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Plan'}
+  /v1/exports/people-list/html:
+    post:
+      operationId: exportPeopleListHtml
+      summary: Print or download a people list (combined or per floor / room)
+      description: Exact guest IDs, names, group and table assignments from the supplied solved Plan. No seat numbers are invented. HTML is printable to paper or PDF. Reasons are omitted by default.
+      parameters:
+        - in: query
+          name: group_by
+          schema: {type: string, enum: [combined, floor], default: combined}
+        - in: query
+          name: include_reasons
+          schema: {type: boolean, default: false}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Portable printable HTML (one combined table or a table per floor)
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Nonfeasible plan or contradictory assignment data
+  /v1/exports/table-list/html:
+    post:
+      operationId: exportTableListHtml
+      summary: Print or download a table-to-groups list (combined or per table)
+      description: Exact assigned groups and guest identities from the supplied solved Plan. Includes empty tables. Reasons are omitted by default.
+      parameters:
+        - in: query
+          name: group_by
+          schema: {type: string, enum: [combined, table], default: combined}
+        - in: query
+          name: include_reasons
+          schema: {type: boolean, default: false}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Portable printable HTML (one combined table or a table per physical table)
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Nonfeasible plan or contradictory assignment data
   /v1/exports/floor-map/svg:
     post:
       operationId: exportFloorMapSvg
