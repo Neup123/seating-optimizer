@@ -470,6 +470,22 @@ def solve(problem: Problem) -> Plan:
                 model.Add(holes == table.capacity * used - seats[j])
                 terms.append(-rule.weight * holes)
 
+    # A first-class venue preference, not a passive property tag or hard restriction.
+    # Exactly one extra point per eligible group, including an adjacent-table
+    # split pair when individual table capacities are only one seat.
+    priority_rule = "venue:small-group-priority"
+    priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
+    if priority_tables:
+        for gid, members in groups.items():
+            if len(members) <= 2:
+                if gid in split_groups:
+                    preferred = model.NewBoolVar(f"small-priority:{gid}")
+                    model.AddMaxEquality(preferred, [x[gid, j] for j in priority_tables])
+                    terms.append(preferred)
+                else:
+                    for j in priority_tables:
+                        terms.append(x[gid, j])
+
     model.Maximize(sum(terms))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = problem.config.time_limit_seconds
@@ -748,6 +764,39 @@ def solve(problem: Problem) -> Plan:
                                 reasons[gid].append(reason)
         if rule.mode == "soft":
             breakdown.append(ScoreItem(rule_id=rule.id, points=points))
+    if priority_tables:
+        earned = 0
+        for gid, members in groups.items():
+            if len(members) > 2:
+                continue
+            matched = sorted(group_tables[gid] & priority_tables)
+            if matched:
+                earned += 1
+                if gid in split_groups:
+                    # Keep each split portion's reasons tied to its actual table,
+                    # and award the group only one point across priority tables.
+                    for j in matched:
+                        table_reasons[gid, j].append(Reason(
+                            rule_id=priority_rule,
+                            description=(f"Small group ({len(members)} people) received "
+                                         f"priority at table {tables[j].id}."),
+                            points=1 / len(matched)))
+                else:
+                    table = tables[placed[gid]]
+                    reasons[gid].append(Reason(
+                        rule_id=priority_rule,
+                        description=f"Small group ({len(members)} people) received priority at table {table.id}.",
+                        points=1))
+            else:
+                table_names = ", ".join(tables[j].id for j in sorted(group_tables[gid]))
+                reasons[gid].append(Reason(
+                    rule_id=priority_rule,
+                    description=f"Small group seated at {table_names}; no priority-table point earned."))
+                compromises.append(Compromise(
+                    rule_id=priority_rule,
+                    description=f"Small group {gid} is at table {table_names}, not a designated small-group table.",
+                    lost_points=1))
+        breakdown.append(ScoreItem(rule_id=priority_rule, points=earned))
     assignments = []
     for gid, members in groups.items():
         if gid not in split_groups:

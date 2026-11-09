@@ -297,6 +297,10 @@ components:
         id: {type: string}
         zone_id: {type: string}
         capacity: {type: integer, minimum: 1}
+        small_group_priority:
+          type: boolean
+          default: false
+          description: Soft preference for groups of one or two (one score point per assigned small group).
         properties:
           type: array
           description: Passive table tags; ignored unless a guest-need rule refers to one.
@@ -314,6 +318,10 @@ components:
         width: {type: number, exclusiveMinimum: 0}
         height: {type: number, exclusiveMinimum: 0}
         shape: {type: string, enum: [rectangle, ellipse, circle], default: rectangle}
+        small_group_priority:
+          type: boolean
+          default: false
+          description: Portable layout metadata; copied to Table.small_group_priority when importing a layout.
         properties:
           type: array
           description: Portable copy of table tags stored in layout JSON; the solver reads Table.properties.
