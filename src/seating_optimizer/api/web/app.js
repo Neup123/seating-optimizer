@@ -117,7 +117,7 @@ export function createApp(root, api = createGateway()) {
     importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
     catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
     zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-    sessionId: "meal-1", seconds: 5, plan: null,
+    sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1,
     notice: "Choose a CSV or XLSX guest list to begin.", error: false
   };
   let viewObjectUrl = null;
@@ -151,6 +151,10 @@ export function createApp(root, api = createGateway()) {
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
       layout: state.layout.floors.length ? state.layout : null
     };
+  }
+  function tableCardsEndpoint() {
+    return "/v1/exports/table-cards/pdf" +
+      (state.cardsPerPage === 1 ? "" : "?cards_per_page=" + state.cardsPerPage);
   }
   function clearObjectUrl() {
     if (viewObjectUrl && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(viewObjectUrl);
@@ -716,13 +720,21 @@ export function createApp(root, api = createGateway()) {
       }
     } else {
       views.append(element("h3", "", "Printable table cards"));
+      views.append(selectField("Cards per page", [
+        ["1", "1 per page (A5, current default)"],
+        ["2", "2 per page (A4)"],
+        ["4", "4 per page (A4)"]
+      ], state.cardsPerPage, value => {
+        state.cardsPerPage = Number(value);
+        attempt(() => loadView("cards"));
+      }, { id: "cards-per-page" }));
       if (viewObjectUrl) {
         const frame = element("iframe", "print-preview");
         frame.id = "cards-preview"; frame.title = "Printable PDF table cards"; frame.src = viewObjectUrl;
         views.append(frame);
       } else views.append(element("p", "muted", "Loading printable PDF…"));
       views.append(action("Download table cards PDF", () => attempt(async () => {
-        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
         downloadBlob(blob, "table-cards.pdf", "application/pdf");
       }), "secondary", "download-cards"));
     }
@@ -775,7 +787,7 @@ export function createApp(root, api = createGateway()) {
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
       else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
       else {
-        const blob = await api.post("/v1/exports/table-cards/pdf", state.plan, "blob");
+        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
         if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
         viewObjectUrl = URL.createObjectURL(blob);
       }
