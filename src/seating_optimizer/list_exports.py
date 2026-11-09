@@ -31,7 +31,8 @@ def _selected_fields(plan: Plan, fields: list[str] | None) -> list[str]:
     if unknown:
         raise ValueError("Unknown imported field(s): " + ", ".join(sorted(unknown)))
     for entry in plan.assignments:
-        if entry.guest_attributes and len(entry.guest_attributes) != len(entry.guest_ids):
+        if (len(entry.guest_ids) == len(entry.guest_names) and entry.guest_attributes
+                and len(entry.guest_attributes) != len(entry.guest_ids)):
             raise ValueError(f"Guest attributes differ for group {entry.group_id}")
     return selected
 
@@ -97,8 +98,8 @@ def render_people_list_html(
             cols += "<th>Written reasons</th>"
         rows = []
         for entry in entries:
-            attrs = entry.guest_attributes or [{} for _ in entry.guest_ids]
-            for guest_id, guest_name, guest_attrs in zip(entry.guest_ids, entry.guest_names, attrs):
+            guest_attributes = entry.guest_attributes or [{} for _ in entry.guest_ids]
+            for guest_id, guest_name, guest_attrs in zip(entry.guest_ids, entry.guest_names, guest_attributes):
                 rows.append(
                     f'<tr data-guest-id="{_text(guest_id)}" data-group-id="{_text(entry.group_id)}" '
                     f'data-table-id="{_text(entry.table_id)}">'

@@ -628,6 +628,6 @@ test("list field picker uses imported names and sends the selected columns to pr
   input.checked = true;
   input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   await until(() => calls.some(([path]) => path.includes("fields=Language")));
-  assert.ok($("#list-preview"), "printable preview remains available");
+  await until(() => !!$("#list-preview")); // preview is re-fetched after a picker change
   assert.ok(app.state.listFields.includes("Language"));
 });
