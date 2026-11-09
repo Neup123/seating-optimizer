@@ -297,6 +297,10 @@ test("named full configurations can be saved, duplicated, loaded, exported, impo
   click(first.$("#export-configuration"));
   await until(() => exported);
   assert.match(first.root.textContent, /Exported the complete venue/);
+  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
+  click(first.$("#delete-template"));
+  await until(() => first.root.textContent.includes("Deleted saved template"));
+  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 1);
   // A full JSON file imported into a fresh session reuses the headless validator.
   const content = JSON.parse(JSON.stringify(JSON.parse(stored)[0]));
   const fresh = await setup(handler);
@@ -309,10 +313,6 @@ test("named full configurations can be saved, duplicated, loaded, exported, impo
   assert.deepEqual(fresh.app.state.rules, content.rules);
   assert.deepEqual(fresh.app.state.layout, content.layout);
   assert.equal(fresh.app.state.guests.length, 0);
-  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
-  click(first.$("#delete-template"));
-  await until(() => first.root.textContent.includes("Deleted saved template"));
-  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 1);
 });
 
 test("corrupt storage is ignored and a storage quota failure is visible rather than a silent reset", async () => {
