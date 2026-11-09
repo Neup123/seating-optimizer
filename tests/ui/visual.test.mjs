@@ -12,6 +12,11 @@ const catalog = {
       modes: ["hard","soft"], default_mode: "hard", default_weight: 3,
       fields: [{ name: "attribute", label: "Attribute", kind: "text", required: true, choices: [] },
                { name: "zone", label: "Zone", kind: "zone", required: true, choices: [] }] },
+    { shape: "table_property_need", title: "Guest need → table property", description: "Only guests carry points",
+      modes: ["soft","hard"], default_mode: "soft", default_weight: 2,
+      fields: [{ name: "attribute", label: "Guest attribute", kind: "text", required: true, choices: [] },
+               { name: "value", label: "Guest value", kind: "text", required: false, choices: [] },
+               { name: "property", label: "Table property", kind: "text", required: true, choices: [] }] },
     { shape: "pair", title: "Pair rules", description: "Pairs",
       modes: ["soft","hard"], default_mode: "soft", default_weight: 3,
       fields: [{ name: "left", label: "Left", kind: "target", required: true, choices: [] },
@@ -131,14 +136,14 @@ test("guest import shows detected headers, lets owner override mapping, and neve
   assert.equal(req.mapping.Count, "size");
 });
 
-test("all six rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
+test("all seven rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
   const { app, dom, $, $$ } = await setup();
   app.show("rules");
   for (const shape of catalog.shapes.map(s => s.shape)) {
     setValue($("#new-rule-shape"), shape, dom.window);
     click($("#add-rule"));
   }
-  assert.equal(app.state.rules.length, 6);
+  assert.equal(app.state.rules.length, 7);
   assert.deepEqual(app.state.rules.map(r => r.shape), catalog.shapes.map(s => s.shape));
   assert.equal(app.state.rules.find(r => r.shape === "pin").mode, "hard");
   assert.equal(app.state.rules.find(r => r.shape === "capacity").weight, null);
@@ -154,7 +159,7 @@ test("all six rule shapes are rendered from API metadata; CRUD and new instances
   click($("#add-rule"));
   assert.equal(app.state.rules.filter(r => r.shape === "attribute_grouping").length, 2);
   click($("#delete-rule-1"));
-  assert.equal(app.state.rules.length, 6);
+  assert.equal(app.state.rules.length, 7);
 });
 
 test("map editor imports structured geometry, edits capacity/position, validates round-trip over API, and drags tables", async () => {
@@ -222,4 +227,73 @@ test("solved plan switches between all API exports and shows reasons, compromise
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
   assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
+});
+
+test("layout tags are edited and imported as passive facts, while a guest-need rule carries weight", async () => {
+  const imported = { floors: [{ zone_id: "hall", width: 400, height: 300, tables: [
+    { table_id: "A", x: 15, y: 20, width: 150, height: 110, shape: "rectangle",
+      properties: ["aisle-edge"] }
+  ] }] };
+  const { app, dom, root, $, calls } = await setup(async (path, payload) => {
+    if (path === "/v1/layouts/import") {
+      return JSON.parse(Buffer.from(payload.files[0].content_base64, "base64").toString("utf8"));
+    }
+    return {};
+  });
+  app.show("map");
+  upload($("#layout-file"), "hall.json", new TextEncoder().encode(JSON.stringify(imported)), dom.window);
+  await until(() => !!$("#table-A-properties"));
+  assert.deepEqual(app.state.tables[0].properties, ["aisle-edge"]);
+  assert.equal($("#table-A-properties").value, "aisle-edge");
+  setValue($("#table-A-capacity"), "4", dom.window);
+  setValue($("#table-A-properties"), "accessible, aisle-edge", dom.window);
+  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
+  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
+  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
+  click($("#validate-layout"));
+  await until(() => root.textContent.includes("Venue layout validated"));
+  const check = calls.filter(([path]) => path === "/v1/layouts/import").at(-1)[1];
+  assert.deepEqual(check.tables[0].properties, ["accessible", "aisle-edge"]);
+  const encoded = JSON.parse(Buffer.from(check.files[0].content_base64, "base64").toString("utf8"));
+  assert.deepEqual(encoded.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
+
+  app.show("rules");
+  setValue($("#new-rule-shape"), "table_property_need", dom.window);
+  click($("#add-rule"));
+  setValue($("#rule-0-attribute"), "mobility", dom.window);
+  setValue($("#rule-0-value"), "wheelchair", dom.window);
+  setValue($("#rule-0-property"), "accessible", dom.window);
+  setValue($("#rule-weight-0"), "7", dom.window);
+  assert.equal(app.state.rules[0].parameters.property, "accessible");
+  assert.equal(app.state.rules[0].weight, 7);
+  setValue($("#rule-mode-0"), "hard", dom.window);
+  assert.equal(app.state.rules[0].weight, null);
+  assert.equal(app.state.rules[0].mode, "hard");
+  app.state.guests = [{ id: "g1", name: "Guest", attributes: { mobility: "wheelchair" } }];
+  const request = app.projectProblem();
+  assert.deepEqual(request.tables[0].properties, ["accessible", "aisle-edge"]);
+  assert.equal(request.rules[0].shape, "table_property_need");
+  assert.equal(request.rules[0].weight, null);
+
+  app.show("map");
+  setValue($("#table-A-properties"), "ACCESSIBLE, accessible", dom.window);
+  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
+  assert.match(root.textContent, /property names must be unique/i);
+  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
+});
+
+test("creating a table lets the owner set table tags without importing a guest list", async () => {
+  const { app, dom, $, root } = await setup();
+  app.show("map");
+  const form = $("#floor-form");
+  setValue(form.querySelector('[name="id"]'), "hall", dom.window);
+  setValue(form.querySelector('[name="name"]'), "Main hall", dom.window);
+  click($("#add-floor"));
+  setValue($("#new-table-id"), "T1", dom.window);
+  setValue($("#new-table-capacity"), "5", dom.window);
+  setValue($("#new-table-properties"), "quiet, near-exit", dom.window);
+  click($("#add-table"));
+  assert.equal(app.state.guests.length, 0);
+  assert.deepEqual(app.state.tables[0].properties, ["quiet", "near-exit"]);
+  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["quiet", "near-exit"]);
 });

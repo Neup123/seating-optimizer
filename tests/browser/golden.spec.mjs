@@ -125,3 +125,68 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
     " floors=" + plan.layout.floors.length +
     " tables=" + plan.tables.length + " hard_violations=0");
 });
+
+test("guest-side property preference seats wheelchair family at tagged table and credits guest need", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/");
+  await page.locator("#nav-map").click();
+  await page.locator('#floor-form input[name="id"]').fill("hall");
+  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator("#add-floor").click();
+
+  await page.locator("#new-table-id").fill("A");
+  await page.locator("#new-table-capacity").fill("2");
+  await page.locator("#new-table-properties").fill("accessible, aisle-edge");
+  await page.locator("#add-table").click();
+  await page.locator("#new-table-id").fill("B");
+  await page.locator("#new-table-capacity").fill("2");
+  await page.locator("#new-table-properties").fill("quiet");
+  await page.locator("#add-table").click();
+
+  await page.locator("#validate-layout").click();
+  await expect(page.locator("#notice")).toContainText("Venue layout validated");
+  await page.locator("#nav-import").click();
+  await page.locator("#guest-file").setInputFiles({
+    name: "needs.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Party Size,Mobility\nFamily,2,wheelchair\nVisitors,2,mobile\n")
+  });
+  await expect(page.locator("#map-mobility")).toHaveValue("attribute.mobility");
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported 4 guests");
+
+  await page.locator("#nav-rules").click();
+  await page.locator("#new-rule-shape").selectOption("table_property_need");
+  await page.locator("#add-rule").click();
+  await page.locator("#rule-0-attribute").fill("mobility");
+  await page.locator("#rule-0-attribute").blur();
+  await page.locator("#rule-0-value").fill("wheelchair");
+  await page.locator("#rule-0-value").blur();
+  await page.locator("#rule-0-property").fill("accessible");
+  await page.locator("#rule-0-property").blur();
+  await page.locator("#rule-weight-0").fill("7");
+  await page.locator("#rule-weight-0").blur();
+
+  await page.locator("#nav-plan").click();
+  const request = page.waitForRequest(req => req.url().endsWith("/v1/solve"));
+  const response = page.waitForResponse(res => res.url().endsWith("/v1/solve"));
+  await page.locator("#solve-plan").click();
+  const payload = (await request).postDataJSON();
+  expect(payload.tables.find(t => t.id === "A").properties).toEqual(["accessible", "aisle-edge"]);
+  expect(payload.layout.floors[0].tables.find(t => t.table_id === "A").properties)
+    .toEqual(["accessible", "aisle-edge"]);
+  expect(payload.rules[0].shape).toBe("table_property_need");
+  const solved = (await response).json();
+  const plan = await solved;
+  expect(plan.status).toMatch(/^(optimal|feasible)$/);
+  const family = plan.assignments.find(assignment => assignment.group_id === "registration:2");
+  expect(family.table_id).toBe("A");
+  expect(family.guest_ids).toHaveLength(2);
+  expect(plan.total_score).toBe(14);
+  expect(plan.score_breakdown.find(item => item.rule_id === "rule-1").points).toBe(14);
+  expect(family.reasons.some(reason => reason.rule_id === "rule-1" &&
+    reason.description.includes("Guest need mobility=wheelchair") && reason.points === 14)).toBe(true);
+  await expect(page.locator("#notice")).toContainText("Solver returned");
+  await expect(page.locator(".reasons")).toContainText("Guest need mobility=wheelchair");
+  expect(errors).toEqual([]);
+});
