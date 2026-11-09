@@ -114,6 +114,17 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await page.locator("#view-cards").click();
   expect((await pdfResponse).status()).toBe(200);
   await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
+  await expect(page.locator("#cards-per-page")).toHaveValue("1");
+  const firstCardsUrl = await page.locator("#cards-preview").getAttribute("src");
+  const fourResponse = page.waitForResponse(r => r.url().includes("/v1/exports/table-cards/pdf?cards_per_page=4"));
+  await page.locator("#cards-per-page").selectOption("4");
+  expect((await fourResponse).status()).toBe(200);
+  await expect(page.locator("#cards-preview")).not.toHaveAttribute("src", firstCardsUrl);
+  const twoResponse = page.waitForResponse(r => r.url().includes("/v1/exports/table-cards/pdf?cards_per_page=2"));
+  await page.locator("#cards-per-page").selectOption("2");
+  expect((await twoResponse).status()).toBe(200);
+  await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
+  await page.locator("#cards-per-page").selectOption("1");
 
   await page.locator("#view-json").click();
   await expect(page.locator("pre").first()).toContainText('"score_breakdown"');

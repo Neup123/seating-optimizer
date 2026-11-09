@@ -194,7 +194,7 @@ test("solved plan switches between all API exports and shows reasons, compromise
     if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
     if (path === "/v1/exports/floor-map/svg") return { pages: [{zone_id: "ground",
       svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>family-one</text></svg>'}] };
-    if (path === "/v1/exports/table-cards/pdf") return new Blob(["%PDF"],{type:"application/pdf"});
+    if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"],{type:"application/pdf"});
     if (path === "/v1/exports/json") return plan;
     throw Error("Unexpected request " + path);
   });
@@ -217,6 +217,14 @@ test("solved plan switches between all API exports and shows reasons, compromise
   click($("#view-cards"));
   await until(() => !!$("#cards-preview"));
   assert.equal($("#cards-preview").src, "blob:test/print");
+  assert.equal($("#cards-per-page").value, "1");
+  setValue($("#cards-per-page"), "4", dom.window);
+  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4"));
+  await until(() => !!$("#cards-preview"));
+  click($("#download-cards"));
+  await until(() => calls.filter(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4").length === 2);
+  setValue($("#cards-per-page"), "2", dom.window);
+  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=2"));
   click($("#view-json"));
   await until(() => root.textContent.includes('"score_breakdown"'));
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
