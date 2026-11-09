@@ -141,7 +141,13 @@ export function createApp(root, api = createGateway()) {
     if (working) return;
     working = true;
     state.retryAction = null;
-    try { await task(); }
+    try {
+      await task();
+      // Downloads have no separate success notice; clear the stale failure
+      // after a successful retry. loadView may register its own preview retry.
+      if (state.error && !state.retryAction)
+        announce("Request completed successfully.", false);
+    }
     catch (error) {
       state.retryAction = task;
       announce(friendlyApiError(error), true);
