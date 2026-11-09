@@ -151,7 +151,8 @@ export function createApp(root, api = createGateway()) {
     return {
       session_id: state.sessionId,
       zones: state.zones.map(z => ({ id: z.id, name: z.name })),
-      tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id, capacity: Number(t.capacity) })),
+      tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id,
+        capacity: Number(t.capacity), properties: [...(t.properties || [])] })),
       guests: state.guests,
       rules: state.rules,
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
