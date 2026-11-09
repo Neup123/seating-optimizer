@@ -465,6 +465,65 @@ export function createApp(root, api = createGateway()) {
     return area;
   }
 
+  function defaultRuleParameters(spec) {
+    const params = {};
+    spec.fields.forEach(f => {
+      if (f.kind === "select" && f.choices.length) params[f.name] = f.choices[0];
+    });
+    if (spec.shape === "global_pattern") {
+      // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
+      params.scope = "global";
+      params.enabled = false;
+      params.conditions = [
+        { fact: "groups_at_table", op: "==", value: 1 },
+        { fact: "empty_seats", op: "==", value: 1 }
+      ];
+    }
+    return params;
+  }
+
+  function renderPatternEditor(rule, index) {
+    const panel = element("div", "pattern-editor");
+    panel.append(element("p", "muted",
+      "Scope: whole plan · All comparisons are AND clauses, evaluated per table. " +
+      "Every matching table earns or loses the selected weight."));
+    const facts = [
+      ["groups_at_table", "Number of groups at table"],
+      ["occupied_seats", "Occupied seats at table"],
+      ["empty_seats", "Empty seats at table"]
+    ];
+    const operators = [
+      ["==", "equals"], ["!=", "does not equal"], ["<", "less than"],
+      ["<=", "at most"], [">", "greater than"], [">=", "at least"]
+    ];
+    const conditions = Array.isArray(rule.parameters.conditions) ? rule.parameters.conditions : [];
+    conditions.forEach((condition, j) => {
+      const clause = element("div", "pattern-clause");
+      clause.append(selectField("Table fact", facts, condition.fact, value => {
+        condition.fact = value; invalidate();
+      }, { id: "rule-" + index + "-pattern-" + j + "-fact" }));
+      clause.append(selectField("Comparison", operators, condition.op, value => {
+        condition.op = value; invalidate();
+      }, { id: "rule-" + index + "-pattern-" + j + "-op" }));
+      clause.append(textField("Count", condition.value, value => {
+        condition.value = Number(value); invalidate();
+      }, { type: "number", min: 0, step: 1, id: "rule-" + index + "-pattern-" + j + "-value" }));
+      clause.append(action("Remove comparison", () => {
+        if (conditions.length === 1) return announce("A pattern requires at least one comparison.", true);
+        conditions.splice(j, 1);
+        invalidate(); render();
+      }, "danger small", "rule-" + index + "-remove-pattern-" + j));
+      panel.append(clause);
+    });
+    panel.append(action("Add comparison", () => {
+      if (conditions.length >= 8) return announce("Patterns support up to eight comparisons.", true);
+      if (!Array.isArray(rule.parameters.conditions)) rule.parameters.conditions = [];
+      rule.parameters.conditions.push({ fact: "occupied_seats", op: ">=", value: 1 });
+      invalidate(); render();
+    }, "secondary small", "rule-" + index + "-add-pattern"));
+    return panel;
+  }
+
   function renderRules() {
     const area = element("div", "form-measure rules-flow");
     const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
