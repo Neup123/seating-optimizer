@@ -195,7 +195,7 @@ export function createApp(root, api = createGateway()) {
     state.layout = copy.layout;
     state.rules = copy.rules;
     state.nextRule = Math.max(1, ...state.rules.map(r => {
-      const match = /^rule-(\\d+)$/.exec(r.id);
+      const match = /^rule-(\d+)$/.exec(r.id);
       return match ? Number(match[1]) + 1 : 1;
     }));
     state.focusedFloor = state.layout.floors[0]?.zone_id || "";

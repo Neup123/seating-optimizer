@@ -322,10 +322,11 @@ test("corrupt storage is ignored and a storage quota failure is visible rather t
   });
   assert.equal(first.app.state.guests.length, 0);
   assert.ok(first.$("#new-session"));
-  const original = first.dom.window.localStorage.setItem.bind(first.dom.window.localStorage);
-  first.dom.window.localStorage.setItem = () => { throw Error("quota"); };
-  first.app.show("map");
-  // jsdom Storage method may be non-writable; force the warning only when overridden.
-  if (first.app.state.storageWarning) assert.match(first.root.textContent, /storage/i);
-  first.dom.window.localStorage.setItem = original;
+  const proto = first.dom.window.Storage.prototype;
+  const original = proto.setItem;
+  proto.setItem = () => { throw Error("quota"); };
+  try {
+    first.app.show("map");
+    assert.match(first.root.textContent, /Browser storage is unavailable or full/);
+  } finally { proto.setItem = original; }
 });

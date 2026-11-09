@@ -167,7 +167,7 @@ test("single-floor venue and rules template prepared before import works in a ne
   await page.locator("#nav-import").click();
   await page.locator("#guest-file").setInputFiles({
     name: "one-hall.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Party Size\\nAlpha,2\\n")
+    buffer: Buffer.from("Guest Name,Party Size\nAlpha,2\n")
   });
   await expect(page.locator("#map-guest-name")).toHaveValue("name");
   await page.locator("#import-guests").click();

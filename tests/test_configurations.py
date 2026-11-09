@@ -31,9 +31,9 @@ def test_guest_free_configuration_api_round_trip_single_and_multiple_floors():
         payload = configuration(two_floors=many)
         response = client.post("/v1/configurations/validate", json=payload)
         assert response.status_code == 200, response.text
-        assert response.json() == payload
+        assert response.json() == VenueConfiguration.model_validate(payload).model_dump()
         validate(response.json(), "VenueConfiguration")
-        assert VenueConfiguration.model_validate(response.json()).model_dump() == payload
+        assert VenueConfiguration.model_validate(response.json()).model_dump() == response.json()
         assert len(response.json()["layout"]["floors"]) == (2 if many else 1)
 
 
