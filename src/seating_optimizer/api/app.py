@@ -5,7 +5,6 @@ import base64
 import binascii
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
@@ -122,8 +121,10 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/exports/table-cards/pdf")
     def table_cards_pdf_export(
-        plan: Plan, cards_per_page: Literal[1, 2, 4] = Query(default=1)
+        plan: Plan, cards_per_page: int = Query(default=1)
     ) -> Response:
+        if cards_per_page not in (1, 2, 4):
+            raise HTTPException(status_code=422, detail="cards_per_page must be 1, 2 or 4")
         try:
             pdf = render_table_cards_pdf(plan, cards_per_page=cards_per_page)
         except ValueError as exc:

@@ -726,7 +726,8 @@ export function createApp(root, api = createGateway()) {
         ["4", "4 per page (A4)"]
       ], state.cardsPerPage, value => {
         state.cardsPerPage = Number(value);
-        attempt(() => loadView("cards"));
+        // Density previews are read-only; allow changes while a download is in flight.
+        loadView("cards");
       }, { id: "cards-per-page" }));
       if (viewObjectUrl) {
         const frame = element("iframe", "print-preview");
@@ -787,7 +788,9 @@ export function createApp(root, api = createGateway()) {
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
       else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
       else {
+        const density = state.cardsPerPage;
         const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
+        if (density !== state.cardsPerPage || state.view !== "cards") return;
         if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
         viewObjectUrl = URL.createObjectURL(blob);
       }
