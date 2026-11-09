@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { createApp } from "../../src/seating_optimizer/api/web/app.js";
+import { createApp, createGateway, friendlyApiError } from "../../src/seating_optimizer/api/web/app.js";
 
 const catalog = {
   shapes: [
@@ -222,4 +222,86 @@ test("solved plan switches between all API exports and shows reasons, compromise
   assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
   assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
+});
+
+test("gateway sanitizes raw fetch/network exceptions but preserves meaningful HTTP diagnostics", async () => {
+  const gateway = createGateway(async () => { throw new TypeError("Failed to fetch"); });
+  await assert.rejects(() => gateway.get("/v1/rules/catalog"),
+    /Could not reach the server.*try again/);
+  assert.equal(friendlyApiError(Error("NetworkError when attempting to fetch resource.")),
+    "Could not reach the server — check your connection and try again.");
+  const bad = createGateway(async () => ({
+    ok: false, status: 422, text: async () => JSON.stringify({ detail: "Invalid layout geometry" })
+  }));
+  await assert.rejects(() => bad.post("/v1/layouts/import", {}), /Invalid layout geometry/);
+});
+
+test("import, venue validation, solve and export retry only the failed request without losing state", async () => {
+  const offline = new Set(["/v1/import/preview"]);
+  const handler = async (path, payload) => {
+    if (offline.has(path)) throw new TypeError("Failed to fetch");
+    if (path === "/v1/import/preview") return {
+      headers: ["Guest Name", "Party Size"], mapping: { "Guest Name": "name", "Party Size": "size" },
+      sample_rows: [], issues: []
+    };
+    if (path === "/v1/import") return {
+      guests: [{ id: "g1", name: "Alice", attributes: {}, group_id: "family" }],
+      rows_imported: 1, issues: []
+    };
+    if (path === "/v1/layouts/import") return layout;
+    if (path === "/v1/solve") return plan;
+    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
+    if (path === "/v1/exports/table-cards/pdf") return new Blob(["%PDF"], { type: "application/pdf" });
+    return {};
+  };
+  const { app, dom, $, root, calls } = await setup(handler);
+  upload($("#guest-file"), "guests.csv", new TextEncoder().encode("Guest Name,Party Size\nAlice,1\n"), dom.window);
+  await until(() => !!$("#retry-action"));
+  assert.match($("#notice").textContent, /Could not reach the server/);
+  assert.doesNotMatch(root.textContent, /Failed to fetch/);
+  assert.equal(app.state.preview, null);
+  offline.delete("/v1/import/preview");
+  click($("#retry-action"));
+  await until(() => !!$("#map-guest-name"));
+  assert.equal(calls.filter(([path]) => path === "/v1/import/preview").length, 2);
+  click($("#import-guests"));
+  await until(() => app.state.guests.length === 1);
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("map");
+  offline.add("/v1/layouts/import");
+  click($("#validate-layout"));
+  await until(() => !!$("#retry-action"));
+  assert.deepEqual(app.state.layout, layout);
+  offline.delete("/v1/layouts/import");
+  click($("#retry-action"));
+  await until(() => root.textContent.includes("Venue layout validated"));
+  app.show("plan");
+  offline.add("/v1/solve");
+  click($("#solve-plan"));
+  await until(() => !!$("#retry-action"));
+  assert.equal(app.state.plan, null);
+  offline.delete("/v1/solve");
+  click($("#retry-action"));
+  await until(() => !!app.state.plan);
+  assert.match(root.textContent, /Table G1: Alice and Bob/);
+  // An export-preview failure offers Retry for that export, not re-solve.
+  offline.add("/v1/exports/table-cards/pdf");
+  click($("#view-cards"));
+  await until(() => !!$("#retry-action"));
+  assert.ok(app.state.plan);
+  assert.doesNotMatch(root.textContent, /Failed to fetch/);
+  offline.delete("/v1/exports/table-cards/pdf");
+  click($("#retry-action"));
+  await until(() => !!$("#cards-preview"));
+  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 2);
+  app.show("map");
+  offline.add("/v1/layouts/import");
+  click($("#export-layout"));
+  await until(() => !!$("#retry-action"));
+  offline.delete("/v1/layouts/import");
+  click($("#retry-action"));
+  await until(() => root.textContent.includes("Venue layout validated") || !$("#retry-action"));
+  assert.equal(calls.filter(([path]) => path === "/v1/layouts/import").length, 4);
 });

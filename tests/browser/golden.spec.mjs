@@ -125,3 +125,36 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
     " floors=" + plan.layout.floors.length +
     " tables=" + plan.tables.length + " hard_violations=0");
 });
+
+test("transient solve network failures show Retry and recover without losing the imported plan inputs", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("#nav-map").click();
+  await page.locator('#floor-form input[name="id"]').fill("hall");
+  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator("#add-floor").click();
+  await page.locator("#new-table-id").fill("T1");
+  await page.locator("#new-table-capacity").fill("4");
+  await page.locator("#add-table").click();
+  await page.locator("#nav-import").click();
+  await page.locator("#guest-file").setInputFiles({
+    name: "retry.csv", mimeType: "text/csv",
+    buffer: Buffer.from("Guest Name,Party Size\nAlice,2\n")
+  });
+  await expect(page.locator("#map-guest-name")).toHaveValue("name");
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+  await page.locator("#nav-plan").click();
+  let offline = true;
+  await page.route("**/v1/solve", route => offline ? route.abort("failed") : route.continue());
+  await page.locator("#solve-plan").click();
+  await expect(page.locator("#notice")).toContainText("Could not reach the server");
+  await expect(page.locator("#retry-action")).toBeVisible();
+  await expect(page.locator("#notice")).not.toContainText("Failed to fetch");
+  await expect(page.locator(".pill").first()).toContainText("2 guests");
+  offline = false;
+  await page.locator("#retry-action").click();
+  await expect(page.locator("#notice")).toContainText("Solver returned");
+  await expect(page.locator("pre").first()).toContainText("Table T1");
+  await expect(page.locator("#retry-action")).toHaveCount(0);
+  await page.unroute("**/v1/solve");
+});
