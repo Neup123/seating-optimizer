@@ -54,7 +54,7 @@ The docs are served at http://127.0.0.1:8000/docs, using **Scalar** (not Swagger
     print(render(plan, "table"))
     full_plan_json = render(plan, "json")
 
-Every meal sitting has its own Problem and session_id; zones and tables can be reused. Every table has its own chair capacity, enforced as a hard ceiling. Every group of guests with the same group_id shares one placement variable: groups can never split.
+Every meal sitting has its own Problem and session_id; zones and tables can be reused. Every table has its own chair capacity, enforced as a hard ceiling. Groups are atomic by default. Only a lone group larger than every single table may split across a connected set of adjacent table drawings on one floor; all other groups remain unsplit.
 
 Possible statuses are optimal, feasible, infeasible and unknown. Infeasible plans report a sufficient (not necessarily minimal) named conflicting-constraint set. Unknown means the solve timed out without a feasible plan, **not** proven infeasibility. Configurable SolverConfig fields: time_limit_seconds (default 5), workers (default 8) and random_seed.
 
@@ -71,7 +71,7 @@ Rules always contain an id, shape, mode (hard or soft), parameters, and a positi
 | fill_efficiency | none | Penalize empty chairs at **occupied** tables (holes), by its weight. Completely unused tables are not penalized. |
 | pin | target, table | Hard pin for any member or their group, respected on re-solve. |
 
-Hard zone restrictions propagate from any guest to the **entire** atomic group. Contradictory member restrictions lead to an infeasible result, not splitting or hard-rule violation. A weighted rule contributes points only when its condition holds; the plan includes per-group rule-based reasons with contributed points, score breakdown per soft rule, compromises for forgone preferences, and remaining chairs per table. Shared pair points are distributed fairly in assignment-level reasons.
+Hard zone restrictions propagate from any guest to the **entire** group, including all portions of an oversized adjacent-table split. Contradictory restrictions lead to an infeasible result, not a hard-rule violation. A weighted rule contributes points only when its condition holds; the plan includes per-group rule-based reasons with contributed points, score breakdown per soft rule, compromises for forgone preferences, and remaining chairs per table. Shared pair points are distributed fairly in assignment-level reasons.
 
 ## CSV and XLSX import
 
@@ -238,10 +238,21 @@ require the connected placement; soft together requests earn their original
 weight only when it is achieved. Plan explanations distinguish same table,
 nearby tables because no single table fits, and unachievable requests.
 
-**Atomic-group invariant:** the system never divides an imported group among
-tables. Thus one individual group larger than every table remains infeasible,
-including if adjacent tables have enough chairs in total. The issue's proposed
-single-group split would require changing this standing invariant; that exception
-has deliberately not been introduced. Without a drawable floor layout, the
-adjacency fallback cannot be verified and hard oversized together requests
-are reported infeasible rather than inventing proximity data.
+**Exceptional lone-group split:** if one imported group by itself exceeds
+**every** table's capacity and is not part of a together-linked party, its
+members may be distributed across a connected, same-floor set of adjacent
+drawings. Each guest appears exactly once. The solver respects all hard rules,
+including restrictions inherited by the group and whole-party pins. The
+Plan records **one assignment per occupied table portion**, repeating the
+original group ID while listing only the guests physically at that table.
+Each portion's written reasons explain that the group split across the named
+adjacent tables because no single table fits. JSON, table/people lists,
+floor maps and table cards use the actual portions. This never permits a
+convenience split when any one table has enough capacity.
+
+An oversized lone group is **infeasible** when no permitted connected
+same-floor table set can fit it; distant, disconnected or cross-floor
+tables cannot be combined. Every other group remains atomic, and
+together-linked clusters keep the separate linked-cluster fallback described
+above. Without drawable geometry the engine cannot establish adjacency,
+so it reports the oversized hard case as unachievable rather than guessing.
