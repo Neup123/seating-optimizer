@@ -219,3 +219,29 @@ To add a consideration, first select its shape in the **Add a new consideration*
 From the **Seating plan** page, choose **People list** (one combined table), **People by floor** (a separate list for each floor / room), **Table list** (one combined table of group-to-table assignments), or **Per-table lists** (a separate list for each table). Each view has an **Include written reasons** checkbox, initially unchecked when selecting a view. It controls the list preview, the **Print list** action (including the browser's Save as PDF option), and **Download list HTML**. The resulting HTML is self-contained and may be re-opened or printed elsewhere; table cards and floor maps are unchanged.
 
 These formats are stateless views of the exact solved `Plan` supplied to the API. Every guest ID/name, group ID, table ID and floor/room zone ID comes from that object; the reasons-on variant writes each recorded reason description **verbatim** (escaped only for safe HTML display), and the default omits all written reasons. The Plan has **table assignments but no individual chair / numbered seat field**; exports therefore show the recorded table rather than inventing seat numbers. Use `/v1/exports/json` for the lossless machine-readable Plan. An infeasible Plan cannot be printed as an assignment list.
+
+
+### Sit-together requests and adjacent tables
+
+The `pair` rule's **together** relationship still means the **same table**
+when a single table is large enough for the entire transitive together-linked
+party. Hard together rules enforce that placement; soft rules score it with
+usual weights. Adjacency never earns a score as an ordinary alternative.
+
+When a linked set of **distinct atomic groups** exceeds the capacity of every
+single table, the engine can use a connected set of neighbouring table drawings
+**on one floor**. The neighbour graph is derived from each drawing's nearest
+other drawing by edge-to-edge distance; equidistant ties count and different
+floors never connect. A connected cluster must contain only tables occupied by
+the linked party (no empty intermediate table may bridge a gap). Hard requests
+require the connected placement; soft together requests earn their original
+weight only when it is achieved. Plan explanations distinguish same table,
+nearby tables because no single table fits, and unachievable requests.
+
+**Atomic-group invariant:** the system never divides an imported group among
+tables. Thus one individual group larger than every table remains infeasible,
+including if adjacent tables have enough chairs in total. The issue's proposed
+single-group split would require changing this standing invariant; that exception
+has deliberately not been introduced. Without a drawable floor layout, the
+adjacency fallback cannot be verified and hard oversized together requests
+are reported infeasible rather than inventing proximity data.
