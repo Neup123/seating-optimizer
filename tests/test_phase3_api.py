@@ -117,6 +117,14 @@ def test_browser_files_are_actually_served_with_correct_media_types():
     assert "createApp" in js.text and "/v1/solve" in js.text
     assert "text/css" in css.headers["content-type"]
     assert "grid-template-columns" in css.text
+    selection = client.get("/assets/plan-selection.js")
+    workspace = client.get("/assets/plan-workspace.js")
+    assert selection.status_code == workspace.status_code == 200
+    assert "text/javascript" in selection.headers["content-type"]
+    assert "text/javascript" in workspace.headers["content-type"]
+    assert "togglePlanSelection" in selection.text
+    assert 'from "./plan-selection.js"' in workspace.text
+
 
 
 def test_corrupt_xlsx_reports_diagnostics_without_500_or_silent_acceptance():

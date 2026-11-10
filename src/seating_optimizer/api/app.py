@@ -181,6 +181,14 @@ def create_app() -> FastAPI:
     def visual_client_script() -> FileResponse:
         return FileResponse(web_dir / "app.js", media_type="text/javascript")
 
+    @app.get("/assets/plan-selection.js", include_in_schema=False)
+    def visual_plan_selection_script() -> FileResponse:
+        return FileResponse(web_dir / "plan-selection.js", media_type="text/javascript")
+
+    @app.get("/assets/plan-workspace.js", include_in_schema=False)
+    def visual_plan_workspace_script() -> FileResponse:
+        return FileResponse(web_dir / "plan-workspace.js", media_type="text/javascript")
+
     @app.get("/assets/style.css", include_in_schema=False)
     def visual_client_styles() -> FileResponse:
         return FileResponse(web_dir / "style.css", media_type="text/css")

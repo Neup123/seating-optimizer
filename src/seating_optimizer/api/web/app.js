@@ -1,15 +1,16 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
+import { renderPlanWorkspace } from "./plan-workspace.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const VIEWS = [["table", "Table view"], ["people", "People list"], ["people-floor", "People by floor"],
   ["groups", "Table list"], ["groups-table", "Per-table lists"],
-  ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+  ["floor", "Floor maps"], ["cards", "Table cards"], ["print", "Print preview"], ["json", "JSON plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table"]);
 const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected"];
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat"];
 
 function storedJSON(key, fallback) {
   try {
@@ -193,6 +194,8 @@ export function createApp(root, api = createGateway()) {
       catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+       selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
+       workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
       templateName: "", templateSelected: "", storageWarning: ""
     };
@@ -214,6 +217,7 @@ export function createApp(root, api = createGateway()) {
   }
   let viewObjectUrl = null;
   let listContentEndpoint = null;
+  let viewRequest = 0;
   let working = false;
   let noticesIssued = 0;
 
@@ -329,7 +333,7 @@ export function createApp(root, api = createGateway()) {
     }
     finally { working = false; }
   }
-  function invalidate() { state.plan = null; state.viewContent = null; }
+  function invalidate() { state.plan = null; state.viewContent = null; state.selectedPlanItem = null; clearObjectUrl(); ++viewRequest; }
   function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
   function configuredTables() { return state.tables.filter(t => Number.isInteger(Number(t.capacity)) && Number(t.capacity) > 0); }
   function projectProblem() {
@@ -408,10 +412,10 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
-    if (state.screen === "plan" && LIST_VIEWS.has(state.view) &&
-        typeof state.viewContent === "string" &&
-        listContentEndpoint !== listEndpoint(state.view)) {
-      void loadView(state.view);
+    if (state.screen === "plan" && state.view === "print" &&
+        LIST_VIEWS.has(state.printFormat) && typeof state.viewContent === "string" &&
+        listContentEndpoint !== listEndpoint(state.printFormat)) {
+      void loadView("print");
       return;
     }
     saveSession();
@@ -1161,6 +1165,12 @@ export function createApp(root, api = createGateway()) {
         state.plan = plan;
         state.view = "table";
         state.viewContent = null;
+        state.selectedPlanItem = null;
+        state.expandedPartyKey = null;
+        state.workspaceFloor = "";
+        state.focusedTableId = "";
+        ++viewRequest;
+        clearObjectUrl();
         announce("Solver returned " + plan.status.toUpperCase() + "; " +
           (plan.assignments?.length || 0) + " group " +
           ((plan.assignments?.length || 0) === 1 ? "assignment." : "assignments."));
@@ -1194,7 +1204,7 @@ export function createApp(root, api = createGateway()) {
     const views = card("Plan views");
     const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
     VIEWS.forEach(([name,title]) => {
-      const b = action(title, () => attempt(() => loadView(name)), "");
+      const b = action(title, () => { void loadView(name); }, "");
       b.id = "view-" + name;
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", state.view === name ? "true" : "false");
@@ -1202,108 +1212,107 @@ export function createApp(root, api = createGateway()) {
     });
     views.append(tabs);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
-    if (LIST_VIEWS.has(state.view)) {
-      views.append(element("h3", "", state.view.startsWith("people") ? "People and their assigned tables" :
-        "Groups and their assigned tables"));
-      const toggle = element("label", "print-reasons-toggle");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.id = "print-reasons";
-      checkbox.checked = Boolean(state.includeReasons);
-      checkbox.addEventListener("change", () => {
-        state.includeReasons = checkbox.checked;
-        loadView(state.view);
-      });
-      toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
-      views.append(toggle);
-      const available = [...new Set((plan.assignments || []).flatMap(
-        entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
-      if (available.length) {
-        const importHeaders = importColumnHeaders();
-        const picker = element("fieldset", "list-field-picker");
-        picker.append(element("legend", "", "Additional import columns"));
-        for (const key of available) {
-          const label = element("label", "list-field-choice");
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.value = key;
-          checkbox.checked = (state.listFields || []).includes(key);
-          checkbox.addEventListener("change", () => {
-            state.listFields = checkbox.checked
-              ? [...(state.listFields || []).filter(k => available.includes(k)), key]
-              : (state.listFields || []).filter(k => k !== key);
-            loadView(state.view);
-          });
-          label.append(checkbox, element("span", "", attributeLabel(key, importHeaders)));
-          picker.append(label);
+    if (state.view === "print") {
+      views.append(element("p", "muted", "Print preview is separate from the interactive workspace. The server produces the exact printable pages below."));
+      views.append(selectField("Document", [
+        ["people", "People list"], ["people-floor", "People by floor"],
+        ["groups", "Table list"], ["groups-table", "Per-table pages"],
+        ["floor", "Floor maps PDF"], ["cards", "Table cards PDF"]
+      ], state.printFormat, value => {
+        state.printFormat = value;
+        state.includeReasons = false;
+        loadView("print");
+      }, { id: "print-format" }));
+      if (LIST_VIEWS.has(state.printFormat)) {
+        const toggle = element("label", "print-reasons-toggle");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.id = "print-reasons";
+        checkbox.checked = Boolean(state.includeReasons);
+        checkbox.addEventListener("change", () => {
+          state.includeReasons = checkbox.checked;
+          loadView("print");
+        });
+        toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
+        views.append(toggle);
+        if (state.printFormat.startsWith("people")) {
+          const available = [...new Set((plan.assignments || []).flatMap(
+            entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
+          if (available.length) {
+            const importHeaders = importColumnHeaders();
+            const picker = element("fieldset", "list-field-picker");
+            picker.append(element("legend", "", "Additional import columns"));
+            for (const key of available) {
+              const label = element("label", "list-field-choice");
+              const choice = document.createElement("input");
+              choice.type = "checkbox";
+              choice.value = key;
+              choice.checked = (state.listFields || []).includes(key);
+              choice.addEventListener("change", () => {
+                state.listFields = choice.checked
+                  ? [...(state.listFields || []).filter(k => available.includes(k)), key]
+                  : (state.listFields || []).filter(k => k !== key);
+                loadView("print");
+              });
+              label.append(choice, element("span", "", attributeLabel(key, importHeaders)));
+              picker.append(label);
+            }
+            views.append(picker);
+          }
         }
-        views.append(picker);
+        if (typeof state.viewContent === "string") {
+          const frame = element("iframe", "print-preview list-preview");
+          frame.id = "list-preview";
+          frame.title = "Print preview of " + state.printFormat;
+          frame.srcdoc = state.viewContent;
+          views.append(frame);
+          views.append(row(
+            action("Print from preview", () => {
+              const target = document.getElementById("list-preview");
+              if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
+              target.contentWindow.focus();
+              target.contentWindow.print();
+            }, "primary", "print-list"),
+            action("Download list HTML", () => {
+              downloadBlob(state.viewContent, state.printFormat +
+                (state.includeReasons ? "-reasons" : "") + ".html", "text/html;charset=utf-8");
+            }, "secondary", "download-list")
+          ));
+        } else views.append(element("p", "muted", "Loading print pages…"));
+      } else {
+        if (state.printFormat === "cards") views.append(selectField("Cards per page", [
+          ["1", "1 per page (A5)"], ["2", "2 per page (A4)"], ["4", "4 per page (A4)"]
+        ], state.cardsPerPage, value => {
+          state.cardsPerPage = Number(value); loadView("print");
+        }, { id: "cards-per-page" }));
+        if (viewObjectUrl) {
+          const frame = element("iframe", "print-preview");
+          frame.id = state.printFormat === "cards" ? "cards-preview" : "floor-preview";
+          frame.title = "Printable " + state.printFormat + " PDF";
+          frame.src = viewObjectUrl;
+          views.append(frame);
+          views.append(row(
+            action("Print from preview", () => {
+              const target = document.getElementById(frame.id);
+              if (!target?.contentWindow?.print) throw Error("PDF printing unavailable in this browser. Download the PDF to print it.");
+              target.contentWindow.focus();
+              target.contentWindow.print();
+            }, "primary", "print-preview-document"),
+            action("Download PDF", () => attempt(async () => {
+              const endpoint = state.printFormat === "floor"
+                ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+              const blob = await api.post(endpoint, state.plan, "blob");
+              downloadBlob(blob, state.printFormat === "floor" ? "floor-maps.pdf" : "table-cards.pdf",
+                "application/pdf");
+            }), "secondary", state.printFormat === "cards" ? "download-cards" : "download-floor-pdf")
+          ));
+        } else views.append(element("p", "muted", "Loading PDF preview…"));
       }
-      if (typeof state.viewContent === "string") {
-        const frame = element("iframe", "print-preview list-preview");
-        frame.id = "list-preview";
-        frame.title = "Printable assignment list";
-        frame.srcdoc = state.viewContent;
-        views.append(frame);
-        views.append(row(
-          action("Print list", () => {
-            const target = document.getElementById("list-preview");
-            if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
-            target.contentWindow.focus();
-            target.contentWindow.print();
-          }, "primary", "print-list"),
-          action("Download list HTML", () => {
-            downloadBlob(state.viewContent, state.view + (state.includeReasons ? "-reasons" : "") + ".html",
-              "text/html;charset=utf-8");
-          }, "secondary", "download-list")
-        ));
-      } else views.append(element("p", "muted", "Loading printable list…"));
-    } else if (state.view === "table") {
-      views.append(element("h3", "", "Table-by-table assignments"));
-      views.append(element("pre", "", typeof state.viewContent === "string" ? state.viewContent : "Loading table view…"));
     } else if (state.view === "json") {
       views.append(element("h3", "", "Machine-readable plan"));
       views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
-    } else if (state.view === "floor") {
-      const pages = state.viewContent?.pages || [];
-      if (!pages.length) views.append(element("p", "muted", "Loading floor-map pages…"));
-      else {
-        const container = element("div", "");
-        const active = pages.find(p => p.zone_id === state.focusedFloor) || pages[0];
-        container.append(selectField("Floor", pages.map(p => [p.zone_id, p.zone_id]), active.zone_id,
-          value => { state.focusedFloor = value; render(); }, { id: "plan-floor-select" }));
-        const frame = element("iframe", "floor-preview");
-        frame.id = "floor-preview";
-        frame.title = "Printable seating map for " + active.zone_id;
-        frame.setAttribute("sandbox", "");
-        frame.srcdoc = active.svg;
-        container.append(frame);
-        container.append(action("Download full floor-map PDF", () => attempt(async () => {
-          const blob = await api.post("/v1/exports/floor-map/pdf", state.plan, "blob");
-          downloadBlob(blob, "floor-maps.pdf", "application/pdf");
-        }), "secondary", "download-floor-pdf"));
-        views.append(container);
-      }
     } else {
-      views.append(element("h3", "", "Printable table cards"));
-      views.append(selectField("Cards per page", [
-        ["1", "1 per page (A5, current default)"],
-        ["2", "2 per page (A4)"],
-        ["4", "4 per page (A4)"]
-      ], state.cardsPerPage, value => {
-        state.cardsPerPage = Number(value);
-        // Density previews are read-only; allow changes while a download is in flight.
-        loadView("cards");
-      }, { id: "cards-per-page" }));
-      if (viewObjectUrl) {
-        const frame = element("iframe", "print-preview");
-        frame.id = "cards-preview"; frame.title = "Printable PDF table cards"; frame.src = viewObjectUrl;
-        views.append(frame);
-      } else views.append(element("p", "muted", "Loading printable PDF…"));
-      views.append(action("Download table cards PDF", () => attempt(async () => {
-        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
-        downloadBlob(blob, "table-cards.pdf", "application/pdf");
-      }), "secondary", "download-cards"));
+      views.append(renderPlanWorkspace(state, { partyName, partyMembers, refresh: render }));
     }
     area.append(views);
     if ((plan.pattern_matches || []).length) {
@@ -1360,35 +1369,41 @@ export function createApp(root, api = createGateway()) {
   }
 
   async function loadView(view) {
-    if (LIST_VIEWS.has(view) && state.view !== view) state.includeReasons = false;
-    if (view === "floor" && state.plan?.layout?.floors?.length) {
+    const request = ++viewRequest;
+    if (view === "print" && state.view !== view) state.includeReasons = false;
+    if (view === "floor" && state.view !== "floor" &&
+        state.plan?.layout?.floors?.length)
       state.focusedFloor = state.plan.layout.floors[0].zone_id;
-    }
     state.view = view;
     state.viewContent = null;
     state.viewError = "";
     clearObjectUrl();
     render();
     try {
-      if (LIST_VIEWS.has(view)) {
-        const endpoint = listEndpoint(view);
-        const content = await api.post(endpoint, state.plan, "text");
-        if (view !== state.view) return;
-        if (endpoint !== listEndpoint(view)) return loadView(view);
-        state.viewContent = content;
-        listContentEndpoint = endpoint;
-      }
-      else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
-      else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
-      else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
-      else {
-        const density = state.cardsPerPage;
-        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
-        if (density !== state.cardsPerPage || state.view !== "cards") return;
-        if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
-        viewObjectUrl = URL.createObjectURL(blob);
+      if (view === "print") {
+        const format = state.printFormat;
+        if (LIST_VIEWS.has(format)) {
+          const endpoint = listEndpoint(format);
+          const result = await api.post(endpoint, state.plan, "text");
+          if (request !== viewRequest) return;
+          if (endpoint !== listEndpoint(format)) return loadView("print");
+          state.viewContent = result;
+          listContentEndpoint = endpoint;
+        } else {
+          const density = state.cardsPerPage;
+          const endpoint = format === "floor" ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+          const blob = await api.post(endpoint, state.plan, "blob");
+          if (request !== viewRequest || (format === "cards" && density !== state.cardsPerPage)) return;
+          if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser.");
+          viewObjectUrl = URL.createObjectURL(blob);
+        }
+      } else if (view === "json") {
+        const json = await api.post("/v1/exports/json", state.plan);
+        if (request !== viewRequest) return;
+        state.viewContent = json;
       }
     } catch (error) {
+      if (request !== viewRequest) return;
       state.viewError = friendlyApiError(error);
       state.notice = state.viewError;
       state.error = true;
@@ -1396,6 +1411,7 @@ export function createApp(root, api = createGateway()) {
       render();
       return;
     }
+    if (request !== viewRequest) return;
     if (state.error) {
       state.error = false;
       state.notice = "Export preview loaded successfully.";
