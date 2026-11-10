@@ -54,7 +54,9 @@ def party_name_for(group_id: str, group_name: str | None, names: list[str]) -> s
         return inferred
     # A single registered guest is also the party's registered name.
     # The stored group_name may be missing in old plans or manual API inputs.
-    if len(names) == 1:
+    if len(names) == 1 and group_id.startswith(("registration:", "guest:")):
+        # A split portion of a larger unlabelled group can also have one
+        # member; never promote that member to the whole party's heading.
         registered = names[0].strip()
         if registered and not registered.casefold().startswith(("registration:", "guest:")):
             return registered

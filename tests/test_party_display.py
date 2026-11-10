@@ -368,10 +368,10 @@ def test_neutral_party_header_does_not_equal_a_member_named_party():
     assert "Unnamed Party — 2" in render_people_list_html(plan)
 
 @pytest.mark.parametrize(("content", "mapping"), [
-    (b"Name,Size\\nGreen Family,1\\n", None),
-    (b"Registrant,Party Count\\nGreen Family,1\\n",
+    (b"Name,Size\nGreen Family,1\n", None),
+    (b"Registrant,Party Count\nGreen Family,1\n",
      {"Registrant": "name", "Party Count": "size"}),
-    (b"Registrant,Party Count,Registered Group\\nGreen Family,1,Green Family\\n",
+    (b"Registrant,Party Count,Registered Group\nGreen Family,1,Green Family\n",
      {"Registrant": "name", "Party Count": "size", "Registered Group": "group_name"}),
 ])
 def test_named_size_one_registration_is_the_party_heading(content, mapping):
