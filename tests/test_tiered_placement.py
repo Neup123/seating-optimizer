@@ -12,6 +12,9 @@ from seating_optimizer.api.app import app
 from test_api_contract import validate
 
 
+client = TestClient(app)
+
+
 def family(group: str, size: int, *, category: str = "") -> list[Guest]:
     return [Guest(id=f"{group}-{i}", name=f"{group} {i}", group_id=group,
                   attributes={"category": category} if category else {})
