@@ -88,13 +88,13 @@ def _effects(problem: Problem, before: dict[str, str], after: dict[str, str], pl
 def _warning_rules(old: Plan, new: Plan, problem: Problem) -> list[str]:
     original = {entry.rule_id: entry.points for entry in old.score_breakdown}
     updated = {entry.rule_id: entry.points for entry in new.score_breakdown}
-    named = {rule.id: rule for rule in problem.rules}
+    named = {rule.id: rule for rule in problem.rules if rule.enabled}
     warnings = []
     for rule_id in sorted(original.keys() | updated.keys()):
         delta = updated.get(rule_id, 0) - original.get(rule_id, 0)
         if delta < 0:
             rule = named.get(rule_id)
-            desc = (f"{rule.shape}, weight {rule.weight}" if rule else "venue preference")
+            desc = (f"{rule.display_name} ({rule.shape}, weight {rule.weight})" if rule else "venue preference")
             warnings.append(f"{rule_id} ({desc}): {abs(delta)} fewer points")
     return warnings
 
@@ -320,7 +320,7 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
                  (instruction.place_id if instruction.action == "move_to" else
                   f"an allowed table outside {instruction.place_type} {instruction.place_id}") +
                  "; table capacities are infinite-weight constraints.")
-    blockers.update(f"Hard rule {rule.id} ({rule.shape}) must remain satisfied."
-                    for rule in problem.rules if rule.mode == "hard")
+    blockers.update(f"Hard rule {rule.display_name} ({rule.shape}) must remain satisfied."
+                    for rule in problem.rules if rule.enabled and rule.mode == "hard")
     return ReassignResponse(status="unknown" if unknown else "blocked",
                             blockers=sorted(blockers))

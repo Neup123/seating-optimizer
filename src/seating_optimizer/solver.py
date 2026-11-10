@@ -153,6 +153,14 @@ def _conflicting_rules(model, assumptions, problem):
 def solve(problem: Problem) -> Plan:
     """Solve one session. A separate Problem is used for each meal sitting."""
     start = perf_counter()
+    # An off rule is absent from *all* solver phases: parameter validation,
+    # linked-family and split preprocessing, hard constraints, score terms,
+    # conflict diagnostics, per-party reasons, and score breakdown.
+    # Preserve the caller's original rule records for exact re-enabling.
+    if any(not rule.enabled for rule in problem.rules):
+        problem = problem.model_copy(update={
+            "rules": [rule for rule in problem.rules if rule.enabled]
+        })
     groups, lookup = _prepare(problem)
     # Resolve identity across the ENTIRE party, never from its first member.
     # This also protects direct API solve payloads that bypass the importer.

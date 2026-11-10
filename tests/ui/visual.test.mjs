@@ -1190,3 +1190,114 @@ test("blocked reassignment names the infinite rule and does not offer Apply", as
   assert.match(root.textContent, /hard capacity/);
   assert.equal(root.querySelectorAll("[id^='apply-option-']").length, 0);
 });
+
+
+test("rule instance name, note, and compact toggle preserve legacy defaults and session data", async () => {
+  const { app, dom, $, root, storage } = await setup();
+  const legacy = { id: "legacy-lang", shape: "attribute_grouping", mode: "soft",
+    weight: 7, parameters: { attribute: "language" } };
+  app.state.rules = [structuredClone(legacy)];
+  app.show("rules");
+  const card = () => root.querySelector('[data-rule-id="legacy-lang"]');
+  assert.equal(card().querySelector("h2").textContent, "legacy-lang",
+    "A missing rule name falls back to its id");
+  assert.equal($("#rule-name-0").value, "");
+  assert.equal($("#rule-description-0").value, "");
+  assert.equal($("#rule-enabled-0").checked, true,
+    "A legacy missing enabled field means active");
+  assert.equal($("#rule-enabled-0").closest("label").tagName, "LABEL");
+  assert.ok($("#rule-enabled-0").closest("label").title.includes("Disable this rule"));
+  assert.ok($("#rule-enabled-0").closest(".rule-instance-header"),
+    "The compact toggle is on the card's existing header row");
+  assert.equal($("#rule-pattern-enabled-0"), null);
+
+  setValue($("#rule-name-0"), "  My family language preference  ", dom.window);
+  assert.equal(card().querySelector("h2").textContent, "My family language preference");
+  setValue($("#rule-description-0"), "A personal note, not the catalog type description.", dom.window);
+  assert.match(card().textContent, /A personal note, not the catalog type description/);
+  assert.equal(app.state.rules[0].name, "  My family language preference  ");
+  assert.equal(app.state.rules[0].description,
+    "A personal note, not the catalog type description.");
+
+  const before = structuredClone(app.state.rules[0]);
+  const checkbox = $("#rule-enabled-0");
+  checkbox.checked = false;
+  checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(app.state.rules[0].enabled, false);
+  assert.ok(card().classList.contains("rule-instance-off"));
+  assert.equal(card().querySelector("h2").textContent, "My family language preference");
+  assert.equal($("#delete-rule-0") !== null, true);
+  assert.deepEqual(app.state.rules[0].parameters, before.parameters);
+  assert.equal(app.state.rules[0].weight, before.weight);
+  const saved = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
+  assert.equal(saved.data.rules[0].enabled, false);
+  assert.equal(saved.data.rules[0].name, before.name);
+  assert.equal(saved.data.rules[0].description, before.description);
+
+  const returned = await setup(async () => ({}),
+    { "seating-optimizer:session:v1": JSON.stringify(saved) });
+  returned.app.show("rules");
+  assert.equal(returned.$('[data-rule-id="legacy-lang"] h2').textContent,
+    "My family language preference");
+  assert.equal(returned.$("#rule-enabled-0").checked, false);
+  assert.equal(returned.$("#rule-description-0").value, before.description);
+  const restore = returned.$("#rule-enabled-0");
+  restore.checked = true;
+  restore.dispatchEvent(new returned.dom.window.Event("change", { bubbles: true }));
+  assert.equal(returned.app.state.rules[0].enabled, true);
+  assert.deepEqual(returned.app.state.rules[0].parameters, before.parameters);
+  assert.equal(returned.app.state.rules[0].weight, 7);
+  assert.equal(returned.app.state.rules[0].name, before.name);
+  assert.equal(returned.app.state.rules[0].description, before.description);
+});
+
+test("global-pattern clause toggle remains independent of rule-instance toggle", async () => {
+  catalog.shapes.push(globalPatternSpec);
+  try {
+    const { app, dom, $ } = await setup();
+    app.show("rules");
+    setValue($("#new-rule-shape"), "global_pattern", dom.window);
+    click($("#add-rule"));
+    const instance = app.state.rules[0];
+    assert.equal(instance.enabled, true);
+    assert.equal(instance.parameters.enabled, false);
+    assert.equal($("#rule-enabled-0").checked, true);
+    assert.equal($("#rule-pattern-enabled-0").checked, false);
+    const checkbox = $("#rule-enabled-0");
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.equal(instance.enabled, false);
+    assert.equal(instance.parameters.enabled, false);
+    const clause = $("#rule-pattern-enabled-0");
+    clause.checked = true;
+    clause.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.equal(instance.parameters.enabled, true);
+    assert.equal(instance.enabled, false, "The clause control cannot enable the instance");
+    const restore = $("#rule-enabled-0");
+    restore.checked = true;
+    restore.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.equal(instance.enabled, true);
+    assert.equal(instance.parameters.enabled, true);
+  } finally {
+    catalog.shapes.pop();
+  }
+});
+
+
+test("custom instance name is shown in conflict text while rule ID remains recoverable", async () => {
+  const { app, root } = await setup();
+  app.state.rules = [
+    { id: "hard-1", name: "Seat the family downstairs", description: "",
+      enabled: true, shape: "pin", mode: "hard", weight: null,
+      parameters: { target: "a", table: "G1" } },
+    { id: "hard-2", shape: "pin", mode: "hard", weight: null,
+      parameters: { target: "a", table: "G2" } },
+  ];
+  app.state.plan = { ...structuredClone(plan), status: "infeasible",
+    conflicting_constraints: ["rule:hard-1", "rule:hard-2"],
+    message: "The hard constraints conflict.", assignments: [], tables: [] };
+  app.show("plan");
+  assert.match(root.textContent, /Seat the family downstairs \[rule:hard-1\]/);
+  assert.match(root.textContent, /rule:hard-2/,
+    "A legacy rule without a name still uses its id");
+});
