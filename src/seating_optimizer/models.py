@@ -184,6 +184,16 @@ class Rule(Model):
         return self
 
 
+class ManualInstruction(Model):
+    """Persistent human direction; precedence below infinite-weight rules."""
+    id: str = Field(min_length=1)
+    group_id: str = Field(min_length=1)
+    action: Literal["not_here", "move_to"]
+    place_type: Literal["table", "floor", "zone"]
+    place_id: str = Field(min_length=1)
+    allow_split: bool = False
+
+
 class SolverConfig(Model):
     time_limit_seconds: float = Field(default=5.0, gt=0)
     workers: int = Field(default=8, ge=1, le=64)
@@ -196,6 +206,11 @@ class Problem(Model):
     tables: list[Table]
     guests: list[Guest]
     rules: list[Rule] = Field(default_factory=list)
+    manual_instructions: list[ManualInstruction] = Field(default_factory=list)
+    # Temporary, exact per-person locks for checking option consequences.
+    # These never appear in the returned plan or persisted instructions.
+    locked_guest_tables: dict[str, str] = Field(default_factory=dict)
+    splittable_groups: list[str] = Field(default_factory=list)
     config: SolverConfig = Field(default_factory=SolverConfig)
     layout: VenueLayout | None = None
 
@@ -217,6 +232,23 @@ class Problem(Model):
             raise ValueError("Every table must reference an existing zone")
         if not all(g.id.strip() and g.name.strip() for g in self.guests):
             raise ValueError("Guests need nonempty IDs and names")
+        groups = {g.group_id or "guest:" + g.id for g in self.guests}
+        table_ids = {t.id for t in self.tables}
+        if len({i.id for i in self.manual_instructions}) != len(self.manual_instructions):
+            raise ValueError("Duplicate manual instruction ID")
+        for instruction in self.manual_instructions:
+            if instruction.group_id not in groups:
+                raise ValueError(f"Unknown manual-instruction party {instruction.group_id}")
+            if instruction.place_type == "table" and instruction.place_id not in table_ids:
+                raise ValueError(f"Unknown instruction table {instruction.place_id}")
+            if instruction.place_type in {"floor", "zone"} and instruction.place_id not in zones:
+                raise ValueError(f"Unknown instruction floor/zone {instruction.place_id}")
+        if set(self.splittable_groups) - groups:
+            raise ValueError("A splittable party is not registered")
+        if set(self.locked_guest_tables) - {g.id for g in self.guests}:
+            raise ValueError("A temporary placement names an unknown guest")
+        if set(self.locked_guest_tables.values()) - table_ids:
+            raise ValueError("A temporary placement names an unknown table")
         if self.layout is not None:
             validate_layout_references(self.layout, self.zones, self.tables)
         return self
@@ -267,6 +299,7 @@ class TableUsage(Model):
 
 class Plan(Model):
     session_id: str
+    manual_instructions: list[ManualInstruction] = Field(default_factory=list)
     status: Literal["optimal", "feasible", "infeasible", "unknown"]
     total_score: int | None = None
     assignments: list[Assignment] = Field(default_factory=list)
