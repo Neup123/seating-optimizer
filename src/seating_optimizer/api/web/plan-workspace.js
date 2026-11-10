@@ -40,7 +40,9 @@ function memberNames(assignment, partyMembers) {
   return names.length === (assignment.guest_ids || []).length ? names : [];
 }
 
-export function renderPlanWorkspace(state, { partyName, partyMembers, refresh }) {
+export function renderPlanWorkspace(state, {
+  partyName, partyMembers, refresh, proposeReassignment, applyReassignment, removeInstruction
+}) {
   const plan = state.plan;
   const area = el("div", "plan-workspace");
   const totals = partyTotals(plan);
@@ -48,6 +50,20 @@ export function renderPlanWorkspace(state, { partyName, partyMembers, refresh })
   const floors = [...new Set((plan.tables || []).map(table => table.zone_id || ""))];
   const selectItem = (kind, id) => {
     state.selectedPlanItem = togglePlanSelection(state.selectedPlanItem, kind, id);
+    state.reassignMode = null;
+    state.reassignResponse = null;
+    refresh();
+  };
+  const chooseIntent = (assignment, action) => {
+    if (assignment) state.selectedPlanItem = { kind: "party", id: assignment.group_id };
+    const current = assignment?.table_id ||
+      selectedPlanAssignments(plan, state.selectedPlanItem)[0]?.table_id;
+    state.reassignMode = action;
+    state.reassignPlaceType = "table";
+    state.reassignPlaceId = action === "not_here" ? current :
+      ((plan.tables || []).find(t => t.table_id !== current)?.table_id || current);
+    state.reassignAllowSplit = false;
+    state.reassignResponse = null;
     refresh();
   };
   const nameFor = a => portionLabel(a, totals, partyName);
@@ -93,15 +109,123 @@ export function renderPlanWorkspace(state, { partyName, partyMembers, refresh })
         state.focusedTableId = chosen[0].table_id;
         refresh();
       }, "secondary small", "focus-selected-table"));
+      bar.append(clicker("Not here", () => chooseIntent(chosen[0], "not_here"),
+        "secondary small", "intent-not-here"));
+      bar.append(clicker("Move to", () => chooseIntent(chosen[0], "move_to"),
+        "secondary small", "intent-move-to"));
       bar.append(clicker("Clear selection", () => {
-        state.selectedPlanItem = null; refresh();
+        state.selectedPlanItem = null; state.reassignMode = null;
+        state.reassignResponse = null; refresh();
       }, "quiet small", "clear-plan-selection"));
       selection.append(bar);
+
+      if (state.reassignMode) {
+        const editor = el("div", "reassign-editor");
+        const isMove = state.reassignMode === "move_to";
+        editor.append(el("h4", "", isMove ? "Move party to a place" : "Exclude party from a place"));
+        const kinds = [["table", "Table"], ["floor", "Floor"], ["zone", "Zone"]];
+        editor.append(choice("Place type", kinds, state.reassignPlaceType || "table", type => {
+          state.reassignPlaceType = type;
+          const locations = type === "table" ? (plan.tables || []).map(t => t.table_id) :
+            [...new Set((plan.tables || []).map(t => t.zone_id))];
+          state.reassignPlaceId = type === "table" ? chosen[0].table_id :
+            (floorOf(plan, chosen[0]) || locations[0] || "");
+          if (isMove) state.reassignPlaceId = locations.find(v => v !== state.reassignPlaceId) ||
+            locations[0] || "";
+          state.reassignResponse = null;
+          refresh();
+        }, "reassign-place-type"));
+        const locations = state.reassignPlaceType === "table"
+          ? (plan.tables || []).map(t => [t.table_id, "Table " + t.table_id])
+          : [...new Set((plan.tables || []).map(t => t.zone_id))].map(zone => [zone, zone]);
+        editor.append(choice(isMove ? "Destination" : "Excluded place", locations,
+          state.reassignPlaceId || "", value => {
+            state.reassignPlaceId = value; state.reassignResponse = null; refresh();
+          }, "reassign-place"));
+        const splitLabel = el("label", "reassign-split");
+        const split = el("input"); split.type = "checkbox"; split.id = "reassign-allow-split";
+        split.checked = Boolean(state.reassignAllowSplit);
+        split.addEventListener("change", () => {
+          state.reassignAllowSplit = split.checked; state.reassignResponse = null; refresh();
+        });
+        splitLabel.append(split, el("span", "", "Allow this party to split across tables (show fractions)"));
+        editor.append(splitLabel);
+        editor.append(clicker("Find feasible options", () => proposeReassignment({
+          group_id: chosen[0].group_id, action: state.reassignMode,
+          place_type: state.reassignPlaceType, place_id: state.reassignPlaceId,
+          allow_split: Boolean(state.reassignAllowSplit)
+        }), "primary small", "find-reassign-options"));
+        selection.append(editor);
+      }
       area.append(selection);
     } else {
       // Invalidate stale selections after a new solve or replacement plan.
       state.selectedPlanItem = null;
     }
+  }
+
+  if (state.reassignResponse) {
+    const response = state.reassignResponse;
+    const panel = el("section", "reassign-results");
+    panel.id = "reassign-results";
+    panel.append(el("h3", "", response.status === "available"
+      ? "Feasible reassignment options — review before applying"
+      : response.status === "unknown"
+        ? "No option confirmed within the solver time limit"
+        : "No feasible option"));
+    if (!response.options?.length) {
+      panel.append(el("p", "problem", response.status === "unknown"
+        ? "The solver has not proved infeasibility. Raise the time limit and try again."
+        : "All routes must satisfy infinite-weight rules and table capacities."));
+      const details = el("ul");
+      for (const blocker of response.blockers || []) details.append(el("li", "", blocker));
+      panel.append(details);
+    }
+    for (const option of response.options || []) {
+      const optionCard = el("article", "reassign-option");
+      optionCard.append(el("h4", "", option.title + " · " + option.kind));
+      optionCard.append(el("p", "muted", "Score change: " +
+        (option.score_delta > 0 ? "+" : "") + option.score_delta + " points"));
+      const affected = el("ul");
+      for (const move of option.movements || []) {
+        const portions = (option.plan.assignments || []).filter(a => a.group_id === move.group_id)
+          .map(a => a.table_id + " (" + a.guest_ids.length + "/" + move.people + ")").join(", ");
+        affected.append(el("li", "", move.party_name + ": " +
+          move.before.join(", ") + " → " + portions));
+      }
+      optionCard.append(el("strong", "", "People affected"), affected);
+      if (option.soft_rule_warnings?.length) {
+        const warning = el("div", "problem warning");
+        warning.append(el("strong", "", "Warning: ordinary rules overridden (finite weights only)"));
+        const list = el("ul");
+        for (const text of option.soft_rule_warnings) list.append(el("li", "", text));
+        warning.append(list);
+        optionCard.append(warning);
+      } else optionCard.append(el("p", "muted", "No additional finite-weight rule losses."));
+      optionCard.append(el("p", "muted", "All infinite-weight rules and table chair limits remain satisfied."));
+      optionCard.append(clicker("Apply this option", () => applyReassignment(option),
+        "primary small", "apply-" + option.id));
+      panel.append(optionCard);
+    }
+    area.append(panel);
+  }
+
+  if (state.manualInstructions?.length) {
+    const stored = el("section", "reassign-stored");
+    stored.id = "stored-instructions";
+    stored.append(el("h3", "", "Active manual directions (honoured on every re-solve)"));
+    for (const item of state.manualInstructions) {
+      const line = el("div", "row");
+      const name = assignments.find(a => a.group_id === item.group_id);
+      line.append(el("span", "", (name ? partyName(name) : item.group_id) + " · " +
+        (item.action === "not_here" ? "Not here: " : "Move to: ") +
+        item.place_type + " " + item.place_id +
+        (item.allow_split ? " · splitting permitted" : "")));
+      line.append(clicker("Remove direction", () => removeInstruction(item.id),
+        "quiet small", "remove-instruction-" + item.id));
+      stored.append(line);
+    }
+    area.append(stored);
   }
 
   const listLike = ["table", "people", "people-floor", "groups", "groups-table"].includes(state.view);
@@ -178,6 +302,10 @@ export function renderPlanWorkspace(state, { partyName, partyMembers, refresh })
       state.selectedPlanItem.id === a.group_id));
     line.append(party, el("span", "muted", "Table " + a.table_id +
       " · " + (floorOf(plan, a) || "Unspecified floor")));
+    line.append(clicker("Not here", () => chooseIntent(a, "not_here"),
+      "quiet small"));
+    line.append(clicker("Move to", () => chooseIntent(a, "move_to"),
+      "quiet small"));
     const show = state.expandedPartyKey === key;
     line.append(clicker(show ? "Hide details" : "Details", () => {
       state.expandedPartyKey = show ? null : key; refresh();
