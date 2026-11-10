@@ -310,7 +310,7 @@ Plan records **one assignment per occupied table portion**, repeating the
 original group ID while listing only the guests physically at that table.
 Each portion's written reasons explain that the group split across the named
 adjacent tables because no single table fits. JSON, table/people lists,
-floor maps and table cards use the actual portions. This never permits a
+floor maps and table cards use the actual portions. Without an explicit manual instruction, this never permits a
 convenience split when any one table has enough capacity.
 
 An oversized lone group is **infeasible** when no permitted connected
@@ -319,3 +319,60 @@ tables cannot be combined. Every other group remains atomic, and
 together-linked clusters keep the separate linked-cluster fallback described
 above. Without drawable geometry the engine cannot establish adjacency,
 so it reports the oversized hard case as unachievable rather than guessing.
+
+## v2.0 Topic B — Reassignment assistant (issue #54)
+
+After optimizing, select a named party or any person in a working list,
+table card, or floor map's party entries. Choose **Not here** or **Move to**.
+The assistant accepts a table, floor, or zone, and an optional explicit
+authorization to split the party. Click **Find feasible options**; nothing
+changes until **Apply this option** is selected.
+
+Options are generated and *re-checked by CP-SAT with exact guest placement
+locks*. The assistant tries a direct free-seat move, a 1:1 exchange, several
+smaller groups traded for one larger group, the reverse trade, a three-party
+chain, opt-in split blocks, and a general re-optimization. It shows every
+affected party by registered name, its before/after tables and per-table
+fractions, the total score difference, and warnings listing every
+finite-weight rule whose score drops. The preview includes a complete server
+Plan. All views and the server-generated printable exports use that Plan
+only after confirmation.
+
+**Manual directions outrank *soft* preferences, never hard requirements.**
+The original solver rules with mode `hard` (conceptual infinite weight)
+remain compulsory, including pins, property/zone restrictions, and pair
+relations. Physical chair capacities remain unconditional hard limits.
+The system never offers an unchecked or overfilled seating option. If no
+route can be confirmed, blockers include the competing hard-rule identifiers
+when known and capacity constraints; a solver timeout is reported as
+*unknown*, not falsely as impossible. Search is deliberately bounded to
+eight distinct options and at most 28 candidate CP-SAT checks, followed by
+a general constrained solve; this is not an exhaustive enumeration of all
+possible permutations.
+
+A confirmed direction is stored in the `Plan.manual_instructions` and the
+browser session, and transmitted as `Problem.manual_instructions` on every
+subsequent **Optimize seating**. The **Active manual directions** panel
+shows them and offers **Remove direction**, which re-solves with the
+remaining directions. Opening **Print preview** always fetches a fresh
+server render of the currently accepted plan. Legacy sessions without
+directions remain compatible.
+
+### Headless endpoints and inputs
+
+- `POST /v1/reassign/options` accepts `{problem, plan, instruction}`
+  and returns `{status, options, blockers}` as specified in the checked-in
+  OpenAPI document. Each option carries its full validated `plan`,
+  `movements`, `score_delta`, `soft_rule_warnings`, `kind`, and `id`.
+- `ManualInstruction` includes a stable `id`, `group_id`,
+  `action: not_here|move_to`, `place_type: table|floor|zone`,
+  `place_id`, and `allow_split`. Directions are hard CP-SAT assumptions;
+  removing one means submitting a new Problem without that direction.
+- `Problem.locked_guest_tables` and `splittable_groups` provide internal
+  exact-option verification and optional split permission. They are not
+  individual chair assignments or seat numbering. A person can belong to
+  only one table in the resulting plan; a split party receives several
+  table-level portions.
+
+No instance deployment, merge, or schema migration is necessary for this
+stateless API extension.
