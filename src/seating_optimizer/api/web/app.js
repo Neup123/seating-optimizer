@@ -604,8 +604,9 @@ export function createApp(root, api = createGateway()) {
               { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
           : element("p", "muted", "HARD — no weight")
       ));
+      const fields = element("div", "grid three");
       if (rule.shape === "global_pattern") {
-        const label = element("label", "field");
+        const label = element("label", "field pattern-enabled-choice");
         const enabled = document.createElement("input");
         enabled.type = "checkbox";
         enabled.id = "rule-pattern-enabled-" + i;
@@ -615,9 +616,8 @@ export function createApp(root, api = createGateway()) {
           invalidate();
         });
         label.append(enabled, element("span", "", "Enable global pattern (default off)"));
-        section.append(label);
+        fields.append(label);
       }
-      const fields = element("div", "grid three");
       spec.fields.forEach(field => {
         const original = rule.parameters[field.name] || "";
         const update = value => {
