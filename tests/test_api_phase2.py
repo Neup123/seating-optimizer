@@ -40,7 +40,7 @@ def test_layout_import_round_trip_and_headless_print_endpoint_contracts():
         "session_id": "small",
         "zones": request["zones"], "tables": request["tables"],
         "guests": [{"id": "alice", "name": "Alice"},
-                   {"id": "bob", "name": "Bob", "group_id": "family-blue"}],
+                   {"id": "bob", "name": "Bob", "group_id": "family-blue", "group_name": "family-blue"}],
         "rules": [{"id": "pin", "shape": "pin", "mode": "hard",
                    "parameters": {"target": "bob", "table": "T1"}}],
         "layout": imported.json(),

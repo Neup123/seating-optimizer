@@ -21,7 +21,7 @@ def golden_problem() -> Problem:
             guests.append(Guest(
                 id=f"guest-{family:02d}-{member}",
                 name=f"Guest {family:02d} member {member}",
-                group_id=f"family-{family:02d}",
+                group_id=f"family-{family:02d}", group_name=f"family-{family:02d}",
                 attributes={
                     "language": languages[family % len(languages)],
                     "age_layer": "adult" if member == 0 or family % 4 else "child",

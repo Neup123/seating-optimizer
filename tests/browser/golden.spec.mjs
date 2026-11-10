@@ -115,7 +115,13 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
     await expect(page.locator("#print-reasons")).not.toBeChecked();
     await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /<table>/);
     const clean = await page.locator("#list-preview").getAttribute("srcdoc");
-    expect((clean.match(/data-guest-id=/g) || []).length).toBe(120);
+    // Single-row imported registrations have no individual member names:
+    // human-facing lists show one party/count line, not 120 synthetic names.
+    expect((clean.match(/data-group-id=/g) || []).length).toBe(60);
+    expect((clean.match(/data-guest-id=/g) || []).length).toBe(0);
+    expect(clean).toContain("Family 00 â€” 2");
+    expect(clean).not.toContain("Family 00 (1/2)");
+    expect(clean).not.toContain("Family 00 (2/2)");
     expect(clean).not.toContain('class="reason"');
     await expect(page.locator("#download-list")).toBeVisible();
     await expect(page.locator("#print-list")).toBeVisible();
@@ -155,6 +161,9 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await page.locator("#view-json").click();
   await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
   await expect(page.locator("pre").first()).toContainText('"layout"');
+  // The same Plan's machine-readable JSON still has every synthesized member.
+  await expect(page.locator("pre").first()).toContainText("Family 00 (1/2)");
+  await expect(page.locator("pre").first()).toContainText("Family 00 (2/2)");
   // Reload must restore the original plan, mapping, guests, capacities and rules.
   await page.reload();
   await expect(page.locator(".pill").first()).toContainText("120 guests");

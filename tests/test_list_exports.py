@@ -24,7 +24,7 @@ def plan_fixture() -> Plan:
         ],
         assignments=[
             Assignment(
-                group_id='family & <A>', table_id='G1',
+                group_id='family & <A>', group_name='family & <A>', table_id='G1',
                 guest_ids=['a:1', 'a:2'], guest_names=['Alice & Bob', 'Bea <C>'],
                 guest_attributes=[{'Language': 'English', 'Notes': 'near window'},
                                   {'Language': 'Greek', 'Notes': 'near window'}],
@@ -32,7 +32,7 @@ def plan_fixture() -> Plan:
                          Reason(rule_id='access', description='Needs accessibility', points=0)],
             ),
             Assignment(
-                group_id='solo', table_id='U1',
+                group_id='solo', group_name='solo', table_id='U1',
                 guest_ids=['b:1'], guest_names=['David'],
                 guest_attributes=[{'Language': 'Hebrew'}],
                 reasons=[Reason(rule_id='zone:1', description='Upper floor preference', points=3)],
@@ -157,8 +157,8 @@ def test_people_print_columns_and_group_sizes(mode):
     rows = root.findall('.//tr[@data-guest-id]')
     assert [row[5].text for row in rows] == ['English', 'Greek', 'Hebrew']
     assert [row[6].text for row in rows] == ['near window', 'near window', '—']
-    assert '(2 people)' in rows[0][2].text
-    assert '(1 person)' in rows[-1][2].text
+    assert 'family & <A> — 2' == rows[0][2].text
+    assert 'solo — 1' == rows[-1][2].text
 
 
 @pytest.mark.parametrize('mode', ['combined', 'floor'])
@@ -208,7 +208,7 @@ def test_table_print_columns_preserve_distinct_and_missing_values(mode):
     rows = root.findall('.//tr[@data-group-id]')
     assert rows[0][4].text == 'English / Greek'
     assert rows[1][4].text == 'Hebrew'
-    assert '(2 people)' in rows[0][2].text
+    assert 'family & <A> — 2' == rows[0][2].text
     assert rows[0][5].text == 'near window'
     assert rows[1][5].text == '—'
 

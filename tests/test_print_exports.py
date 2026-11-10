@@ -33,9 +33,9 @@ def example_plan():
                 TableUsage(table_id="U1", zone_id="upper", capacity=2,
                            occupied=2, empty_seats=0)],
         assignments=[
-            Assignment(group_id="family-red", table_id="G1", guest_ids=["g1", "g2"],
+            Assignment(group_id="family-red", group_name="family-red", table_id="G1", guest_ids=["g1", "g2"],
                        guest_names=["Alice Red", "Bob Red"]),
-            Assignment(group_id="family-blue", table_id="U1", guest_ids=["g3", "g4"],
+            Assignment(group_id="family-blue", group_name="family-blue", table_id="U1", guest_ids=["g3", "g4"],
                        guest_names=["Cara Blue", "Dan Blue"]),
         ], layout=layout,
     )

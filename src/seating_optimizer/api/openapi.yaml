@@ -454,6 +454,7 @@ components:
         id: {type: string}
         name: {type: string}
         group_id: {type: [string, 'null']}
+        group_name: {type: [string, 'null'], description: Human-readable registration or party name.}
         attributes:
           type: object
           additionalProperties: {type: [string, number, boolean]}
@@ -532,6 +533,7 @@ components:
       required: [group_id, table_id, guest_ids, guest_names, reasons, points]
       properties:
         group_id: {type: string}
+        group_name: {type: [string, 'null'], description: Human-facing party label, independent of the internal group ID.}
         table_id: {type: string}
         guest_ids: {type: array, items: {type: string}}
         guest_names: {type: array, items: {type: string}}

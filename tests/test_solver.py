@@ -250,6 +250,11 @@ def test_small_group_priority_is_soft_one_point_per_group():
                    for x in plan.score_breakdown)
         assert any(x.rule_id == "venue:small-group-priority" and x.points == 1
                    for x in plan.assignments[0].reasons)
+        priority_reason = next(x.description for x in plan.assignments[0].reasons
+                               if x.rule_id == "venue:small-group-priority")
+        expected_count = "1 person" if size == 1 else "2 people"
+        assert f"Small group ({expected_count}) received priority" in priority_reason
+        assert "1 people" not in priority_reason
 
 
 def test_small_group_priority_off_by_default_and_other_groups_not_excluded():

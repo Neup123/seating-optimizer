@@ -178,3 +178,25 @@ def test_seeded_lonely_seat_pattern_round_trips_configuration_and_still_scores()
     assert result.pattern_matches[0].points == -5
     assert any(reason.rule_id == "pattern" and reason.points == -5
                for assignment in result.assignments for reason in assignment.reasons)
+
+
+def test_pattern_match_summary_uses_singular_counts_for_one_group_and_empty_seat():
+    """Issue #37: one matched group, occupied chair, empty chair, and point."""
+    lonely = rule([clause("groups_at_table", "==", 1),
+                   clause("empty_seats", "==", 1)], weight=1)
+    pinned = Rule(id="locked", shape="pin", mode="hard",
+                  parameters={"target": "family", "table": "T0"})
+    plan = solve(problem({"family": 1}, [2], [lonely, pinned]))
+    assert plan.status == "optimal"
+    assert len(plan.pattern_matches) == 1
+    expected = "(1 group, 1 occupied seat, 1 empty seat); penalty 1 point."
+    message = plan.pattern_matches[0].description
+    assert expected in message
+    assert "1 groups" not in message
+    assert "1 occupied seats" not in message
+    assert "1 empty seats" not in message
+    assert "1 point(s)" not in message
+    assert any(expected in r.description
+               for a in plan.assignments for r in a.reasons if r.rule_id == "pattern")
+    assert any(expected in c.description
+               for c in plan.compromises if c.rule_id == "pattern")

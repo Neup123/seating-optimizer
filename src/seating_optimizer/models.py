@@ -154,6 +154,7 @@ class Guest(Model):
     id: str
     name: str
     group_id: str | None = None
+    group_name: str | None = None  # Human-readable registration/party name.
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
@@ -229,6 +230,7 @@ class Reason(Model):
 
 class Assignment(Model):
     group_id: str
+    group_name: str | None = None
     table_id: str
     guest_ids: list[str]
     guest_names: list[str]

@@ -15,6 +15,7 @@ from typing import Literal
 from openpyxl import load_workbook
 from pydantic import Field
 
+from .display import distinct_party_name
 from .models import Guest, Model
 
 
@@ -132,7 +133,7 @@ def import_registrations(
     """Each source row is one registration. Size N expands to N atomic-group guests.
 
     Mapping direction is source header -> canonical target. Canonical fields are
-    name, size, group_id or attribute.<user-defined-kind>. Unmapped source data
+    name, size, group_id, group_name or attribute.<user-defined-kind>. Unmapped source data
     is retained as a free-form guest attribute, never silently discarded.
     """
     result = ImportResult()
@@ -155,7 +156,7 @@ def import_registrations(
         if source not in headers:
             result.issues.append(ImportIssue(row=1, column=source, severity="error",
                                               message="Mapped source column not found"))
-        if target not in {"name", "size", "group_id"} and (
+        if target not in {"name", "size", "group_id", "group_name"} and (
             not target.startswith("attribute.") or not target.removeprefix("attribute.")
         ):
             result.issues.append(ImportIssue(row=1, column=source, severity="error",
@@ -177,6 +178,9 @@ def import_registrations(
     if result.has_errors:
         return result
     seen_names = {}
+    # A shared Group ID may span individually named rows. Do not turn any
+    # member's own name into a party name just because it was the first row.
+    party_rows: dict[str, list[tuple[str, int, str | None]]] = {}
     for row_number, raw in enumerate(rows[1:], start=2):
         if not any(v is not None and str(v).strip() for v in raw):
             result.issues.append(ImportIssue(row=row_number, column=None, severity="warning",
@@ -211,13 +215,15 @@ def import_registrations(
                                     message=f"Invalid or missing group size {size!r}"))
             continue
         group_id = str(mapped.get("group_id") or f"registration:{row_number}").strip()
+        mapped_group_name = str(mapped.get("group_name") or "").strip() or None
+        party_rows.setdefault(group_id, []).append((name, n, mapped_group_name))
         attrs = {}
         for source in headers:
             value = values[source]
             if value is None or (isinstance(value, str) and not value.strip()):
                 continue
             target = mapping_out.get(source)
-            if target in ("name", "size", "group_id"):
+            if target in ("name", "size", "group_id", "group_name"):
                 continue
             key = target.removeprefix("attribute.") if target else source
             if isinstance(value, (str, int, float, bool)):
@@ -227,8 +233,23 @@ def import_registrations(
         for i in range(n):
             result.guests.append(Guest(id=f"r{row_number}-m{i+1}",
                    name=name if n == 1 else f"{name} ({i+1}/{n})",
-                   group_id=group_id, attributes=attrs))
+                   group_id=group_id, group_name=None, attributes=attrs))
         result.rows_imported += 1
+
+    grouped: dict[str, list[Guest]] = {}
+    for guest in result.guests:
+        grouped.setdefault(guest.group_id, []).append(guest)
+    for group_id, members in grouped.items():
+        sources = party_rows[group_id]
+        explicit = [label for _, _, label in sources if label]
+        # A single registration's name is the party label at every size,
+        # including size 1. Shared IDs need an explicit party-name column.
+        inferred = sources[0][0] if len(sources) == 1 else None
+        label = distinct_party_name(
+            group_id, explicit if explicit else [inferred],
+            [guest.name for guest in members])
+        for guest in members:
+            guest.group_name = label
     return result
 
 

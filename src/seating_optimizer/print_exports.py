@@ -18,6 +18,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 from .models import FloorLayout, Model, Plan, TableDrawing, VenueLayout
+from .display import party_header, party_lines, party_totals
 
 
 class SvgFloorPage(Model):
@@ -65,9 +66,9 @@ def _map_font(drawing: TableDrawing, line_count: int, longest: int) -> float:
     return size
 
 
-def _table_labels(assignments: dict, table_id: str) -> list[tuple[str, str]]:
+def _table_labels(assignments: dict, table_id: str, totals: dict[str, int]) -> list[tuple[str, str]]:
     return [
-        (assignment.group_id, f"{assignment.group_id} ({len(assignment.guest_ids)}): {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}")
+        (assignment.group_id, party_header(assignment, totals))
         for assignment in assignments[table_id]
     ]
 
@@ -75,6 +76,7 @@ def _table_labels(assignments: dict, table_id: str) -> list[tuple[str, str]]:
 def render_floor_svg(plan: Plan) -> SvgFloorBundle:
     """One full SVG page per floor, with labelled geometries and group identities."""
     layout, assignments = _placed(plan)
+    totals = party_totals(plan)
     pages = []
     for floor in layout.floors:
         chunks = [
@@ -99,7 +101,7 @@ def render_floor_svg(plan: Plan) -> SvgFloorBundle:
             chunks.append(f'<text x="{cx:g}" y="{y+11:g}" text-anchor="middle" '
                           f'font-size="10" font-family="sans-serif" font-weight="bold">'
                           f'{escape(drawing.table_id)}</text>')
-            labels = _table_labels(assignments, drawing.table_id)
+            labels = _table_labels(assignments, drawing.table_id, totals)
             font = _map_font(drawing, len(labels), max((len(label) for _, label in labels), default=1))
             for i, (group_id, label) in enumerate(labels):
                 y_at = y + 15 + font * 1.22 * (i + 1)
@@ -145,9 +147,10 @@ def _draw_outline(doc: canvas.Canvas, floor: FloorLayout, drawing: TableDrawing,
 def render_floor_pdf(plan: Plan) -> bytes:
     """Vector PDF: exactly one page per floor, using the same geometry as SVG."""
     layout, assignments = _placed(plan)
+    totals = party_totals(plan)
     font_name = _pdf_font()
     labels = [
-        f"{assignment.group_id} ({len(assignment.guest_ids)}): {assignment.guest_names[0] if assignment.guest_names else assignment.group_id}"
+        party_header(assignment, totals)
         for assignment in plan.assignments
     ] + [table.table_id for table in plan.tables]
     _check_pdf_text(labels, font_name)
@@ -163,7 +166,7 @@ def render_floor_pdf(plan: Plan) -> bytes:
             center, top = _draw_outline(doc, floor, drawing, margin=margin)
             doc.setFont(font_name, 10)
             doc.drawCentredString(center, top - 11, drawing.table_id)
-            guests = _table_labels(assignments, drawing.table_id)
+            guests = _table_labels(assignments, drawing.table_id, totals)
             font_size = _map_font(drawing, len(guests), max((len(label) for _, label in guests), default=1))
             doc.setFont(font_name, font_size)
             for index, (_, label) in enumerate(guests):
@@ -198,7 +201,8 @@ def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
     if plan.status not in ("optimal", "feasible"):
         raise ValueError("Table cards require a feasible plan")
     font = _pdf_font()
-    all_labels = [name for a in plan.assignments for name in a.guest_names]
+    totals = party_totals(plan)
+    all_labels = [line for a in plan.assignments for line in party_lines(a, totals)]
     _check_pdf_text(all_labels, font)
     cards = defaultdict(list)
     for group in plan.assignments:
@@ -221,7 +225,7 @@ def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
             doc.drawCentredString(width / 2, height - 59,
                                   f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
             groups = cards[table.table_id]
-            entries = [f"{group.group_id} ({len(group.guest_ids)}): {', '.join(group.guest_names)}" for group in groups]
+            entries = [line for group in groups for line in party_lines(group, totals)]
             if not entries:
                 entries = ["No assigned groups"]
             for fontsize in (11.0, 10.0, 9.0, 8.0, 7.0, 6.0, 5.0):
@@ -278,7 +282,7 @@ def render_table_cards_pdf(plan: Plan, *, cards_per_page: int = 1) -> bytes:
             doc.drawCentredString(center_x, cell_height - 56,
                                   f"Zone {table.zone_id} | {table.occupied}/{table.capacity} chairs")
             groups = cards[table.table_id]
-            entries = [f"{group.group_id} ({len(group.guest_ids)}): {', '.join(group.guest_names)}" for group in groups]
+            entries = [line for group in groups for line in party_lines(group, totals)]
             if not entries:
                 entries = ["No assigned groups"]
             available_width = cell_width - 50
