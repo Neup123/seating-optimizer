@@ -112,3 +112,8 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .pattern-clause :is(input,select){max-width:100%;min-width:0}
 .pattern-clause button{margin-bottom:2px}
 @media(max-width:780px){.pattern-clause{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.pattern-clause button{grid-column:1/-1}}
+
+/* Invalid autosave drafts remain visible without entering the stored rule. */
+.pattern-clause input[aria-invalid="true"]{border-color:#c14e32;background:#fff8f5}
+.field-error{font-size:12px;color:#a33824;line-height:1.4}
+.field-error[hidden]{display:none}

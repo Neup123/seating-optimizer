@@ -94,6 +94,15 @@ function safeNumber(input) {
   const number = Number(input);
   return Number.isFinite(number) ? number : NaN;
 }
+function patternCountError(value) {
+  // Avoid Number("") === 0, fractional/negative values and implicit string coercion.
+  const canonical = typeof value === "number" ? String(value) : value;
+  if (typeof canonical === "string" && /^(0|[1-9][0-9]*)$/.test(canonical)) {
+    const count = Number(canonical);
+    if (Number.isSafeInteger(count) && count <= 100000) return "";
+  }
+  return "Enter a whole number from 0 to 100000 (no blanks or fractions).";
+}
 function parseTableProperties(input) {
   const tags = String(input || "").split(",").map(tag => tag.trim()).filter(Boolean);
   if (new Set(tags.map(tag => tag.toLocaleLowerCase())).size !== tags.length)
@@ -156,6 +165,8 @@ export function createApp(root, api = createGateway()) {
     };
   }
   const state = emptySession();
+  // Uncommitted invalid text stays visible through re-renders, but never enters rules.
+  const invalidPatternDrafts = new WeakMap();
   const savedTemplates = storedJSON(TEMPLATES_KEY, []);
   const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
   const previous = storedJSON(SESSION_KEY, null);
@@ -172,7 +183,24 @@ export function createApp(root, api = createGateway()) {
   let working = false;
   let noticesIssued = 0;
 
+  function hasInvalidStoredPatternCounts(rules) {
+    return (rules || []).some(rule => rule.shape === "global_pattern" &&
+      (!Array.isArray(rule.parameters?.conditions) ||
+        rule.parameters.conditions.some(condition =>
+          !condition || typeof condition.value !== "number" || patternCountError(condition.value))));
+  }
+  function assertValidPatternCounts() {
+    const invalidDraft = state.rules.some(rule => rule.shape === "global_pattern" &&
+      (rule.parameters?.conditions || []).some(condition => invalidPatternDrafts.has(condition)));
+    if (invalidDraft || hasInvalidStoredPatternCounts(state.rules))
+      throw Error("Fix the highlighted global-pattern count fields before saving or solving.");
+  }
+
   function saveSession() {
+    if (hasInvalidStoredPatternCounts(state.rules)) {
+      state.storageWarning = "An invalid global-pattern count cannot be saved. Correct it on Rules.";
+      return;
+    }
     const data = {};
     for (const key of SESSION_FIELDS) data[key] = state[key];
     try {
@@ -193,10 +221,13 @@ export function createApp(root, api = createGateway()) {
     }
   }
   function saveTemplates() {
+    if (templates.some(template => hasInvalidStoredPatternCounts(template.rules)))
+      throw Error("A template contains an invalid global-pattern count; correct it before saving.");
     try { window.localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates)); }
     catch (_) { throw Error("Cannot save templates: browser storage is unavailable or full. Export the configuration instead."); }
   }
   function configuration(name) {
+    assertValidPatternCounts();
     if (!name) throw Error("Enter a configuration name.");
     if (!state.layout.floors.length || !state.tables.length)
       throw Error("Add a floor and at least one table before saving a configuration.");
@@ -209,6 +240,8 @@ export function createApp(root, api = createGateway()) {
   }
   function applyConfiguration(config) {
     const copy = deepCopy(config);
+    if (hasInvalidStoredPatternCounts(copy.rules))
+      throw Error("Imported configuration contains an invalid global-pattern count.");
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
@@ -266,6 +299,7 @@ export function createApp(root, api = createGateway()) {
   function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
   function configuredTables() { return state.tables.filter(t => Number.isInteger(Number(t.capacity)) && Number(t.capacity) > 0); }
   function projectProblem() {
+    assertValidPatternCounts();
     if (!state.guests.length) throw Error("Import valid guests before solving.");
     if (!state.tables.length || !state.zones.length) throw Error("Configure tables and floors before solving.");
     if (configuredTables().length !== state.tables.length) throw Error("Every table requires its own positive chair capacity.");
@@ -512,9 +546,44 @@ export function createApp(root, api = createGateway()) {
       clause.append(selectField("Comparison", operators, condition.op, value => {
         condition.op = value; invalidate();
       }, { id: "rule-" + index + "-pattern-" + j + "-op" }));
-      clause.append(textField("Count", condition.value, value => {
-        condition.value = Number(value); invalidate();
-      }, { type: "number", min: 0, step: 1, id: "rule-" + index + "-pattern-" + j + "-value" }));
+      const id = "rule-" + index + "-pattern-" + j + "-value";
+      const countLabel = element("label", "field");
+      countLabel.append(element("span", "", "Count"));
+      const input = document.createElement("input");
+      // Text preserves invalid characters so the user can see and correct them.
+      input.type = "text";
+      input.inputMode = "numeric";
+      input.id = id;
+      const draft = invalidPatternDrafts.get(condition);
+      input.value = draft === undefined ? String(condition.value ?? "") : draft;
+      const error = element("span", "field-error");
+      error.id = id + "-error";
+      error.setAttribute("role", "alert");
+      input.setAttribute("aria-describedby", error.id);
+      function setError(message) {
+        error.textContent = message;
+        error.hidden = !message;
+        if (message) input.setAttribute("aria-invalid", "true");
+        else input.removeAttribute("aria-invalid");
+      }
+      setError(draft === undefined && typeof condition.value !== "number"
+        ? "Saved count must be a whole number. Re-enter it."
+        : patternCountError(input.value));
+      function acceptCount() {
+        const message = patternCountError(input.value);
+        if (message) invalidPatternDrafts.set(condition, input.value);
+        else {
+          condition.value = Number(input.value);
+          invalidPatternDrafts.delete(condition);
+        }
+        setError(message);
+        invalidate();
+        saveSession(); // Valid edits are immediate; invalid text never enters persisted rules.
+      }
+      input.addEventListener("input", acceptCount);
+      input.addEventListener("change", acceptCount);
+      countLabel.append(input, error);
+      clause.append(countLabel);
       clause.append(action("Remove comparison", () => {
         if (conditions.length === 1) return announce("A pattern requires at least one comparison.", true);
         conditions.splice(j, 1);
