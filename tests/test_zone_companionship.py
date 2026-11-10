@@ -164,6 +164,21 @@ def test_weight_proportional_and_absent_instance_has_no_hidden_penalty():
     assert not any(c.rule_id == "companionship" for c in absent.compromises)
 
 
+def test_two_separate_lone_zones_charge_two_groups_not_one_event():
+    tables = [Table(id="A", zone_id="floor-a", capacity=2),
+              Table(id="B", zone_id="floor-b", capacity=2)]
+    people = guests("left", 2) + guests("right", 2)
+    rules = [pin("left", "A"), pin("right", "B"), companion(6)]
+    plan = solve(make_problem(tables, people, rules))
+    assert plan.status in ("optimal", "feasible")
+    assert entry(plan).points == -12
+    assert plan.total_score == -12
+    assert reasons(plan, "left")[0].points == -6
+    assert reasons(plan, "right")[0].points == -6
+    assert len([c for c in plan.compromises if c.rule_id == "companionship"]) == 2
+    assert sum(a.points for a in plan.assignments) == -12
+
+
 def test_split_party_occupying_two_tables_on_same_floor_counts_as_one_group():
     tables = [Table(id="A1", zone_id="a", capacity=2),
               Table(id="A2", zone_id="a", capacity=2),
