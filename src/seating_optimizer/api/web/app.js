@@ -39,6 +39,9 @@ function partyName(assignment) {
     neutral = "Unnamed " + neutral;
   return neutral;
 }
+function ruleLabel(rule, fallback) {
+  return (typeof rule?.name === "string" && rule.name.trim()) || fallback;
+}
 function importedPartyName(guest) {
   if (guest.group_name?.trim()) return guest.group_name.trim();
   const generated = /^(.*) \((\d+)\/(\d+)\)$/.exec(guest.name || "");
@@ -227,13 +230,13 @@ export function createApp(root, api = createGateway()) {
   let noticesIssued = 0;
 
   function hasInvalidStoredPatternCounts(rules) {
-    return (rules || []).some(rule => rule.shape === "global_pattern" &&
+    return (rules || []).some(rule => rule.enabled !== false && rule.shape === "global_pattern" &&
       (!Array.isArray(rule.parameters?.conditions) ||
         rule.parameters.conditions.some(condition =>
           !condition || typeof condition.value !== "number" || patternCountError(condition.value))));
   }
   function assertValidPatternCounts() {
-    const invalidDraft = state.rules.some(rule => rule.shape === "global_pattern" &&
+    const invalidDraft = state.rules.some(rule => rule.enabled !== false && rule.shape === "global_pattern" &&
       (rule.parameters?.conditions || []).some(condition => invalidPatternDrafts.has(condition)));
     if (invalidDraft || hasInvalidStoredPatternCounts(state.rules))
       throw Error("Fix the highlighted global-pattern count fields before saving or solving.");
@@ -703,7 +706,8 @@ export function createApp(root, api = createGateway()) {
       const parameters = defaultRuleParameters(spec);
       state.rules.push({
         id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
-        weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters
+        weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters,
+        name: "", description: "", enabled: true
       });
       invalidate();
       announce("Added a " + spec.title + " rule. Set its parameters below.");
@@ -718,13 +722,33 @@ export function createApp(root, api = createGateway()) {
     }
     state.rules.forEach((rule, i) => {
       const spec = shapes.find(s => s.shape === rule.shape);
-      const section = card(spec?.title || rule.shape, spec?.description);
+      const displayName = ruleLabel(rule, rule.id);
+      const section = card(displayName, rule.description || null);
       section.setAttribute("data-rule-id", rule.id);
-      const header = element("div", "row between");
-      header.append(element("span", "badge", rule.shape));
-      header.append(action("Remove rule", () => {
+      section.classList.toggle("rule-instance-off", rule.enabled === false);
+      const header = element("div", "row between rule-instance-header");
+      const type = element("span", "badge", rule.shape);
+      type.title = spec?.description || rule.shape;
+      header.append(type);
+      const tools = element("div", "rule-instance-actions");
+      const toggle = element("label", "rule-instance-toggle");
+      toggle.title = rule.enabled === false
+        ? "Enable this rule. Its saved weight, parameters and constraints become active again."
+        : "Disable this rule without deleting it. It will contribute no constraints, points or explanations.";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.id = "rule-enabled-" + i;
+      checkbox.checked = rule.enabled !== false;
+      checkbox.setAttribute("aria-label", "Enable rule " + displayName);
+      checkbox.addEventListener("change", () => {
+        rule.enabled = checkbox.checked;
+        invalidate(); render();
+      });
+      toggle.append(checkbox, element("span", "", rule.enabled === false ? "Off" : "On"));
+      tools.append(toggle, action("Remove rule", () => {
         state.rules.splice(i, 1); invalidate(); announce("Rule removed.");
       }, "danger small", "delete-rule-" + i));
+      header.append(tools);
       section.append(header);
       section.append(selectField("Type of this existing rule (changing resets its fields)",
         shapes.map(s => [s.shape, s.title]), rule.shape, value => {
@@ -739,7 +763,14 @@ export function createApp(root, api = createGateway()) {
           render();
         }, { id: "rule-shape-" + i }));
       section.append(grid(
-        textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
+        textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); render(); },
+          { id: "rule-id-" + i, required: true }),
+        textField("Name (optional)", rule.name ?? "", value => {
+          rule.name = value; invalidate(); render();
+        }, { id: "rule-name-" + i }),
+        textField("Description (optional)", rule.description ?? "", value => {
+          rule.description = value; invalidate(); render();
+        }, { id: "rule-description-" + i }),
         selectField(rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
           spec.modes.map(m => [m,
             rule.shape === "table_property_need"
@@ -1405,11 +1436,12 @@ export function createApp(root, api = createGateway()) {
       }));
     }
     area.append(views);
+    const ruleDisplay = id => ruleLabel(state.rules.find(rule => rule.id === id), id);
     if ((plan.pattern_matches || []).length) {
       const matches = card("Global pattern matches",
         "Every matched table is listed, including empty tables with no guest-level explanation cards.");
       (plan.pattern_matches || []).forEach(match => {
-        matches.append(element("p", "reason", match.description +
+        matches.append(element("p", "reason", ruleDisplay(match.rule_id) + ": " + match.description +
           " (" + (match.points > 0 ? "+" : "") + match.points +
           (Math.abs(Number(match.points)) === 1 ? " point)" : " points)")));
       });
@@ -1419,7 +1451,7 @@ export function createApp(root, api = createGateway()) {
       "Unmet soft considerations are listed with lost points. Hard rules cannot be traded away.");
     if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));
     else compromises.append(issuesList(plan.compromises.map(c => ({
-      row: null, column: c.rule_id, severity: "warning",
+      row: null, column: ruleDisplay(c.rule_id), severity: "warning",
       message: c.description + " (lost " + c.lost_points + (c.lost_points === 1 ? " point)" : " points)")
     }))));
     const tableWrap = element("div", "table-scroll");
@@ -1451,7 +1483,8 @@ export function createApp(root, api = createGateway()) {
           Number(a.points).toFixed(2) + (Math.abs(Number(a.points)) === 1 ? " point" : " points")));
       const ul = document.createElement("ul");
       (a.reasons || []).forEach(r => ul.append(element("li", "",
-        r.description + " (" + Number(r.points).toFixed(2) + " pts)")));
+        ruleDisplay(r.rule_id) + ": " + r.description +
+        " (" + Number(r.points).toFixed(2) + " pts)")));
       part.append(ul); list.append(part);
     });
     reasons.append(list); area.append(reasons);
