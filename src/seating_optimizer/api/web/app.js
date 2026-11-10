@@ -1212,108 +1212,107 @@ export function createApp(root, api = createGateway()) {
     });
     views.append(tabs);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
-    if (LIST_VIEWS.has(state.view)) {
-      views.append(element("h3", "", state.view.startsWith("people") ? "People and their assigned tables" :
-        "Groups and their assigned tables"));
-      const toggle = element("label", "print-reasons-toggle");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.id = "print-reasons";
-      checkbox.checked = Boolean(state.includeReasons);
-      checkbox.addEventListener("change", () => {
-        state.includeReasons = checkbox.checked;
-        loadView(state.view);
-      });
-      toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
-      views.append(toggle);
-      const available = [...new Set((plan.assignments || []).flatMap(
-        entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
-      if (available.length) {
-        const importHeaders = importColumnHeaders();
-        const picker = element("fieldset", "list-field-picker");
-        picker.append(element("legend", "", "Additional import columns"));
-        for (const key of available) {
-          const label = element("label", "list-field-choice");
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.value = key;
-          checkbox.checked = (state.listFields || []).includes(key);
-          checkbox.addEventListener("change", () => {
-            state.listFields = checkbox.checked
-              ? [...(state.listFields || []).filter(k => available.includes(k)), key]
-              : (state.listFields || []).filter(k => k !== key);
-            loadView(state.view);
-          });
-          label.append(checkbox, element("span", "", attributeLabel(key, importHeaders)));
-          picker.append(label);
+    if (state.view === "print") {
+      views.append(element("p", "muted", "Print preview is separate from the interactive workspace. The server produces the exact printable pages below."));
+      views.append(selectField("Document", [
+        ["people", "People list"], ["people-floor", "People by floor"],
+        ["groups", "Table list"], ["groups-table", "Per-table pages"],
+        ["floor", "Floor maps PDF"], ["cards", "Table cards PDF"]
+      ], state.printFormat, value => {
+        state.printFormat = value;
+        state.includeReasons = false;
+        loadView("print");
+      }, { id: "print-format" }));
+      if (LIST_VIEWS.has(state.printFormat)) {
+        const toggle = element("label", "print-reasons-toggle");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.id = "print-reasons";
+        checkbox.checked = Boolean(state.includeReasons);
+        checkbox.addEventListener("change", () => {
+          state.includeReasons = checkbox.checked;
+          loadView("print");
+        });
+        toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
+        views.append(toggle);
+        if (state.printFormat.startsWith("people")) {
+          const available = [...new Set((plan.assignments || []).flatMap(
+            entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
+          if (available.length) {
+            const importHeaders = importColumnHeaders();
+            const picker = element("fieldset", "list-field-picker");
+            picker.append(element("legend", "", "Additional import columns"));
+            for (const key of available) {
+              const label = element("label", "list-field-choice");
+              const choice = document.createElement("input");
+              choice.type = "checkbox";
+              choice.value = key;
+              choice.checked = (state.listFields || []).includes(key);
+              choice.addEventListener("change", () => {
+                state.listFields = choice.checked
+                  ? [...(state.listFields || []).filter(k => available.includes(k)), key]
+                  : (state.listFields || []).filter(k => k !== key);
+                loadView("print");
+              });
+              label.append(choice, element("span", "", attributeLabel(key, importHeaders)));
+              picker.append(label);
+            }
+            views.append(picker);
+          }
         }
-        views.append(picker);
+        if (typeof state.viewContent === "string") {
+          const frame = element("iframe", "print-preview list-preview");
+          frame.id = "list-preview";
+          frame.title = "Print preview of " + state.printFormat;
+          frame.srcdoc = state.viewContent;
+          views.append(frame);
+          views.append(row(
+            action("Print from preview", () => {
+              const target = document.getElementById("list-preview");
+              if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
+              target.contentWindow.focus();
+              target.contentWindow.print();
+            }, "primary", "print-list"),
+            action("Download list HTML", () => {
+              downloadBlob(state.viewContent, state.printFormat +
+                (state.includeReasons ? "-reasons" : "") + ".html", "text/html;charset=utf-8");
+            }, "secondary", "download-list")
+          ));
+        } else views.append(element("p", "muted", "Loading print pages…"));
+      } else {
+        if (state.printFormat === "cards") views.append(selectField("Cards per page", [
+          ["1", "1 per page (A5)"], ["2", "2 per page (A4)"], ["4", "4 per page (A4)"]
+        ], state.cardsPerPage, value => {
+          state.cardsPerPage = Number(value); loadView("print");
+        }, { id: "cards-per-page" }));
+        if (viewObjectUrl) {
+          const frame = element("iframe", "print-preview");
+          frame.id = state.printFormat === "cards" ? "cards-preview" : "floor-preview";
+          frame.title = "Printable " + state.printFormat + " PDF";
+          frame.src = viewObjectUrl;
+          views.append(frame);
+          views.append(row(
+            action("Print from preview", () => {
+              const target = document.getElementById(frame.id);
+              if (!target?.contentWindow?.print) throw Error("PDF printing unavailable in this browser. Download the PDF to print it.");
+              target.contentWindow.focus();
+              target.contentWindow.print();
+            }, "primary", "print-preview-document"),
+            action("Download PDF", () => attempt(async () => {
+              const endpoint = state.printFormat === "floor"
+                ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+              const blob = await api.post(endpoint, state.plan, "blob");
+              downloadBlob(blob, state.printFormat === "floor" ? "floor-maps.pdf" : "table-cards.pdf",
+                "application/pdf");
+            }), "secondary", state.printFormat === "cards" ? "download-cards" : "download-floor-pdf")
+          ));
+        } else views.append(element("p", "muted", "Loading PDF preview…"));
       }
-      if (typeof state.viewContent === "string") {
-        const frame = element("iframe", "print-preview list-preview");
-        frame.id = "list-preview";
-        frame.title = "Printable assignment list";
-        frame.srcdoc = state.viewContent;
-        views.append(frame);
-        views.append(row(
-          action("Print list", () => {
-            const target = document.getElementById("list-preview");
-            if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
-            target.contentWindow.focus();
-            target.contentWindow.print();
-          }, "primary", "print-list"),
-          action("Download list HTML", () => {
-            downloadBlob(state.viewContent, state.view + (state.includeReasons ? "-reasons" : "") + ".html",
-              "text/html;charset=utf-8");
-          }, "secondary", "download-list")
-        ));
-      } else views.append(element("p", "muted", "Loading printable list…"));
-    } else if (state.view === "table") {
-      views.append(element("h3", "", "Table-by-table assignments"));
-      views.append(element("pre", "", typeof state.viewContent === "string" ? state.viewContent : "Loading table view…"));
     } else if (state.view === "json") {
       views.append(element("h3", "", "Machine-readable plan"));
       views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
-    } else if (state.view === "floor") {
-      const pages = state.viewContent?.pages || [];
-      if (!pages.length) views.append(element("p", "muted", "Loading floor-map pages…"));
-      else {
-        const container = element("div", "");
-        const active = pages.find(p => p.zone_id === state.focusedFloor) || pages[0];
-        container.append(selectField("Floor", pages.map(p => [p.zone_id, p.zone_id]), active.zone_id,
-          value => { state.focusedFloor = value; render(); }, { id: "plan-floor-select" }));
-        const frame = element("iframe", "floor-preview");
-        frame.id = "floor-preview";
-        frame.title = "Printable seating map for " + active.zone_id;
-        frame.setAttribute("sandbox", "");
-        frame.srcdoc = active.svg;
-        container.append(frame);
-        container.append(action("Download full floor-map PDF", () => attempt(async () => {
-          const blob = await api.post("/v1/exports/floor-map/pdf", state.plan, "blob");
-          downloadBlob(blob, "floor-maps.pdf", "application/pdf");
-        }), "secondary", "download-floor-pdf"));
-        views.append(container);
-      }
     } else {
-      views.append(element("h3", "", "Printable table cards"));
-      views.append(selectField("Cards per page", [
-        ["1", "1 per page (A5, current default)"],
-        ["2", "2 per page (A4)"],
-        ["4", "4 per page (A4)"]
-      ], state.cardsPerPage, value => {
-        state.cardsPerPage = Number(value);
-        // Density previews are read-only; allow changes while a download is in flight.
-        loadView("cards");
-      }, { id: "cards-per-page" }));
-      if (viewObjectUrl) {
-        const frame = element("iframe", "print-preview");
-        frame.id = "cards-preview"; frame.title = "Printable PDF table cards"; frame.src = viewObjectUrl;
-        views.append(frame);
-      } else views.append(element("p", "muted", "Loading printable PDF…"));
-      views.append(action("Download table cards PDF", () => attempt(async () => {
-        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
-        downloadBlob(blob, "table-cards.pdf", "application/pdf");
-      }), "secondary", "download-cards"));
+      views.append(renderPlanWorkspace(state, { partyName, partyMembers, refresh: render }));
     }
     area.append(views);
     if ((plan.pattern_matches || []).length) {
