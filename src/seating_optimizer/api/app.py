@@ -115,10 +115,12 @@ def create_app() -> FastAPI:
         plan: Plan, group_by: Literal["combined", "floor"] = Query(default="combined"),
         include_reasons: bool = Query(default=False),
         fields: list[str] | None = Query(default=None),
+        field_labels: list[str] | None = Query(default=None),
     ) -> HTMLResponse:
         try:
             return HTMLResponse(render_people_list_html(
-                plan, group_by=group_by, include_reasons=include_reasons, fields=fields
+                plan, group_by=group_by, include_reasons=include_reasons,
+                fields=fields, field_labels=field_labels
             ))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

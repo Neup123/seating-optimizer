@@ -169,6 +169,12 @@ paths:
           schema: {type: array, items: {type: string}}
           style: form
           explode: true
+        - in: query
+          name: field_labels
+          description: Optional source-column titles in the same order as fields; display-only, leaving field keys and values unchanged.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
       requestBody:
         required: true
         content:

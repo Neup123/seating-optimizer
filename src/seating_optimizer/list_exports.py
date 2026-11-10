@@ -68,6 +68,7 @@ a{color:inherit}}
 def render_people_list_html(
     plan: Plan, *, group_by: Literal["combined", "floor"] = "combined",
     include_reasons: bool = False, fields: list[str] | None = None,
+    field_labels: list[str] | None = None,
 ) -> str:
     """One row per recorded guest; floor grouping uses plan.tables zone IDs."""
     if plan.status not in ("optimal", "feasible"):
@@ -75,6 +76,10 @@ def render_people_list_html(
     if group_by not in ("combined", "floor"):
         raise ValueError("people list group_by must be combined or floor")
     selected = _selected_fields(plan, fields)
+    if field_labels is not None and (len(field_labels) != len(selected)
+                                     or any(not label.strip() for label in field_labels)):
+        raise ValueError("field_labels must contain one nonempty title per selected field")
+    headings = field_labels if field_labels is not None else selected
     table_zones = {table.table_id: table.zone_id for table in plan.tables}
     if len(table_zones) != len(plan.tables):
         raise ValueError("Duplicate table IDs in plan")
@@ -93,7 +98,7 @@ def render_people_list_html(
     for zone, heading, entries in grouped:
         attrs = '' if zone is None else f' data-zone-id="{_text(zone)}"'
         cols = "<th>Guest</th><th>Guest ID</th><th>Group</th><th>Table</th><th>Floor / room</th>"
-        cols += "".join(f"<th>{_text(field)}</th>" for field in selected)
+        cols += "".join(f"<th>{_text(label)}</th>" for label in headings)
         if include_reasons:
             cols += "<th>Written reasons</th>"
         rows = []

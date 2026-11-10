@@ -800,11 +800,22 @@ test("list field picker displays original import headers for mapped attribute ki
   await until(() => calls.some(([path]) => path.includes("fields=language")));
   assert.equal(app.state.listFields.includes("language"), true);
   assert.equal(labels().language, "Spoken languages");
+  const age = $(".list-field-picker input[value='age_layer']");
+  age.checked = true;
+  age.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await until(() => calls.some(([path]) =>
+    path.includes("fields=language") && path.includes("fields=age_layer")));
+  const latestPeopleParams = () => new URL(calls.filter(([path]) =>
+    path.startsWith("/v1/exports/people-list/html?")).at(-1)[0], "http://localhost").searchParams;
+  assert.deepEqual(latestPeopleParams().getAll("fields"), ["language", "age_layer"]);
+  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Spoken languages", "Age band"]);
   delete app.state.mapping["Spoken languages"];
   app.state.mapping["Preferred language"] = "attribute.language";
   app.render();
   assert.equal(labels().language, "Preferred language");
   assert.equal($(".list-field-picker input[value='language']").checked, true);
+  await app.loadView("people");
+  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Preferred language", "Age band"]);
 });
 
 test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
