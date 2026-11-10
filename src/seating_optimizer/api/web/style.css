@@ -158,3 +158,20 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .working-floor-map text{fill:#194652;font-size:16px;font-weight:700;pointer-events:none}
 @media(max-width:660px){.plan-toolbar{display:grid;grid-template-columns:1fr}.plan-toolbar .field{max-width:none;width:100%}}
 @media print{.plan-workspace,.plan-toolbar,.plan-selection{display:none!important}}
+
+/* Topic B: a deliberately non-printable, review-before-apply reassignment assistant. */
+.reassign-editor{display:flex;flex-wrap:wrap;align-items:end;gap:12px;border-top:1px solid #c9dfe5;padding-top:13px}
+.reassign-editor h4{width:100%;margin:0}
+.reassign-editor .field{flex:1 1 170px;max-width:300px}
+.reassign-editor .field select{width:100%}
+.reassign-split{display:flex;gap:8px;align-items:center;width:100%;font-size:13px}
+.reassign-split input{width:18px;height:18px;flex:none;margin:0}
+.reassign-results,.reassign-stored{border:1px solid #d5e1e5;background:#f9fcfd;border-radius:11px;padding:15px;display:grid;gap:10px}
+.reassign-results h3,.reassign-stored h3{margin:0}
+.reassign-results>ul,.reassign-option ul{margin:6px 0 12px;padding-left:22px}
+.reassign-option{border:1px solid #c8dfe4;background:white;border-radius:10px;padding:13px;display:grid;gap:9px}
+.reassign-option h4,.reassign-option p{margin:0}
+.reassign-option .problem.warning{background:#fff5e9;border-color:#d58b39;color:#754615}
+.reassign-option button{justify-self:start}
+.reassign-stored>.row{justify-content:space-between;gap:9px;flex-wrap:wrap;border-bottom:1px solid #edf1f3;padding:6px 0}
+@media print{.reassign-editor,.reassign-results,.reassign-stored{display:none!important}}

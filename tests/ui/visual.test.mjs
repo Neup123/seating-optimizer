@@ -1071,3 +1071,122 @@ test("print preview requests new plan after a working-view change and shows per-
   await until(() => !!$("#list-preview"));
   assert.equal($("#print-format").value, "groups-table");
 });
+
+
+test("reassignment in every working view offers consequences, applies the plan and survives a re-solve", async () => {
+  const secondTable = { table_id: "G2", zone_id: "ground", capacity: 4,
+    occupied: 0, empty_seats: 4 };
+  const floor = structuredClone(layout);
+  floor.floors[0].tables.push({ table_id: "G2", x: 210, y: 20, width: 150,
+    height: 130, shape: "rectangle" });
+  const direction = { id: "manual-1", group_id: "family-one",
+    action: "move_to", place_type: "table", place_id: "G2", allow_split: false };
+  const old = { ...structuredClone(plan), layout: floor,
+    manual_instructions: [], tables: [plan.tables[0], secondTable] };
+  const moved = { ...structuredClone(old), total_score: 5,
+    manual_instructions: [direction],
+    tables: [{ ...plan.tables[0], occupied: 0, empty_seats: 4 },
+      { ...secondTable, occupied: 2, empty_seats: 2 }],
+    assignments: old.assignments.map(a => ({ ...a, table_id: "G2" })) };
+  const { app, $, root, calls, dom, storage } = await setup(async (path, payload) => {
+    if (path === "/v1/reassign/options") {
+      assert.equal(payload.instruction.group_id, "family-one");
+      assert.equal(payload.instruction.place_id, "G2");
+      return { status: "available", blockers: [], options: [{
+        id: "option-1", kind: "free-space", title: "Move to G2",
+        score_delta: -3, soft_rule_warnings: ["soft-lang: 3 fewer points"],
+        movements: [{ group_id: "family-one", party_name: "Green Family",
+          before: ["G1"], after: ["G2"], people: 2 }],
+        plan: moved
+      }] };
+    }
+    if (path === "/v1/solve") return payload.manual_instructions.length ? moved : old;
+    if (path.includes("/html?")) return "<!doctype html><html><body>New table G2</body></html>";
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one" },
+    { id: "g2", name: "Bob", group_id: "family-one" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 },
+    { id: "G2", zone_id: "ground", capacity: 4 }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.layout = floor;
+  app.state.plan = old;
+  app.show("plan");
+
+  for (const view of ["table", "people", "people-floor", "groups", "groups-table", "floor", "cards"]) {
+    app.state.selectedPlanItem = null;
+    await app.loadView(view);
+    assert.ok($(".plan-entry"), "Working view " + view + " contains party entries");
+    click($(".plan-target"));
+    assert.equal(app.state.selectedPlanItem.id, "family-one");
+    assert.ok($("#intent-not-here"), view + " can exclude a selected party");
+    assert.ok($("#intent-move-to"), view + " can move a selected party");
+    assert.ok([...root.querySelectorAll(".plan-entry-line button")]
+      .some(button => button.textContent === "Move to"), view + " has inline move actions");
+  }
+
+  click($("#intent-move-to"));
+  assert.equal($("#reassign-place").value, "G2");
+  assert.ok($("#reassign-allow-split"), "Explicit split consent is available");
+  click($("#find-reassign-options"));
+  await until(() => !!$("#apply-option-1"));
+  assert.match($("#reassign-results").textContent, /soft-lang: 3 fewer points/);
+  assert.match($("#reassign-results").textContent, /Score change: -3 points/);
+  assert.match($("#reassign-results").textContent, /Green Family/);
+  assert.equal(app.state.plan.assignments[0].table_id, "G1",
+    "Reviewing an option must not prematurely change the plan");
+  click($("#apply-option-1"));
+  assert.equal(app.state.plan.assignments[0].table_id, "G2");
+  assert.equal(app.state.manualInstructions[0].place_id, "G2");
+  assert.ok($("#stored-instructions"));
+  assert.ok(storage.getItem("seating-optimizer:session:v1").includes("manual-1"));
+
+  click($("#solve-plan"));
+  await until(() => calls.some(([path, payload]) =>
+    path === "/v1/solve" && payload.manual_instructions?.[0]?.id === "manual-1"));
+  await until(() => $("#notice")?.textContent.includes("Solver returned"));
+  // The solve handler also awaits the current view load before releasing
+  // the app-wide action guard. Do not click Remove while that action runs.
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(app.state.plan.assignments[0].table_id, "G2",
+    "Re-solving continues to honour the stored direction");
+  await until(() => !!$("#stored-instructions"));
+  click($("#view-print"));
+  setValue($("#print-format"), "people", dom.window);
+  await until(() => calls.some(([path, payload]) =>
+    path.startsWith("/v1/exports/people-list/html?") && payload.assignments[0].table_id === "G2"));
+
+  click($("#view-table"));
+  click($("#remove-instruction-manual-1"));
+  await until(() => app.state.manualInstructions.length === 0 &&
+    app.state.plan.assignments[0].table_id === "G1",
+    "Removing direction must complete the asynchronous server re-solve");
+  assert.equal(app.state.plan.assignments[0].table_id, "G1",
+    "Removing direction re-solves without it");
+  assert.ok(calls.some(([path, payload]) =>
+    path === "/v1/solve" && payload.manual_instructions?.length === 0));
+});
+
+test("blocked reassignment names the infinite rule and does not offer Apply", async () => {
+  const { app, $, root } = await setup(async path => {
+    if (path === "/v1/reassign/options") return {
+      status: "blocked", options: [],
+      blockers: ["rule:hard-pin-A", "Table G2 hard capacity: insufficient empty seats"]
+    };
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.state.plan = { ...plan, manual_instructions: [] };
+  app.show("plan");
+  click($(".plan-target"));
+  click($("#intent-not-here"));
+  click($("#find-reassign-options"));
+  await until(() => !!$("#reassign-results"));
+  assert.match(root.textContent, /No feasible option/);
+  assert.match(root.textContent, /hard-pin-A/);
+  assert.match(root.textContent, /hard capacity/);
+  assert.equal(root.querySelectorAll("[id^='apply-option-']").length, 0);
+});

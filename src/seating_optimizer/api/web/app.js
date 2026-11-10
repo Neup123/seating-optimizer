@@ -10,7 +10,7 @@ const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat"];
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId"];
 
 function storedJSON(key, fallback) {
   try {
@@ -196,6 +196,9 @@ export function createApp(root, api = createGateway()) {
       sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
+       manualInstructions: [], nextManualId: 1, reassignMode: null,
+       reassignResponse: null, reassignPlaceType: "table",
+       reassignPlaceId: "", reassignAllowSplit: false,
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
       templateName: "", templateSelected: "", storageWarning: ""
     };
@@ -212,6 +215,8 @@ export function createApp(root, api = createGateway()) {
     for (const key of SESSION_FIELDS) {
       if (Object.hasOwn(previous.data, key)) state[key] = previous.data[key];
     }
+    if (!Array.isArray(state.manualInstructions))
+      state.manualInstructions = state.plan?.manual_instructions || [];
     state.notice = "Restored your previous planning session.";
     state.error = false;
   }
@@ -333,7 +338,11 @@ export function createApp(root, api = createGateway()) {
     }
     finally { working = false; }
   }
-  function invalidate() { state.plan = null; state.viewContent = null; state.selectedPlanItem = null; clearObjectUrl(); ++viewRequest; }
+  function invalidate() {
+    state.plan = null; state.viewContent = null; state.selectedPlanItem = null;
+    state.reassignMode = null; state.reassignResponse = null;
+    clearObjectUrl(); ++viewRequest;
+  }
   function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
   function configuredTables() { return state.tables.filter(t => Number.isInteger(Number(t.capacity)) && Number(t.capacity) > 0); }
   function projectProblem() {
@@ -349,6 +358,7 @@ export function createApp(root, api = createGateway()) {
         small_group_priority: Boolean(t.small_group_priority) })),
       guests: state.guests,
       rules: state.rules,
+      manual_instructions: state.manualInstructions || [],
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
       layout: state.layout.floors.length ? state.layout : null
     };
@@ -1151,6 +1161,68 @@ export function createApp(root, api = createGateway()) {
     return svg;
   }
 
+  function resetPlanPreview() {
+    state.viewContent = null; state.viewError = "";
+    state.reassignMode = null; state.reassignResponse = null;
+    clearObjectUrl(); ++viewRequest;
+  }
+
+  function proposeReassignment(direction) {
+    void attempt(async () => {
+      if (!state.plan || !["optimal", "feasible"].includes(state.plan.status))
+        throw Error("Optimize a valid plan before making a manual direction.");
+      const instruction = { ...direction, id: "manual-" + (state.nextManualId++) };
+      const previousPlan = state.plan;
+      const response = await api.post("/v1/reassign/options", {
+        problem: projectProblem(), plan: previousPlan, instruction
+      });
+      if (state.plan !== previousPlan)
+        throw Error("The seating plan changed. Select the party and check the move again.");
+      state.reassignIntent = instruction;
+      state.reassignResponse = response;
+      announce(response.options?.length
+        ? "Found " + response.options.length + " solver-checked options. Review consequences before applying."
+        : "No confirmed move. Review the named hard-rule and capacity blockers.",
+        response.status === "blocked");
+    });
+  }
+
+  function applyReassignment(option) {
+    if (!state.reassignResponse?.options?.includes(option) || !state.reassignIntent)
+      throw Error("Re-check the intended move before applying.");
+    const instructions = option.plan.manual_instructions || [];
+    if (!instructions.some(item => item.id === state.reassignIntent.id))
+      throw Error("The chosen solution does not retain the manual direction.");
+    state.manualInstructions = deepCopy(instructions);
+    state.plan = deepCopy(option.plan);
+    resetPlanPreview();
+    announce("Reassignment applied: " + option.title +
+      ". All views and printable pages now use the updated plan.");
+  }
+
+  function removeInstruction(id) {
+    void attempt(async () => {
+      const remaining = state.manualInstructions.filter(item => item.id !== id);
+      if (remaining.length === state.manualInstructions.length)
+        throw Error("Instruction not found.");
+      const old = state.manualInstructions;
+      state.manualInstructions = remaining;
+      try {
+        const updated = await api.post("/v1/solve", projectProblem());
+        if (!["optimal", "feasible"].includes(updated.status))
+          throw Error("Re-solving without this direction did not produce a feasible plan: " +
+            (updated.conflicting_constraints || []).join("; "));
+        state.plan = updated;
+        state.manualInstructions = deepCopy(updated.manual_instructions || remaining);
+        resetPlanPreview();
+        announce("Manual direction removed. Solver re-optimized using the remaining instructions.");
+      } catch (error) {
+        state.manualInstructions = old;
+        throw error;
+      }
+    });
+  }
+
   function renderPlan() {
     const area = element("div");
     const controls = card("Solve seating", "Optimization runs only in the API. Hard constraints remain mandatory; time-limited results report feasible versus optimal.");
@@ -1163,6 +1235,9 @@ export function createApp(root, api = createGateway()) {
         const problem = projectProblem();
         const plan = await api.post("/v1/solve", problem);
         state.plan = plan;
+        state.manualInstructions = deepCopy(plan.manual_instructions || state.manualInstructions);
+        state.reassignResponse = null;
+        state.reassignMode = null;
         state.view = "table";
         state.viewContent = null;
         state.selectedPlanItem = null;
@@ -1180,6 +1255,18 @@ export function createApp(root, api = createGateway()) {
     area.append(controls);
     if (!state.plan) {
       area.append(element("div", "empty", "Import guests, configure the venue, add considerations, then optimize."));
+      if (state.manualInstructions.length) {
+        const stored = card("Saved manual directions", "These remain mandatory when seating is re-optimized.");
+        for (const instruction of state.manualInstructions) {
+          stored.append(row(element("span", "", instruction.group_id + " · " + instruction.action +
+            " · " + instruction.place_type + " " + instruction.place_id),
+          action("Remove", () => {
+            state.manualInstructions = state.manualInstructions.filter(item => item.id !== instruction.id);
+            render();
+          }, "quiet small")));
+        }
+        area.append(stored);
+      }
       return area;
     }
     const plan = state.plan;
@@ -1312,7 +1399,10 @@ export function createApp(root, api = createGateway()) {
       views.append(element("h3", "", "Machine-readable plan"));
       views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
     } else {
-      views.append(renderPlanWorkspace(state, { partyName, partyMembers, refresh: render }));
+      views.append(renderPlanWorkspace(state, {
+        partyName, partyMembers, refresh: render,
+        proposeReassignment, applyReassignment, removeInstruction
+      }));
     }
     area.append(views);
     if ((plan.pattern_matches || []).length) {
