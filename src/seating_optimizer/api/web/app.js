@@ -212,6 +212,12 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
+    for (const floor of state.layout.floors) for (const drawing of floor.tables) {
+      const table = state.tables.find(t => t.id === drawing.table_id);
+      if (table && (Object.hasOwn(table, "small_group_priority") ||
+          Object.hasOwn(drawing, "small_group_priority")))
+        drawing.small_group_priority = Boolean(table.small_group_priority);
+    }
     state.rules = copy.rules;
     state.nextRule = Math.max(1, ...state.rules.map(r => {
       const match = /^rule-(\d+)$/.exec(r.id);
@@ -267,7 +273,8 @@ export function createApp(root, api = createGateway()) {
       session_id: state.sessionId,
       zones: state.zones.map(z => ({ id: z.id, name: z.name })),
       tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id,
-        capacity: Number(t.capacity), properties: [...(t.properties || [])] })),
+        capacity: Number(t.capacity), properties: [...(t.properties || [])],
+        small_group_priority: Boolean(t.small_group_priority) })),
       guests: state.guests,
       rules: state.rules,
       config: { time_limit_seconds: Number(state.seconds), workers: 8, random_seed: 42 },
@@ -671,10 +678,13 @@ export function createApp(root, api = createGateway()) {
           throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
         // Layout JSON carries portable tags; Table.properties is the solver input.
         // Synchronize both copies without assigning tag weights.
-        if (old) old.properties = [...(drawing.properties || [])];
-        else state.tables.push({
+        if (old) {
+          old.properties = [...(drawing.properties || [])];
+          old.small_group_priority = Boolean(drawing.small_group_priority);
+        } else state.tables.push({
           id: drawing.table_id, zone_id: floor.zone_id, capacity: null,
-          properties: [...(drawing.properties || [])]
+          properties: [...(drawing.properties || [])],
+          small_group_priority: Boolean(drawing.small_group_priority)
         });
       }
     }
@@ -837,7 +847,11 @@ export function createApp(root, api = createGateway()) {
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
     const propertyInput = textField("Table tags (comma-separated)", "", () => {},
       { id: "new-table-properties", placeholder: "accessible, aisle-edge" });
-    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput);
+    const priorityLabel = element("label", "field");
+    const priorityInput = document.createElement("input");
+    priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
+    priorityLabel.append(priorityInput, element("span", "", "Priority for couples and singles (soft)"));
+    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput, priorityLabel);
     const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
     tableForm.append(create);
     tableForm.addEventListener("submit", event => {
@@ -855,8 +869,10 @@ export function createApp(root, api = createGateway()) {
       const x = 8 + (layout.tables.length % 3) * 14;
       const y = 8 + (layout.tables.length % 3) * 14;
       if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
-      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties });
-      layout.tables.push({ table_id: id, x, y, width, height, shape, properties: [...properties] });
+      const small_group_priority = priorityInput.checked;
+      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
+      layout.tables.push({ table_id: id, x, y, width, height, shape,
+        properties: [...properties], small_group_priority });
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -885,6 +901,14 @@ export function createApp(root, api = createGateway()) {
       editor.append(fields, textField("Table tags (comma-separated)",
         (table?.properties || drawing.properties || []).join(", "), () => {},
         { id: "table-" + drawing.table_id + "-properties" }));
+      const priorityLabel = element("label", "field");
+      const priorityInput = document.createElement("input");
+      priorityInput.type = "checkbox";
+      priorityInput.id = "table-" + drawing.table_id + "-small-priority";
+      priorityInput.checked = Boolean(table?.small_group_priority);
+      priorityLabel.append(priorityInput, element("span", "",
+        "Priority for couples and singles (soft)"));
+      editor.append(priorityLabel);
       const save = element("button", "secondary small", "Apply dimensions");
       save.type = "submit";
       const remove = action("Remove table", () => {
@@ -911,7 +935,9 @@ export function createApp(root, api = createGateway()) {
         } catch (error) { return announce(error.message, true); }
         table.capacity = next.capacity;
         table.properties = properties;
+        table.small_group_priority = priorityInput.checked;
         drawing.properties = [...properties];
+        drawing.small_group_priority = priorityInput.checked;
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
         invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");

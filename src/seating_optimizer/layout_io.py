@@ -81,8 +81,12 @@ def _svg_floor(content: bytes) -> FloorLayout:
                     if _tag(node) == "text" and "".join(node.itertext()).strip()]
         if numbered and (len(numbered) != 1 or numbered[0] != table_id):
             raise ValueError(f"Table {table_id} text label must match its data-table-id")
+        priority = element.get("data-small-group-priority", "false").lower()
+        if priority not in ("true", "false", "1", "0"):
+            raise ValueError(f"Table {table_id} has invalid small-group priority flag")
         drawings.append(TableDrawing(table_id=table_id, x=x, y=y,
-                                     width=w, height=h, shape=shape))
+                                     width=w, height=h, shape=shape,
+                                     small_group_priority=priority in ("true", "1")))
     if not drawings:
         raise ValueError("SVG draft must contain at least one numbered table group")
     return FloorLayout(zone_id=zone_id, width=width, height=height, tables=drawings)

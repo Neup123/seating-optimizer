@@ -36,6 +36,7 @@ class Table(Model):
     zone_id: str
     capacity: int = Field(gt=0)
     properties: list[str] = Field(default_factory=list)
+    small_group_priority: bool = False
 
     @field_validator("properties")
     @classmethod
@@ -56,6 +57,7 @@ class TableDrawing(Model):
     height: float = Field(gt=0)
     shape: Literal["rectangle", "ellipse", "circle"] = "rectangle"
     properties: list[str] = Field(default_factory=list)
+    small_group_priority: bool = False
 
     @field_validator("properties")
     @classmethod

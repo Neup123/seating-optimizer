@@ -126,3 +126,15 @@ def test_layout_survives_real_solve():
         guests=[Guest(id="a", name="Alice")], layout=layout))
     assert plan.status in ("feasible", "optimal")
     assert plan.layout == layout
+
+
+def test_layout_round_trip_carries_small_group_priority_metadata():
+    _, _, original = sample()
+    original.floors[0].tables[0].small_group_priority = True
+    loaded = import_layout(original.model_dump_json().encode(), "layout.json")
+    assert loaded.floors[0].tables[0].small_group_priority
+    svg = (b'<svg data-zone-id="ground" viewBox="0 0 200 150">'
+           b'<g data-table-id="T1" data-small-group-priority="true">'
+           b'<rect x="10" y="10" width="80" height="60"/><text>T1</text></g></svg>')
+    imported = import_layout(svg, "floor.svg")
+    assert imported.floors[0].tables[0].small_group_priority
