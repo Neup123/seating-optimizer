@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feature/phase-1-headless-optimizer]
   pull_request:
-    branches: [main]
+    branches: [main, feat/53-interactive-views]
 permissions:
   contents: read
 jobs:
