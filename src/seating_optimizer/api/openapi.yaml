@@ -121,6 +121,24 @@ paths:
               schema: {$ref: '#/components/schemas/Plan'}
         '422':
           description: Invalid problem or references
+  /v1/reassign/options:
+    post:
+      operationId: proposeReassignment
+      summary: Solver-check concrete moves for a party and its stored human instruction
+      description: All options satisfy hard constraints and physical chair capacities. Finite-weight scoring losses and affected parties are returned for confirmation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReassignRequest'}
+      responses:
+        '200':
+          description: Concrete options, their full proposed plans and rule blockers
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReassignResponse'}
+        '422':
+          description: Invalid party, place, instruction or stale plan
   /v1/exports/table:
     post:
       operationId: exportTable
@@ -470,6 +488,17 @@ components:
         mode: {type: string, enum: [soft, hard]}
         parameters: {type: object, additionalProperties: true}
         weight: {type: [integer, 'null'], minimum: 1}
+    ManualInstruction:
+      type: object
+      additionalProperties: false
+      required: [id, group_id, action, place_type, place_id]
+      properties:
+        id: {type: string, minLength: 1}
+        group_id: {type: string, minLength: 1}
+        action: {type: string, enum: [not_here, move_to]}
+        place_type: {type: string, enum: [table, floor, zone]}
+        place_id: {type: string, minLength: 1}
+        allow_split: {type: boolean, default: false}
     SolverConfig:
       type: object
       additionalProperties: false
@@ -487,6 +516,9 @@ components:
         tables: {type: array, items: {$ref: '#/components/schemas/Table'}}
         guests: {type: array, items: {$ref: '#/components/schemas/Guest'}}
         rules: {type: array, items: {$ref: '#/components/schemas/Rule'}}
+        manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
+        locked_guest_tables: {type: object, additionalProperties: {type: string}}
+        splittable_groups: {type: array, items: {type: string}}
         config: {$ref: '#/components/schemas/SolverConfig'}
         layout:
           anyOf:
@@ -583,6 +615,7 @@ components:
       properties:
         session_id: {type: string}
         status: {type: string, enum: [optimal, feasible, infeasible, unknown]}
+        manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
         total_score: {type: [integer, 'null']}
         assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
         tables: {type: array, items: {$ref: '#/components/schemas/TableUsage'}}
@@ -599,3 +632,42 @@ components:
           anyOf:
             - {$ref: '#/components/schemas/VenueLayout'}
             - {type: 'null'}
+
+    ReassignRequest:
+      type: object
+      additionalProperties: false
+      required: [problem, plan, instruction]
+      properties:
+        problem: {$ref: '#/components/schemas/Problem'}
+        plan: {$ref: '#/components/schemas/Plan'}
+        instruction: {$ref: '#/components/schemas/ManualInstruction'}
+    Movement:
+      type: object
+      additionalProperties: false
+      required: [group_id, party_name, before, after, people]
+      properties:
+        group_id: {type: string}
+        party_name: {type: string}
+        before: {type: array, items: {type: string}}
+        after: {type: array, items: {type: string}}
+        people: {type: integer}
+    ReassignOption:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, movements, score_delta, soft_rule_warnings, plan]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [free-space, one-to-one, many-for-one, reverse-many-for-one, split, chain, re-optimize]}
+        title: {type: string}
+        movements: {type: array, items: {$ref: '#/components/schemas/Movement'}}
+        score_delta: {type: integer}
+        soft_rule_warnings: {type: array, items: {type: string}}
+        plan: {$ref: '#/components/schemas/Plan'}
+    ReassignResponse:
+      type: object
+      additionalProperties: false
+      required: [status, options, blockers]
+      properties:
+        status: {type: string, enum: [available, blocked, unknown]}
+        options: {type: array, items: {$ref: '#/components/schemas/ReassignOption'}}
+        blockers: {type: array, items: {type: string}}
