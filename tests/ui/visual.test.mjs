@@ -1158,7 +1158,9 @@ test("reassignment in every working view offers consequences, applies the plan a
 
   click($("#view-table"));
   click($("#remove-instruction-manual-1"));
-  await until(() => app.state.manualInstructions.length === 0);
+  await until(() => app.state.manualInstructions.length === 0 &&
+    app.state.plan.assignments[0].table_id === "G1",
+    "Removing direction must complete the asynchronous server re-solve");
   assert.equal(app.state.plan.assignments[0].table_id, "G1",
     "Removing direction re-solves without it");
   assert.ok(calls.some(([path, payload]) =>
