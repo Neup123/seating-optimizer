@@ -88,17 +88,93 @@ def test_off_by_default_and_no_pattern_are_neutral():
         assert out.pattern_matches == []
 
 
+def configuration_payload(rule_record):
+    """Portable configuration: same Rule contract as the session solve API."""
+    return {
+        "version": 1, "name": "Pattern test venue",
+        "zones": [{"id": "hall", "name": "Hall"}],
+        "tables": [
+            {"id": "T0", "zone_id": "hall", "capacity": 4},
+            {"id": "T1", "zone_id": "hall", "capacity": 3},
+        ],
+        "layout": {"floors": [{
+            "zone_id": "hall", "width": 400, "height": 300,
+            "tables": [
+                {"table_id": "T0", "x": 10, "y": 10, "width": 100, "height": 80},
+                {"table_id": "T1", "x": 130, "y": 10, "width": 100, "height": 80},
+            ],
+        }]},
+        "rules": [rule_record],
+    }
+
+
 def test_global_pattern_rejects_unknown_facts_bad_values_and_non_global_scope():
-    for parameter in (
+    for parameters in (
         {"enabled": True, "conditions": [clause("unknown", "==", 1)]},
         {"enabled": True, "conditions": [clause("empty_seats", "is", 1)]},
         {"enabled": True, "conditions": [clause("empty_seats", "==", -1)]},
         {"enabled": True, "conditions": []},
         {"enabled": True, "scope": "table", "conditions": [clause("empty_seats", "==", 1)]},
     ):
-        bad = Rule(id="bad", shape="global_pattern", mode="soft", weight=2, parameters=parameter)
+        record = {"id": "bad", "shape": "global_pattern", "mode": "soft",
+                  "weight": 2, "parameters": parameters}
         with pytest.raises(ValueError):
-            solve(problem({"family": 1}, [2], [bad]))
-        response = TestClient(app).post("/v1/solve",
-            json=problem({"family": 1}, [2], [bad]).model_dump(mode="json"))
+            Rule.model_validate(record)
+        payload = problem({"family": 1}, [2], []).model_dump(mode="json")
+        payload["rules"] = [record]
+        response = TestClient(app).post("/v1/solve", json=payload)
         assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize("value", ["", "not-a-number", -1, 2.5, True, None, "2", 100001])
+def test_pattern_count_rejects_invalid_values_at_model_solve_and_configuration_api(value):
+    record = {
+        "id": "pattern", "shape": "global_pattern", "mode": "soft", "weight": 5,
+        "parameters": {"scope": "global", "enabled": True, "effect": "penalty",
+                       "conditions": [clause("groups_at_table", "==", value)]},
+    }
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        Rule.model_validate(record)
+    client = TestClient(app)
+    payload = problem({"family": 1}, [2], []).model_dump(mode="json")
+    payload["rules"] = [record]
+    response = client.post("/v1/solve", json=payload)
+    assert response.status_code == 422, response.text
+    configuration_response = client.post("/v1/configurations/validate",
+                                         json=configuration_payload(record))
+    assert configuration_response.status_code == 422, configuration_response.text
+
+
+@pytest.mark.parametrize("value", [0, 17])
+def test_pattern_count_accepts_nonnegative_integer_without_coercion(value):
+    original = rule([clause("occupied_seats", ">=", value)], enabled=False)
+    restored = Rule.model_validate_json(original.model_dump_json())
+    assert type(restored.parameters["conditions"][0]["value"]) is int
+    assert restored.parameters["conditions"][0]["value"] == value
+    response = TestClient(app).post("/v1/configurations/validate",
+                                    json=configuration_payload(original.model_dump(mode="json")))
+    assert response.status_code == 200, response.text
+    saved_value = response.json()["rules"][0]["parameters"]["conditions"][0]["value"]
+    assert type(saved_value) is int and saved_value == value
+
+
+def test_seeded_lonely_seat_pattern_round_trips_configuration_and_still_scores():
+    seed = rule([clause("groups_at_table", "==", 1),
+                 clause("empty_seats", "==", 1)], enabled=False, weight=5)
+    response = TestClient(app).post("/v1/configurations/validate",
+                                    json=configuration_payload(seed.model_dump(mode="json")))
+    assert response.status_code == 200, response.text
+    loaded = Rule.model_validate(response.json()["rules"][0])
+    assert loaded.model_dump() == seed.model_dump()
+    assert loaded.parameters["enabled"] is False
+    loaded.parameters["enabled"] = True
+    fixed = Rule(id="locked", shape="pin", mode="hard",
+                 parameters={"target": "family", "table": "T0"})
+    result = solve(problem({"family": 3}, [4, 3], [loaded, fixed]))
+    assert result.status == "optimal"
+    assert result.total_score == -5
+    assert len(result.pattern_matches) == 1
+    assert result.pattern_matches[0].table_id == "T0"
+    assert result.pattern_matches[0].points == -5
+    assert any(reason.rule_id == "pattern" and reason.points == -5
+               for assignment in result.assignments for reason in assignment.reasons)

@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .pattern_rules import validate_pattern
+
 
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -175,6 +177,9 @@ class Rule(Model):
             raise ValueError("Capacity and pin rules must be hard")
         if self.shape in {"fill_efficiency", "global_pattern"} and self.mode != "soft":
             raise ValueError("Fill efficiency and global patterns must be soft")
+        if self.shape == "global_pattern":
+            # Validate before Rule can enter Problem, VenueConfiguration, or an API payload.
+            validate_pattern(self.parameters, rule_id=self.id)
         return self
 
 

@@ -32,6 +32,14 @@ const catalog = {
                { name: "table", label: "Table", kind: "table", required: true, choices: [] }] },
   ]
 };
+const globalPatternSpec = {
+  shape: "global_pattern", title: "Global table-count pattern", description: "Generic rule",
+  modes: ["soft"], default_mode: "soft", default_weight: 2,
+  fields: [
+    { name: "effect", label: "Effect", kind: "select", required: true, choices: ["penalty", "reward"] },
+    { name: "conditions", label: "Conditions", kind: "pattern", required: true, choices: [] }
+  ]
+};
 const layout = { floors: [
   { zone_id: "ground", width: 400, height: 300, tables: [
     { table_id: "G1", x: 20, y: 20, width: 160, height: 140, shape: "rectangle" }
@@ -605,14 +613,7 @@ test("printable list tabs fetch exact API views and toggle written reasons witho
 
 
 test("global pattern rule editor composes a different count pattern, score and on/off controls", async () => {
-  catalog.shapes.push({
-    shape: "global_pattern", title: "Global table-count pattern", description: "Generic rule",
-    modes: ["soft"], default_mode: "soft", default_weight: 2,
-    fields: [
-      { name: "effect", label: "Effect", kind: "select", required: true, choices: ["penalty", "reward"] },
-      { name: "conditions", label: "Conditions", kind: "pattern", required: true, choices: [] }
-    ]
-  });
+  catalog.shapes.push(globalPatternSpec);
   try {
     const { app, dom, $, root } = await setup();
     app.show("rules");
@@ -659,6 +660,84 @@ test("global pattern rule editor composes a different count pattern, score and o
   } finally { catalog.shapes.pop(); }
 });
 
+
+
+test("global pattern count autosave rejects empty, nonnumeric, negative and fractional drafts", async () => {
+  catalog.shapes.push(globalPatternSpec);
+  try {
+    const { app, dom, $, storage } = await setup();
+    app.show("rules");
+    setValue($("#new-rule-shape"), "global_pattern", dom.window);
+    click($("#add-rule"));
+    const count = $("#rule-0-pattern-0-value");
+    const savedCount = () => JSON.parse(storage.getItem("seating-optimizer:session:v1"))
+      .data.rules[0].parameters.conditions[0].value;
+    assert.equal(savedCount(), 1);
+    for (const invalid of ["", "not-a-number", "-1", "2.5", "01", "100001"]) {
+      setValue(count, invalid, dom.window);
+      assert.equal(count.value, invalid, "invalid draft remains visible");
+      assert.equal(count.getAttribute("aria-invalid"), "true");
+      assert.match($("#rule-0-pattern-0-value-error").textContent, /whole number/);
+      assert.equal(app.state.rules[0].parameters.conditions[0].value, 1);
+      assert.equal(savedCount(), 1, "invalid value is never autosaved");
+      assert.throws(() => app.projectProblem(), /Fix the highlighted global-pattern count/);
+    }
+    app.show("rules"); // Rendering another view must not silently clear the error.
+    assert.equal($("#rule-0-pattern-0-value").value, "100001");
+    assert.equal($("#rule-0-pattern-0-value").getAttribute("aria-invalid"), "true");
+    setValue($("#rule-0-pattern-0-value"), "0", dom.window);
+    assert.equal(app.state.rules[0].parameters.conditions[0].value, 0);
+    assert.equal(savedCount(), 0);
+    assert.equal($("#rule-0-pattern-0-value").hasAttribute("aria-invalid"), false);
+    const input = $("#rule-0-pattern-0-value");
+    input.value = "17";
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    assert.equal(app.state.rules[0].parameters.conditions[0].value, 17);
+    assert.equal(savedCount(), 17, "autosave applies on input, without waiting for blur");
+  } finally { catalog.shapes.pop(); }
+});
+
+test("valid seeded pattern saves and loads through browser templates; invalid draft blocks apply", async () => {
+  catalog.shapes.push(globalPatternSpec);
+  try {
+    const { app, dom, $, root, storage } = await setup(async (path, payload) =>
+      path === "/v1/configurations/validate" ? payload : {});
+    app.state.zones = [{ id: "ground", name: "Ground" }];
+    app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+    app.state.layout = layout;
+    app.show("rules");
+    setValue($("#new-rule-shape"), "global_pattern", dom.window);
+    click($("#add-rule"));
+    const seeded = JSON.parse(JSON.stringify(app.state.rules[0]));
+    setValue($("#rule-0-pattern-0-value"), "", dom.window);
+    app.show("map");
+    setValue($("#template-name"), "Dinner", dom.window);
+    click($("#save-template"));
+    await until(() => root.textContent.includes("Fix the highlighted global-pattern count"));
+    assert.equal(storage.getItem("seating-optimizer:templates:v1"), null);
+    app.show("rules");
+    assert.equal($("#rule-0-pattern-0-value").getAttribute("aria-invalid"), "true");
+    setValue($("#rule-0-pattern-0-value"), "1", dom.window);
+    app.show("map");
+    click($("#save-template"));
+    await until(() => root.textContent.includes("Saved configuration template: Dinner"));
+    const stored = JSON.parse(storage.getItem("seating-optimizer:templates:v1"));
+    assert.deepEqual(stored[0].rules[0], seeded);
+    app.show("rules");
+    setValue($("#rule-0-pattern-0-value"), "0", dom.window);
+    app.show("map");
+    setValue($("#template-select"), "Dinner", dom.window);
+    click($("#load-template"));
+    await until(() => root.textContent.includes("Loaded template Dinner"));
+    assert.deepEqual(app.state.rules[0], seeded);
+    const savedSession = storage.getItem("seating-optimizer:session:v1");
+    const restored = await setup(async () => ({}), { "seating-optimizer:session:v1": savedSession });
+    assert.deepEqual(restored.app.state.rules[0], seeded);
+    restored.app.show("rules");
+    assert.equal(restored.$("#rule-0-pattern-0-value").value, "1");
+    assert.equal(restored.$("#rule-0-pattern-0-value").hasAttribute("aria-invalid"), false);
+  } finally { catalog.shapes.pop(); }
+});
 
 test("table priority checkbox persists between creation, editing, layout and solve payload", async () => {
   const { app, dom, $, root } = await setup();
