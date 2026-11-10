@@ -254,14 +254,18 @@ test("solved plan switches between all API exports and shows reasons, compromise
   app.state.layout = layout;
   app.show("plan");
   click($("#solve-plan"));
-  await until(() => root.textContent.includes("Table G1: Alice and Bob"));
+  await until(() => !!$(".plan-entry"));
   assert.match(root.textContent, /Shares language at this table/);
   assert.match(root.textContent, /Table G1 has two empty chairs/);
   assert.match(root.textContent, /Empty chairs/);
   click($("#view-floor"));
-  await until(() => !!$("#floor-preview"));
-  assert.match($("#floor-preview").srcdoc, /family-one/);
+  await until(() => !!$("#working-floor-svg"));
+  assert.ok($("#working-floor-svg").querySelector('[data-table-id="G1"]'));
   click($("#view-cards"));
+  await until(() => !!$(".working-table-card"));
+  assert.equal($("#cards-preview"), null, "working cards must not be a PDF frame");
+  click($("#view-print"));
+  setValue($("#print-format"), "cards", dom.window);
   await until(() => !!$("#cards-preview"));
   assert.equal($("#cards-preview").src, "blob:test/print");
   assert.equal($("#cards-per-page").value, "1");
@@ -333,7 +337,7 @@ test("a full guest/rule/layout/solved session survives reload and explicit reset
   assert.equal(restored.app.state.mapping.Name, "name");
   assert.deepEqual(restored.app.state.layout, layout);
   assert.deepEqual(restored.app.state.plan, plan);
-  await until(() => restored.root.textContent.includes("Table G1: Alice and Bob"));
+  await until(() => !!restored.$(".plan-entry"));
   click(restored.$("#new-session"));
   assert.equal(restored.app.state.guests.length, 0);
   assert.equal(restored.app.state.rules.length, 0);
@@ -471,10 +475,11 @@ test("import, venue validation, solve and export retry only the failed request w
   offline.delete("/v1/solve");
   click($("#retry-action"));
   await until(() => !!app.state.plan);
-  assert.match(root.textContent, /Table G1: Alice and Bob/);
+  assert.ok($(".plan-entry"));
   // An export-preview failure offers Retry for that export, not re-solve.
   offline.add("/v1/exports/table-cards/pdf");
-  click($("#view-cards"));
+  click($("#view-print"));
+  setValue($("#print-format"), "cards", dom.window);
   await until(() => !!$("#retry-action"));
   assert.ok(app.state.plan);
   assert.doesNotMatch(root.textContent, /Failed to fetch/);
@@ -607,11 +612,10 @@ test("rule creation exposes a type-first form and existing rules can change type
   assert.ok($("#rule-0-property"), "converted rule shows guest-need fields");
 });
 
-test("printable list tabs fetch exact API views and toggle written reasons without affecting cards", async () => {
+test("working list tabs are interactive while only print preview fetches printable HTML", async () => {
   const printable = "<!DOCTYPE html><html><head></head><body><p>Exact plan HTML</p></body></html>";
-  const { app, $, dom, calls } = await setup(async (path) => {
+  const { app, $, dom, calls } = await setup(async path => {
     if (path === "/v1/solve") return plan;
-    if (path === "/v1/exports/table") return "table output";
     if (path.includes("/html?")) return printable;
     if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"], { type: "application/pdf" });
     return {};
@@ -623,27 +627,36 @@ test("printable list tabs fetch exact API views and toggle written reasons witho
   app.show("plan");
   click($("#solve-plan"));
   await until(() => !!app.state.plan);
-  for (const [tab, endpoint] of [
+  for (const tab of ["people", "people-floor", "groups", "groups-table", "cards"]) {
+    click($("#view-" + tab));
+    assert.ok($(".plan-entry"));
+    assert.equal($("#list-preview"), null);
+    assert.equal($("#print-list"), null);
+  }
+  assert.equal(calls.filter(([path]) => path.includes("/html?")).length, 0);
+  click($("#view-print"));
+  await until(() => !!$("#list-preview"));
+  assert.equal($("#list-preview").srcdoc, printable);
+  for (const [format, endpoint] of [
     ["people", "people-list/html?group_by=combined"],
     ["people-floor", "people-list/html?group_by=floor"],
     ["groups", "table-list/html?group_by=combined"],
     ["groups-table", "table-list/html?group_by=table"]
   ]) {
-    click($("#view-" + tab));
+    setValue($("#print-format"), format, dom.window);
     await until(() => !!$("#list-preview"));
     assert.equal($("#print-reasons").checked, false);
-    assert.equal($("#list-preview").srcdoc, printable);
     assert.ok(calls.some(([path]) => path.includes(endpoint + "&include_reasons=false")));
-    const checkbox = $("#print-reasons");
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    const box = $("#print-reasons");
+    box.checked = true;
+    box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     await until(() => calls.some(([path]) => path.includes(endpoint + "&include_reasons=true")));
     assert.equal($("#print-reasons").checked, true);
   }
-  click($("#view-cards"));
+  setValue($("#print-format"), "cards", dom.window);
   await until(() => !!$("#cards-preview"));
+  assert.equal($("#list-preview"), null);
 });
-
 
 test("global pattern rule editor composes a different count pattern, score and on/off controls", async () => {
   catalog.shapes.push(globalPatternSpec);
@@ -816,7 +829,8 @@ test("list field picker and printable titles humanize unmapped attributes across
   app.show("plan");
   click($("#solve-plan"));
   await until(() => !!app.state.plan);
-  click($("#view-people"));
+  click($("#view-print"));
+  setValue($("#print-format"), "people", dom.window);
   await until(() => !!$(".list-field-picker"));
   const labels = () => Object.fromEntries(
     [...$(".list-field-picker").querySelectorAll(".list-field-choice")].map(label => [
@@ -880,7 +894,8 @@ test("list field picker uses imported names and sends the selected columns to pr
   app.show("plan");
   click($("#solve-plan"));
   await until(() => !!app.state.plan);
-  click($("#view-people"));
+  click($("#view-print"));
+  setValue($("#print-format"), "people", dom.window);
   await until(() => !!$(".list-field-picker"));
   const input = [...$(".list-field-picker").querySelectorAll("input")].find(el => el.value === "Language");
   assert.ok(input, "picker includes original imported field");
@@ -988,4 +1003,71 @@ test("global pattern match card uses singular facts and points", async () => {
   assert.match(root.textContent, /1 group, 1 occupied seat, 1 empty seat/);
   assert.match(root.textContent, /\(-1 point\)/);
   assert.doesNotMatch(root.textContent, /1 groups|1 empty seats|-1 points/);
+});
+
+test("v2 selection persists across workspace views and person/party actions stay in place", async () => {
+  const { app, $, dom, root } = await setup(async path => {
+    if (path === "/v1/solve") return plan;
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice" }, { id: "g2", name: "Bob" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!$(".plan-entry"));
+  click($(".plan-target"));
+  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
+  click($("#inspect-selection"));
+  assert.match($(".plan-details").textContent, /Shares language at this table/);
+  click($("#view-people"));
+  assert.equal($(".plan-target").getAttribute("aria-pressed"), "true");
+  click($(".plan-person"));
+  assert.deepEqual(app.state.selectedPlanItem, { kind: "person", id: "g1" });
+  click($("#select-whole-party"));
+  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
+  const search = $("#plan-search");
+  search.value = "no matching party";
+  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.equal(root.querySelectorAll(".plan-entry").length, 0);
+  assert.equal($("#plan-selection") !== null, true, "selection survives filtered results");
+  setValue($("#plan-sort"), "name", dom.window);
+  setValue($("#plan-filter-floor"), "ground", dom.window);
+  click($("#view-groups-table"));
+  assert.equal(root.querySelectorAll(".plan-entry").length, 0);
+  click($("#clear-plan-selection"));
+  assert.equal(app.state.selectedPlanItem, null);
+  app.state.workspaceQuery = "";
+  app.render();
+  assert.ok($(".plan-entry"));
+  assert.equal($("#list-preview"), null);
+});
+
+test("print preview requests new plan after a working-view change and shows per-table pages", async () => {
+  const { app, $, dom, calls } = await setup(async (path, payload) => {
+    if (path === "/v1/solve") return plan;
+    if (path.includes("/html?")) return "<html><body>Print for " + payload.session_id + "</body></html>";
+    return {};
+  });
+  app.state.guests = [{ id: "g1", name: "Alice" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!app.state.plan);
+  click($("#view-groups-table"));
+  click($(".plan-target"));
+  click($("#view-print"));
+  await until(() => !!$("#list-preview"));
+  assert.match($("#list-preview").srcdoc, /Print for test/);
+  assert.ok(calls.some(([path]) => path.includes("/table-list/html?group_by=table")));
+  assert.equal($("#print-list") !== null, true);
+  click($("#view-table"));
+  assert.equal($("#print-list"), null);
+  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
+  click($("#view-print"));
+  await until(() => !!$("#list-preview"));
+  assert.equal($("#print-format").value, "groups-table");
 });
