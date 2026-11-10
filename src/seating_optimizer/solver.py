@@ -181,12 +181,18 @@ def solve(problem: Problem) -> Plan:
         if rule.shape == "pair" and rule.parameters["relation"] == "together"
         for target in (rule.parameters["left"], rule.parameters["right"])
     }
-    split_groups = {
-        gid for gid, members in groups.items()
-        if len(members) > maximum_table and gid not in linked
+    explicit_split = set(problem.splittable_groups) | {
+        i.group_id for i in problem.manual_instructions if i.allow_split
     }
+    # Explicitly authorized splits may use separate free blocks. Legacy
+    # oversized-party fallback still requires adjacent drawings.
+    adjacent_split = {
+        gid for gid, members in groups.items()
+        if len(members) > maximum_table and gid not in linked and gid not in explicit_split
+    }
+    split_groups = adjacent_split | explicit_split
     neighbours = neighbouring_tables(problem.layout, tables)
-    for gid in sorted(split_groups):
+    for gid in sorted(adjacent_split):
         # Prune forbidden drawings BEFORE testing connected capacity. A route
         # through a forbidden or unoccupied intermediary does not qualify.
         admissible = set(range(len(tables)))
@@ -222,7 +228,7 @@ def solve(problem: Problem) -> Plan:
                     + detail
                 ],
                 message="The oversized group cannot be seated at adjacent tables.",
-                solve_seconds=perf_counter() - start, layout=problem.layout,
+                solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
             )
     proven_obstruction = _capacity_obstruction(groups, tables, split_groups)
     if proven_obstruction:
@@ -230,7 +236,7 @@ def solve(problem: Problem) -> Plan:
             session_id=problem.session_id, status="infeasible",
             conflicting_constraints=[proven_obstruction],
             message="No seating arrangement is possible with the available table capacities and party sizes.",
-            solve_seconds=perf_counter() - start, layout=problem.layout,
+            solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
         )
     model = cp_model.CpModel()
     ids = list(groups)
@@ -293,7 +299,7 @@ def solve(problem: Problem) -> Plan:
                     "with enough chairs. Keep each group whole and adjust the layout."
                 ],
                 message="The requested adjacent-table fallback cannot fit on this layout.",
-                solve_seconds=perf_counter() - start, layout=problem.layout,
+                solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
             )
         active = model.NewBoolVar(f"adjacent-fallback:{cluster_index}")
         for rule in compulsory:
@@ -345,6 +351,38 @@ def solve(problem: Problem) -> Plan:
         model.Add(sum(roots.values()) == 1)
         for j in range(n):
             model.Add(sum(incoming[j]) + roots[j] == x[gid, j])
+
+    # Human instructions are mandatory during this and every subsequent
+    # re-solve. They are NEVER allowed to weaken existing hard constraints.
+    # Assumptions let the infeasibility report name the manual instruction
+    # and the specific conflicting infinite-weight rule.
+    for direction in problem.manual_instructions:
+        gid = direction.group_id
+        guard = hard(f"instruction:{direction.id}")
+        eligible = [
+            j for j, table in enumerate(tables)
+            if (table.id == direction.place_id if direction.place_type == "table"
+                else table.zone_id == direction.place_id)
+        ]
+        if direction.action == "not_here":
+            for j in eligible:
+                model.Add(x[gid, j] == 0).OnlyEnforceIf(guard)
+        elif direction.place_type == "table" and gid in split_groups:
+            # At least one part reaches the requested table; the rest are
+            # listed explicitly in the resulting split placement.
+            model.Add(x[gid, eligible[0]] == 1).OnlyEnforceIf(guard)
+        elif direction.place_type == "table":
+            model.Add(x[gid, eligible[0]] == 1).OnlyEnforceIf(guard)
+        else:
+            # A floor/zone direction applies to ALL members, even if split.
+            for member in groups[gid]:
+                model.Add(sum(guest_at[member.id, j] for j in eligible) == 1).OnlyEnforceIf(guard)
+
+    for member in problem.guests:
+        table_id = problem.locked_guest_tables.get(member.id)
+        if table_id is not None:
+            j = next(j for j, table in enumerate(tables) if table.id == table_id)
+            model.Add(guest_at[member.id, j] == 1)
 
     terms = []
     for rule in problem.rules:
@@ -540,7 +578,7 @@ def solve(problem: Problem) -> Plan:
             status="infeasible" if status == cp_model.INFEASIBLE else "unknown",
             conflicting_constraints=conflicts,
             solve_seconds=perf_counter() - start,
-            layout=problem.layout,
+            layout=problem.layout, manual_instructions=problem.manual_instructions,
             message=message,
         )
 
@@ -616,7 +654,9 @@ def solve(problem: Problem) -> Plan:
                 if not k:
                     continue
                 total_matches += k
-                zone = tables[placed[gid]].zone_id
+                group_zones = {tables[j].zone_id for j in group_tables[gid]}
+                zone = next((z for z in sorted(group_zones) if z in allowed),
+                            tables[placed[gid]].zone_id)
                 if zone in allowed:
                     share = (rule.weight * k if rule.mode == "soft" else 0)
                     points += share
@@ -829,9 +869,11 @@ def solve(problem: Problem) -> Plan:
             continue
         table_names = ", ".join(sorted(tables[j].id for j in group_tables[gid]))
         explanation = Reason(
-            rule_id=f"adjacent-fallback:{gid}",
+            rule_id=f"adjacent-fallback:{gid}" if gid in adjacent_split else f"manual-split:{gid}",
             description=(f"Group {group_name(gid)} split across adjacent tables {table_names} because "
-                         f"no single table fits its {counted(len(members), 'guest')}."))
+                         f"no single table fits its {counted(len(members), 'guest')}."
+                         if gid in adjacent_split else
+                         f"Group {group_name(gid)} split by explicit permission across tables {table_names}."))
         for j in sorted(group_tables[gid]):
             subset = [g for g in members if guest_placed[g.id] == j]
             share = len(subset) / len(members)
@@ -859,5 +901,5 @@ def solve(problem: Problem) -> Plan:
                 total_score=calculated, assignments=assignments,
                 tables=table_usage, score_breakdown=breakdown, pattern_matches=matched_tables,
                 compromises=compromises, solve_seconds=elapsed,
-                layout=problem.layout,
+                layout=problem.layout, manual_instructions=problem.manual_instructions,
                 message="All hard constraints satisfied.")
