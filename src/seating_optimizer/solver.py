@@ -332,10 +332,10 @@ def solve(problem: Problem) -> Plan:
         for j in range(n):
             model.Add(sum(incoming[j]) + roots[j] == occupied[j]).OnlyEnforceIf(active)
 
-    # A split lone group must occupy a connected, nonempty set of drawn
-    # neighbours. All occupied tables (including intermediary tables) belong
-    # to that very group; no empty table may bridge a gap or cross floors.
-    for gid in sorted(split_groups):
+    # Only the legacy oversized-party adjacency fallback requires a
+    # connected drawn cluster. A user-approved split may use distinct free
+    # blocks on different tables/floors and is never silently enabled.
+    for gid in sorted(adjacent_split):
         roots = {j: model.NewBoolVar(f"lone-root:{gid}:{j}") for j in range(n)}
         ranks = {j: model.NewIntVar(0, n, f"lone-rank:{gid}:{j}") for j in range(n)}
         incoming = {j: [] for j in range(n)}
