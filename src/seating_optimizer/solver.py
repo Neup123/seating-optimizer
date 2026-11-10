@@ -85,6 +85,14 @@ def _prepare(problem):
                     raise ValueError("unknown target or table")
             if rule.shape == "global_pattern":
                 validate_pattern(p, rule_id=rule.id)
+            if rule.shape == "tiered_placement":
+                if p["target"] not in lookup:
+                    raise ValueError("unknown guest/group target")
+                for tier in p["tiers"]:
+                    if set(tier.get("zones", [])) - set(zones):
+                        raise ValueError("unknown tier zone")
+                    if set(tier.get("tables", [])) - set(tables):
+                        raise ValueError("unknown tier table")
         except (KeyError, TypeError) as exc:
             raise ValueError(f"Rule {rule.id}: missing or invalid parameter: {exc}") from exc
     return groups, lookup
@@ -148,6 +156,114 @@ def _conflicting_rules(model, assumptions, problem):
     names = {lit.Index(): name for name, lit in assumptions.items()}
     return [names[int(index)] for index in diagnostic.SufficientAssumptionsForInfeasibility()
             if int(index) in names]
+
+
+def _tier_table_sets(rule, tables):
+    """One union per explicit tier, then an implicit last-resort tier.
+
+    The fallback preserves the meaning of preference (not a hard exclusion).
+    Zones/floors are represented by the existing zone_id; individual tables
+    can be mixed into a tier without any venue-specific code.
+    """
+    ranked = []
+    covered = set()
+    for tier in rule.parameters["tiers"]:
+        zones = set(tier.get("zones", []))
+        named_tables = set(tier.get("tables", []))
+        permitted = {j for j, table in enumerate(tables)
+                     if table.zone_id in zones or table.id in named_tables}
+        ranked.append(permitted)
+        covered.update(permitted)
+    remainder = set(range(len(tables))) - covered
+    if remainder:
+        ranked.append(remainder)
+    return ranked
+
+
+def _resolve_tiered_stages(model, problem, groups, lookup, tables, x, assumptions, split_groups):
+    """Exact lexicographic placement checks, not a weighted score surrogate.
+
+    Each rule instance is resolved in its input order. Probe with ALL active
+    hard assumptions and previously locked tier decisions. Only an infeasible
+    proof permits trying the next tier; UNKNOWN never licenses overflow.
+
+    A tier is accepted only if the whole group occupies ONE table within it.
+    Thus an eight-person group cannot consume five slots on the preferred
+    floor and spill three to a lower tier. When no whole-table solution exists
+    for a split-authorized group, permit the legacy split mechanism only then:
+    first seek a split confined to one tier; only if no tier works fall back
+    to the existing solver's explicit/oversize split rules.
+    """
+    selection = {}
+    tier_rules = [rule for rule in problem.rules if rule.shape == "tiered_placement"]
+    if not tier_rules:
+        return selection, False
+
+    def feasible_probe(conditions, label):
+        guard = model.NewBoolVar("tier-probe:" + label)
+        for expression, value in conditions:
+            model.Add(expression == value).OnlyEnforceIf(guard)
+        # A CpModel can hold different assumption sets for successive probes.
+        # Preserve the diagnostics' hard guards and remove only this temporary
+        # candidate afterwards.
+        model.ClearAssumptions()
+        for lit in assumptions.values():
+            model.AddAssumption(lit)
+        model.AddAssumption(guard)
+        checker = cp_model.CpSolver()
+        checker.parameters.max_time_in_seconds = problem.config.time_limit_seconds
+        checker.parameters.num_search_workers = problem.config.workers
+        checker.parameters.random_seed = problem.config.random_seed
+        status = checker.Solve(model)
+        model.ClearAssumptions()
+        for lit in assumptions.values():
+            model.AddAssumption(lit)
+        return status
+
+    for rule in tier_rules:
+        gid = lookup[rule.parameters["target"]]
+        ranked = _tier_table_sets(rule, tables)
+        size = len(groups[gid])
+        locked = False
+        for rank, permitted in enumerate(ranked, 1):
+            # No whole group can fit if every table is individually too small.
+            viable = {j for j in permitted if tables[j].capacity >= size}
+            if not viable:
+                continue
+            conditions = [(sum(x[gid, j] for j in range(len(tables)) if j not in viable), 0),
+                          (sum(x[gid, j] for j in viable), 1)]
+            status = feasible_probe(conditions, f"{rule.id}:whole:{rank}")
+            if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                for expression, value in conditions:
+                    model.Add(expression == value)
+                selection[rule.id] = (rank, "whole")
+                locked = True
+                break
+            if status != cp_model.INFEASIBLE:
+                return selection, True
+        if locked or gid not in split_groups:
+            continue
+        # Explicit/oversized split fallback is preserved, but NEVER preferred
+        # over a feasible whole placement in a later tier.
+        for rank, permitted in enumerate(ranked, 1):
+            if sum(tables[j].capacity for j in permitted) < size:
+                continue
+            conditions = [(sum(x[gid, j] for j in range(len(tables)) if j not in permitted), 0)]
+            status = feasible_probe(conditions, f"{rule.id}:split:{rank}")
+            if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                for expression, value in conditions:
+                    model.Add(expression == value)
+                selection[rule.id] = (rank, "legacy split")
+                locked = True
+                break
+            if status != cp_model.INFEASIBLE:
+                return selection, True
+        if not locked:
+            # This is a genuinely permitted split with no single-tier fit.
+            # Do not invent any new way for a family to split; the original
+            # CP-SAT model remains authoritative for that exceptional case.
+            selection[rule.id] = (None, "legacy split")
+    return selection, False
 
 
 def solve(problem: Problem) -> Plan:
@@ -542,6 +658,17 @@ def solve(problem: Problem) -> Plan:
                     for j in priority_tables:
                         terms.append(x[gid, j])
 
+    tier_selection, tier_unknown = _resolve_tiered_stages(
+        model, problem, groups, lookup, tables, x, assumptions, split_groups)
+    if tier_unknown:
+        return Plan(
+            session_id=problem.session_id, status="unknown",
+            solve_seconds=perf_counter() - start, layout=problem.layout,
+            manual_instructions=problem.manual_instructions,
+            message=("Tier placement feasibility was not proved within the solver time limit. "
+                     "No lower-priority tier was selected without proof."),
+        )
+
     model.Maximize(sum(terms))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = problem.config.time_limit_seconds
@@ -611,7 +738,20 @@ def solve(problem: Problem) -> Plan:
     for rule in problem.rules:
         p = rule.parameters
         points = 0
-        if rule.shape == "attribute_grouping":
+        if rule.shape == "tiered_placement":
+            gid = lookup[p["target"]]
+            tier, outcome = tier_selection.get(rule.id, (None, None))
+            if outcome:
+                explanation = (f"Whole party placed within placement tier {tier}; "
+                               "earlier tiers could not seat the whole party under hard rules."
+                               if outcome == "whole" and tier != 1 else
+                               "Whole party placed within placement tier 1."
+                               if outcome == "whole" else
+                               f"Existing authorized split used within tier {tier}."
+                               if tier is not None else
+                               "No single tier could contain the existing authorized split.")
+                reasons[gid].append(Reason(rule_id=rule.id, description=explanation, points=0))
+        elif rule.shape == "attribute_grouping":
             value_counts = defaultdict(lambda: defaultdict(int))
             group_counts = defaultdict(lambda: defaultdict(int))
             for gid, members in groups.items():
