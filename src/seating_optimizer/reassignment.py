@@ -269,10 +269,20 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
             # The user explicitly opted into splitting this party. Fill the
             # target first and distribute the remainder over other free blocks.
             # Splits are described using the exact per-table counts.
-            for order in (destinations, list(reversed(destinations))):
+            # Other free blocks may lie outside a table-specific destination.
+            # Prefer to move the entire party away from its old table, if possible.
+            other_blocks = [t for t in tables if t != target and t != source and (
+                instruction.action != "not_here" or (
+                    t != instruction.place_id if instruction.place_type == "table"
+                    else tables[t].zone_id != instruction.place_id))]
+            if source != target and (instruction.action != "not_here" or (
+                source != instruction.place_id if instruction.place_type == "table"
+                else tables[source].zone_id != instruction.place_id)):
+                other_blocks.append(source)
+            for order in (other_blocks, list(reversed(other_blocks))):
                 candidate = dict(previous)
                 room = {t: tables[t].capacity - occupied[t] for t in tables}
-                permitted = [target] + [t for t in order if t != target]
+                permitted = [target] + list(order)
                 index = 0
                 for t in permitted:
                     while room[t] > 0 and index < size:
