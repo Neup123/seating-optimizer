@@ -761,6 +761,52 @@ test("table priority checkbox persists between creation, editing, layout and sol
 });
 
 
+test("list field picker displays original import headers for mapped attribute kinds across redraws", async () => {
+  const { app, $, dom, calls } = await setup(async path => {
+    if (path === "/v1/solve") return {
+      ...plan, assignments: plan.assignments.map(entry => ({
+        ...entry, guest_attributes: [{ language: "Greek", age_layer: "Adult", Babies: "2" }]
+      }))
+    };
+    if (path === "/v1/exports/table") return "table output";
+    if (path.includes("/html?")) return "<!doctype html><html><body>List</body></html>";
+    return {};
+  });
+  app.state.mapping = {
+    "Spoken languages": "attribute.language",
+    "Age band": "attribute.age_layer",
+    "Guest name": "name"
+  };
+  app.state.guests = [{ id: "g1", name: "Alice" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = layout;
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!app.state.plan);
+  click($("#view-people"));
+  await until(() => !!$(".list-field-picker"));
+  const labels = () => Object.fromEntries(
+    [...$(".list-field-picker").querySelectorAll(".list-field-choice")].map(label => [
+      label.querySelector("input").value, label.textContent.trim()
+    ]));
+  assert.deepEqual(labels(), {
+    Babies: "Babies", age_layer: "Age band", language: "Spoken languages"
+  });
+  assert.doesNotMatch($(".list-field-picker").textContent, /\b(?:age_layer|language)\b/);
+  const language = $(".list-field-picker input[value='language']");
+  language.checked = true;
+  language.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await until(() => calls.some(([path]) => path.includes("fields=language")));
+  assert.equal(app.state.listFields.includes("language"), true);
+  assert.equal(labels().language, "Spoken languages");
+  delete app.state.mapping["Spoken languages"];
+  app.state.mapping["Preferred language"] = "attribute.language";
+  app.render();
+  assert.equal(labels().language, "Preferred language");
+  assert.equal($(".list-field-picker input[value='language']").checked, true);
+});
+
 test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
   const printable = "<!DOCTYPE html><html><head></head><body><table></table></body></html>";
   const { app, $, dom, calls } = await setup(async path => {

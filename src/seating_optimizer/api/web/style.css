@@ -105,6 +105,12 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .list-preview{display:block;min-height:600px;margin-bottom:14px}
 
 
+/* Keep each import-column checkbox next to its label at content width. */
+.list-field-picker{display:grid;justify-items:start;width:fit-content;max-width:100%}
+.list-field-choice,.pattern-enabled-choice{display:flex;align-items:center;gap:9px;width:fit-content;max-width:100%}
+.list-field-choice input,.pattern-enabled-choice input{width:18px;height:18px;flex:none;margin:0}
+
+/* Align the global-pattern enable control within the rule's field grid. */
 /* Generic global-pattern clause editor; each count comparison remains editable. */
 .pattern-editor{grid-column:1/-1;display:grid;gap:12px;width:100%;min-width:0}
 .pattern-editor>.muted{max-width:700px}
