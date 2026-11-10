@@ -1204,7 +1204,7 @@ export function createApp(root, api = createGateway()) {
     const views = card("Plan views");
     const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
     VIEWS.forEach(([name,title]) => {
-      const b = action(title, () => attempt(() => loadView(name)), "");
+      const b = action(title, () => { void loadView(name); }, "");
       b.id = "view-" + name;
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", state.view === name ? "true" : "false");
