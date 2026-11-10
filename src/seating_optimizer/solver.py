@@ -46,6 +46,54 @@ def _allowed_zones(rule):
     return set(zones)
 
 
+def _zone_companionship_penalties(model, rule, group_ids, tables, x):
+    """Exact CP-SAT lone-zone flags, counting distinct groups rather than seats.
+
+    A group occupying several tables on one floor is one group, including a
+    previously permitted split. No new split permission or hard constraints.
+    Return an objective indicator for each penalized zone.
+    """
+    zone_tables = defaultdict(list)
+    for index, table in enumerate(tables):
+        zone_tables[table.zone_id].append(index)
+    if len(zone_tables) < 2:
+        return []
+
+    present = {}
+    for zone_id, indices in zone_tables.items():
+        for gid in group_ids:
+            occupancy = [x[gid, index] for index in indices]
+            if len(occupancy) == 1:
+                present[gid, zone_id] = occupancy[0]
+            else:
+                flag = model.NewBoolVar(f"companion:{rule.id}:{gid}:{zone_id}:present")
+                model.AddMaxEquality(flag, occupancy)
+                present[gid, zone_id] = flag
+
+    excluded = set(rule.parameters.get("exclude_groups", []))
+    penalties = []
+    for zone_id in zone_tables:
+        group_count = sum(present[gid, zone_id] for gid in group_ids)
+        outside_count = sum(present[gid, other] for other in zone_tables
+                            if other != zone_id for gid in group_ids)
+        one_group = model.NewBoolVar(f"companion:{rule.id}:{zone_id}:one")
+        model.Add(group_count == 1).OnlyEnforceIf(one_group)
+        model.Add(group_count != 1).OnlyEnforceIf(one_group.Not())
+        elsewhere = model.NewBoolVar(f"companion:{rule.id}:{zone_id}:elsewhere")
+        model.Add(outside_count >= 1).OnlyEnforceIf(elsewhere)
+        model.Add(outside_count == 0).OnlyEnforceIf(elsewhere.Not())
+        eligible = [present[gid, zone_id] for gid in group_ids if gid not in excluded]
+        if not eligible:
+            continue
+        included = model.NewBoolVar(f"companion:{rule.id}:{zone_id}:included")
+        model.Add(sum(eligible) >= 1).OnlyEnforceIf(included)
+        model.Add(sum(eligible) == 0).OnlyEnforceIf(included.Not())
+        penalized = model.NewBoolVar(f"companion:{rule.id}:{zone_id}:lone")
+        model.AddMultiplicationEquality(penalized, [one_group, elsewhere, included])
+        penalties.append(penalized)
+    return penalties
+
+
 def _prepare(problem):
     groups = defaultdict(list)
     for guest in problem.guests:
@@ -85,6 +133,11 @@ def _prepare(problem):
                     raise ValueError("unknown target or table")
             if rule.shape == "global_pattern":
                 validate_pattern(p, rule_id=rule.id)
+            if rule.shape == "zone_companionship":
+                unknown = set(p.get("exclude_groups", [])) - set(groups)
+                if unknown:
+                    raise ValueError(
+                        f"Rule {rule.id}: unknown excluded group(s): {', '.join(sorted(unknown))}")
         except (KeyError, TypeError) as exc:
             raise ValueError(f"Rule {rule.id}: missing or invalid parameter: {exc}") from exc
     return groups, lookup
@@ -508,6 +561,9 @@ def solve(problem: Problem) -> Plan:
                         score = model.NewIntVar(0, triangular[-1], f"pairs:{rule.id}:{value}:{j}")
                         model.AddElement(count, triangular, score)
                         terms.append(rule.weight * score)
+        elif rule.shape == "zone_companionship":
+            for lone in _zone_companionship_penalties(model, rule, ids, tables, x):
+                terms.append(-rule.weight * lone)
         elif rule.shape == "global_pattern":
             if p.get("enabled", False):
                 sign = -1 if p.get("effect", "penalty") == "penalty" else 1
@@ -611,7 +667,37 @@ def solve(problem: Problem) -> Plan:
     for rule in problem.rules:
         p = rule.parameters
         points = 0
-        if rule.shape == "attribute_grouping":
+        if rule.shape == "zone_companionship":
+            zone_groups = defaultdict(set)
+            for gid, occupied_tables in group_tables.items():
+                for index in occupied_tables:
+                    zone_groups[tables[index].zone_id].add(gid)
+            occupied_zones = [zone for zone, occupants in zone_groups.items() if occupants]
+            excluded = set(p.get("exclude_groups", []))
+            if len(occupied_zones) > 1:
+                for zone in occupied_zones:
+                    occupants = zone_groups[zone]
+                    if len(occupants) != 1:
+                        continue
+                    gid = next(iter(occupants))
+                    if gid in excluded:
+                        continue
+                    points -= rule.weight
+                    detail = (f"Group {group_name(gid)} sits alone in zone {zone} "
+                              "while another zone is occupied.")
+                    compromises.append(Compromise(
+                        rule_id=rule.id, description=detail, lost_points=rule.weight))
+                    penalty = Reason(rule_id=rule.id, description=detail,
+                                     points=-rule.weight)
+                    if gid in split_groups:
+                        # Assign the whole zone's penalty to exactly one of the
+                        # group's table portions on that zone (not each portion).
+                        first = min(index for index in group_tables[gid]
+                                    if tables[index].zone_id == zone)
+                        table_reasons[gid, first].append(penalty)
+                    else:
+                        reasons[gid].append(penalty)
+        elif rule.shape == "attribute_grouping":
             value_counts = defaultdict(lambda: defaultdict(int))
             group_counts = defaultdict(lambda: defaultdict(int))
             for gid, members in groups.items():
