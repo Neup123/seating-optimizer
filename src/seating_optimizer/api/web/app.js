@@ -1081,6 +1081,9 @@ export function createApp(root, api = createGateway()) {
       const available = [...new Set((plan.assignments || []).flatMap(
         entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
       if (available.length) {
+        const importHeaders = new Map(Object.entries(state.mapping || {})
+          .filter(([, target]) => typeof target === "string" && target.startsWith("attribute."))
+          .map(([header, target]) => [target.slice("attribute.".length), header]));
         const picker = element("fieldset", "list-field-picker");
         picker.append(element("legend", "", "Additional import columns"));
         for (const key of available) {
@@ -1095,7 +1098,7 @@ export function createApp(root, api = createGateway()) {
               : (state.listFields || []).filter(k => k !== key);
             loadView(state.view);
           });
-          label.append(checkbox, element("span", "", key));
+          label.append(checkbox, element("span", "", importHeaders.get(key) || key));
           picker.append(label);
         }
         views.append(picker);
