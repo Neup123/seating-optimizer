@@ -127,24 +127,43 @@ When concerns compete, they resolve in this order:
 1. **Hard rules** — never violated, not points (§1).
 2. **The split penalty** — nearly absolute (§5).
 3. **Ordinary rule points** — the operator's preferences, traded off against
-   each other by weight (§9).
+   each other by weight (§10).
 4. **Holes** — empty seats are the least important problem in the system.
    A full house is never bought with a split: leaving seats empty is
    always preferable to breaking a family.
 
-## 8. Low-priority families
+## 8. No selection authority
+
+The software never decides on its own who goes unseated. In the normal
+over-capacity case — more guests than the venue can seat — the solve
+raises an alarm, *too many people — short by N*, and stops there; it does
+not choose which families to leave out. Low-priority marks (§9) define
+only the candidates for that choice and their order. The actual move of
+a family to the not-seated (overflow) list is always the operator's own
+decision, made in the interactive view. **The software proposes; the
+human selects.**
+
+## 9. Low-priority families
 
 A family can be marked **low-priority** — the mark is data, set through the
-same configuration as any other rule (§2). A marked family is solved
+same configuration as any other rule (§2). Low priority is **graded**, not
+a binary flag: there are several levels of it, and the operator ranks how
+low a family sits. The mark can be set on a family directly, or assigned
+**by criterion** — a rule instance like any other: *every family with
+fewer than 4 people is low priority (grade 2) for this event*. The
+criterion assigns the grade automatically, from the data. A marked family
+is solved
 **last**: everyone else is seated first, in the most convenient way, and
 the marked family is then fitted into what remains. If it cannot be
 placed, the solve does not fail silently: the interactive step presents
 the operator with the concrete options for forcing it in (a free place, a
 swap, a split, a chain move — the reassignment options) and asks which to
-apply. The operator's choice is applied and persists as a manual
+apply — including leaving the family unseated, on the not-seated
+(overflow) list. That move, too, is the operator's own decision, never
+the solver's (§8). The operator's choice is applied and persists as a manual
 instruction, like a pin (§3.3).
 
-## 9. How many points: sizing weights
+## 10. How many points: sizing weights
 
 Weights are **relative, not absolute**. A point has no meaning except
 against the other points it competes with, so size a weight by what it
@@ -166,9 +185,9 @@ must override:
 - **Holes get the smallest weight on the ladder** (§7): the fill term is a
   tie-breaker between otherwise-equal plans, nothing more.
 
-## 10. Worked examples
+## 11. Worked examples
 
-### 10.1 The clan of 36 — why consolidation beats scatter
+### 11.1 The clan of 36 — why consolidation beats scatter
 
 An upper floor holds four 14-seat tables and three 12-seat tables (92
 seats). A 36-guest family, hard-restricted to this floor, exceeds every
@@ -186,14 +205,14 @@ Let *W* be the split weight per additional table. The scatter occupies 6
 tables → penalty 5*W*. The consolidation occupies 3 → penalty 2*W*. The
 scatter must therefore find 3*W* more ordinary points than the
 consolidation just to tie. But *W* is sized to exceed the entire ordinary
-pool at stake on the floor (§9) — including every grouping point the
+pool at stake on the floor (§10) — including every grouping point the
 scatter could possibly pick up by mingling. No ordinary gain can cover
 3*W*, so the consolidated plan wins on points, always. Under a
 positive-only "wholeness reward" both plans would simply forfeit the same
 reward, and the scatter's extra damage would be free — which is why the
 split term is negative and per-table (§4, §5).
 
-### 10.2 One criterion, two faces — language at a single table
+### 11.2 One criterion, two faces — language at a single table
 
 Criterion instance supplied by the operator: *language*. One 8-seat table
 holds a 7-guest Hebrew-speaking family and 1 Greek-speaking guest. Let *w*
@@ -213,9 +232,9 @@ face, every mixed pair is an active cost, so the solver keeps hunting for
 a cleaner arrangement. Which face applies is the operator's choice on the
 criterion instance (§4, §6) — the engine's duty is to offer both.
 
-### 10.3 A low-priority family that only fits by splitting
+### 11.3 A low-priority family that only fits by splitting
 
-A family of 6 is marked low-priority (§8). Everyone else is seated first;
+A family of 6 is marked low-priority (§9). Everyone else is seated first;
 what remains is 4 free seats at one table and 2 at another, and no seated
 family can be moved without breaking a hard rule. The family fits only as
 a 4 + 2 split. The interactive step shows the operator exactly that: the
