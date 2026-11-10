@@ -1418,6 +1418,8 @@ export function createApp(root, api = createGateway()) {
       if (unseated) area.append(unseated);
       if (plan.message?.toLowerCase().includes("short by"))
         area.append(renderOvercapacity());
+      const overflowPreview = renderNotSeatedInAlarm();
+      if (overflowPreview) area.append(overflowPreview);
       return area;
     }
     status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
@@ -1440,8 +1442,10 @@ export function createApp(root, api = createGateway()) {
       area.append(panel);
       area.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
-        proposeReassignment, applyReassignment, removeInstruction
+        proposeReassignment, applyReassignment, removeInstruction, unseatParty
       }));
+      const overflowPreview = renderNotSeatedInAlarm();
+      if (overflowPreview) area.append(overflowPreview);
       return area;
     }
     const views = card("Plan views");
@@ -1460,6 +1464,7 @@ export function createApp(root, api = createGateway()) {
       views.append(selectField("Document", [
         ["people", "People list"], ["people-floor", "People by floor"],
         ["groups", "Table list"], ["groups-table", "Per-table pages"],
+        ["not-seated", "Not seated in main room"],
         ["floor", "Floor maps PDF"], ["cards", "Table cards PDF"]
       ], state.printFormat, value => {
         state.printFormat = value;
@@ -1467,7 +1472,8 @@ export function createApp(root, api = createGateway()) {
         loadView("print");
       }, { id: "print-format" }));
       if (LIST_VIEWS.has(state.printFormat)) {
-        const toggle = element("label", "print-reasons-toggle");
+        if (state.printFormat !== "not-seated") {
+          const toggle = element("label", "print-reasons-toggle");
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.id = "print-reasons";
@@ -1476,8 +1482,9 @@ export function createApp(root, api = createGateway()) {
           state.includeReasons = checkbox.checked;
           loadView("print");
         });
-        toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
-        views.append(toggle);
+          toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
+          views.append(toggle);
+        }
         if (state.printFormat.startsWith("people")) {
           const available = [...new Set((plan.assignments || []).flatMap(
             entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
@@ -1503,25 +1510,7 @@ export function createApp(root, api = createGateway()) {
             views.append(picker);
           }
         }
-        if (typeof state.viewContent === "string") {
-          const frame = element("iframe", "print-preview list-preview");
-          frame.id = "list-preview";
-          frame.title = "Print preview of " + state.printFormat;
-          frame.srcdoc = state.viewContent;
-          views.append(frame);
-          views.append(row(
-            action("Print from preview", () => {
-              const target = document.getElementById("list-preview");
-              if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
-              target.contentWindow.focus();
-              target.contentWindow.print();
-            }, "primary", "print-list"),
-            action("Download list HTML", () => {
-              downloadBlob(state.viewContent, state.printFormat +
-                (state.includeReasons ? "-reasons" : "") + ".html", "text/html;charset=utf-8");
-            }, "secondary", "download-list")
-          ));
-        } else views.append(element("p", "muted", "Loading print pages…"));
+        views.append(renderListPreview());
       } else {
         if (state.printFormat === "cards") views.append(selectField("Cards per page", [
           ["1", "1 per page (A5)"], ["2", "2 per page (A4)"], ["4", "4 per page (A4)"]
@@ -1557,7 +1546,7 @@ export function createApp(root, api = createGateway()) {
     } else {
       views.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
-        proposeReassignment, applyReassignment, removeInstruction
+        proposeReassignment, applyReassignment, removeInstruction, unseatParty
       }));
     }
     area.append(views);
