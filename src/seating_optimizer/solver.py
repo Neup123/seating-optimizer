@@ -483,11 +483,52 @@ def solve(problem: Problem) -> Plan:
                 model.Add(loc[a] != loc[b]).OnlyEnforceIf(same.Not())
                 terms.append(rule.weight * (same if together else (1 - same)))
         elif rule.shape == "attribute_grouping":
+            effect = p.get("effect", "reward")
             by_value = defaultdict(list)
             for guest in problem.guests:
-                for value in _values(guest, rule):
-                    by_value[value].append(guest.id)
-            if rule.mode == "hard":
+                if effect == "penalty":
+                    # Missing attributes do not make a guest an "other" value.
+                    if p["attribute"] not in guest.attributes:
+                        continue
+                    value = str(guest.attributes[p["attribute"]])
+                    # A value filter compares that value with the other known
+                    # values, without charging pairs among the others.
+                    category = value if "value" not in p else (
+                        "selected" if value == str(p["value"]) else "other")
+                    by_value[category].append(guest.id)
+                else:
+                    for value in _values(guest, rule):
+                        by_value[value].append(guest.id)
+            if effect == "penalty":
+                if len(by_value) < 2:
+                    continue
+                if rule.mode == "hard":
+                    assumption = hard(f"rule:{rule.id}")
+                    for j in range(n):
+                        categories_at_table = []
+                        for category, member_ids in by_value.items():
+                            present = model.NewBoolVar(f"attribute-present:{rule.id}:{category}:{j}")
+                            model.AddMaxEquality(present, [guest_at[g, j] for g in member_ids])
+                            categories_at_table.append(present)
+                        model.Add(sum(categories_at_table) <= 1).OnlyEnforceIf(assumption)
+                else:
+                    # Count cross-value pairs using C(total, 2) minus
+                    # sum(C(value_count, 2)); avoids O(guests^2 * tables)
+                    # reified pair variables. The only weight is rule data.
+                    all_members = [g for member_ids in by_value.values() for g in member_ids]
+                    def pairs_at_table(member_ids, category, j):
+                        limit = len(member_ids)
+                        count = model.NewIntVar(0, limit, f"count:{rule.id}:{category}:{j}")
+                        model.Add(count == sum(guest_at[g, j] for g in member_ids))
+                        pairs = model.NewIntVar(0, limit * (limit - 1) // 2,
+                                                f"pairs:{rule.id}:{category}:{j}")
+                        model.AddElement(count, [k * (k - 1) // 2 for k in range(limit + 1)], pairs)
+                        return pairs
+                    for j in range(n):
+                        terms.append(-rule.weight * pairs_at_table(all_members, "all", j))
+                        for category, member_ids in by_value.items():
+                            terms.append(rule.weight * pairs_at_table(member_ids, category, j))
+            elif rule.mode == "hard":
                 assumption = hard(f"rule:{rule.id}")
                 for member_ids in by_value.values():
                     if len(member_ids) < 2:
@@ -508,6 +549,11 @@ def solve(problem: Problem) -> Plan:
                         score = model.NewIntVar(0, triangular[-1], f"pairs:{rule.id}:{value}:{j}")
                         model.AddElement(count, triangular, score)
                         terms.append(rule.weight * score)
+        elif rule.shape == "split_penalty":
+            # An atomic party occupies exactly one table and costs nothing.
+            # No constant penalty exists outside an operator's rule instance.
+            for gid in split_groups:
+                terms.append(-rule.weight * (sum(x[gid, j] for j in range(n)) - 1))
         elif rule.shape == "global_pattern":
             if p.get("enabled", False):
                 sign = -1 if p.get("effect", "penalty") == "penalty" else 1
@@ -526,22 +572,7 @@ def solve(problem: Problem) -> Plan:
                 model.Add(holes == table.capacity * used - seats[j])
                 terms.append(-rule.weight * holes)
 
-    # A first-class venue preference, not a passive property tag or hard restriction.
-    # Exactly one extra point per eligible group, including an adjacent-table
-    # split pair when individual table capacities are only one seat.
-    priority_rule = "venue:small-group-priority"
-    priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
-    if priority_tables:
-        for gid, members in groups.items():
-            if len(members) <= 2:
-                if gid in split_groups:
-                    preferred = model.NewBoolVar(f"small-priority:{gid}")
-                    model.AddMaxEquality(preferred, [x[gid, j] for j in priority_tables])
-                    terms.append(preferred)
-                else:
-                    for j in priority_tables:
-                        terms.append(x[gid, j])
-
+    # Table metadata alone contributes no soft score. Only rule instances do.
     model.Maximize(sum(terms))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = problem.config.time_limit_seconds
@@ -611,41 +642,94 @@ def solve(problem: Problem) -> Plan:
     for rule in problem.rules:
         p = rule.parameters
         points = 0
-        if rule.shape == "attribute_grouping":
-            value_counts = defaultdict(lambda: defaultdict(int))
-            group_counts = defaultdict(lambda: defaultdict(int))
-            for gid, members in groups.items():
-                for guest in members:
-                    for value in _values(guest, rule):
-                        j = guest_placed[guest.id]
-                        value_counts[value][j] += 1
-                        group_counts[gid][value, j] += 1
-            for gid, vals in group_counts.items():
-                contributed = 0.0
-                for (val, j), k in vals.items():
-                    q = value_counts[val][j]
-                    if rule.mode == "soft":
-                        contributed += rule.weight * (k * (k - 1) / 2 + k * (q - k) / 2)
-                if vals:
-                    reasons[gid].append(Reason(rule_id=rule.id,
-                         description=f"Shares {p['attribute']} with guests at assigned tables.",
-                         points=contributed))
-            if rule.mode == "soft":
-                points = int(sum(rule.weight * sum(q * (q - 1) // 2 for q in per_table.values())
-                                 for per_table in value_counts.values()))
-                all_values = {v: sum(per_table.values()) for v, per_table in value_counts.items()}
-                potential = sum(rule.weight * q * (q - 1) // 2 for q in all_values.values())
-                if potential > points:
-                    compromises.append(Compromise(rule_id=rule.id,
-                        description=(
-                            next((f"{p['attribute']}={val} is split across " +
-                                  ", ".join(tables[j].id for j, q in per_table.items() if q)
-                                  for val, per_table in value_counts.items()
-                                  if sum(q > 0 for q in per_table.values()) > 1),
-                                 "Matching attribute values are split across tables")
-                            + "; the separated guest pairs earn no grouping points."
-                        ),
-                        lost_points=potential - points))
+        if rule.shape == "split_penalty":
+            for gid in split_groups:
+                extra_tables = len(group_tables[gid]) - 1
+                if extra_tables <= 0:
+                    continue
+                penalty = rule.weight * extra_tables
+                points -= penalty
+                names = ", ".join(sorted(tables[j].id for j in group_tables[gid]))
+                description = (f"Family {group_name(gid)} occupies {extra_tables + 1} tables "
+                               f"({names}); {extra_tables} additional table(s), "
+                               f"{penalty} penalty points.")
+                compromises.append(Compromise(
+                    rule_id=rule.id, description=description, lost_points=penalty))
+                for j in group_tables[gid]:
+                    table_reasons[gid, j].append(Reason(
+                        rule_id=rule.id, description=description,
+                        points=-penalty / len(group_tables[gid])))
+        elif rule.shape == "attribute_grouping":
+            if p.get("effect", "reward") == "penalty":
+                # Report the same cross-value pairs counted by the objective.
+                for j, table in enumerate(tables):
+                    counts = defaultdict(int)
+                    by_group = defaultdict(lambda: defaultdict(int))
+                    for gid, members in groups.items():
+                        for guest in members:
+                            if guest_placed[guest.id] != j or p["attribute"] not in guest.attributes:
+                                continue
+                            value = str(guest.attributes[p["attribute"]])
+                            category = value if "value" not in p else (
+                                "selected" if value == str(p["value"]) else "other")
+                            counts[category] += 1
+                            by_group[gid][category] += 1
+                    total = sum(counts.values())
+                    cross_pairs = (total * (total - 1) -
+                                   sum(q * (q - 1) for q in counts.values())) // 2
+                    if rule.mode != "soft" or cross_pairs == 0:
+                        continue
+                    lost = rule.weight * cross_pairs
+                    points -= lost
+                    message = (f"{cross_pairs} cross-{p['attribute']} pair(s) at "
+                               f"table {table.id}; negative criterion penalty {lost}.")
+                    compromises.append(Compromise(
+                        rule_id=rule.id, description=message, lost_points=lost))
+                    for gid, categories in by_group.items():
+                        # Each cross pair has two members; charge half to each.
+                        share = -rule.weight * sum(
+                            q * (total - counts[value])
+                            for value, q in categories.items()) / 2
+                        reason = Reason(rule_id=rule.id, description=message, points=share)
+                        if gid in split_groups:
+                            table_reasons[gid, j].append(reason)
+                        else:
+                            reasons[gid].append(reason)
+            else:
+                value_counts = defaultdict(lambda: defaultdict(int))
+                group_counts = defaultdict(lambda: defaultdict(int))
+                for gid, members in groups.items():
+                    for guest in members:
+                        for value in _values(guest, rule):
+                            j = guest_placed[guest.id]
+                            value_counts[value][j] += 1
+                            group_counts[gid][value, j] += 1
+                for gid, vals in group_counts.items():
+                    contributed = 0.0
+                    for (val, j), k in vals.items():
+                        q = value_counts[val][j]
+                        if rule.mode == "soft":
+                            contributed += rule.weight * (k * (k - 1) / 2 + k * (q - k) / 2)
+                    if vals:
+                        reasons[gid].append(Reason(rule_id=rule.id,
+                             description=f"Shares {p['attribute']} with guests at assigned tables.",
+                             points=contributed))
+                if rule.mode == "soft":
+                    points = int(sum(rule.weight * sum(q * (q - 1) // 2 for q in per_table.values())
+                                     for per_table in value_counts.values()))
+                    all_values = {v: sum(per_table.values()) for v, per_table in value_counts.items()}
+                    potential = sum(rule.weight * q * (q - 1) // 2 for q in all_values.values())
+                    if potential > points:
+                        compromises.append(Compromise(rule_id=rule.id,
+                            description=(
+                                next((f"{p['attribute']}={val} is split across " +
+                                      ", ".join(tables[j].id for j, q in per_table.items() if q)
+                                      for val, per_table in value_counts.items()
+                                      if sum(q > 0 for q in per_table.values()) > 1),
+                                     "Matching attribute values are split across tables")
+                                + "; the separated guest pairs earn no grouping points."
+                            ),
+                            lost_points=potential - points))
         elif rule.shape == "zone_restriction":
             allowed = _allowed_zones(rule)
             total_matches = 0
@@ -823,39 +907,6 @@ def solve(problem: Problem) -> Plan:
                                 reasons[gid].append(reason)
         if rule.mode == "soft":
             breakdown.append(ScoreItem(rule_id=rule.id, points=points))
-    if priority_tables:
-        earned = 0
-        for gid, members in groups.items():
-            if len(members) > 2:
-                continue
-            matched = sorted(group_tables[gid] & priority_tables)
-            if matched:
-                earned += 1
-                if gid in split_groups:
-                    # Keep each split portion's reasons tied to its actual table,
-                    # and award the group only one point across priority tables.
-                    for j in matched:
-                        table_reasons[gid, j].append(Reason(
-                            rule_id=priority_rule,
-                            description=(f"Small group ({counted(len(members), 'person', 'people')}) received "
-                                         f"priority at table {tables[j].id}."),
-                            points=1 / len(matched)))
-                else:
-                    table = tables[placed[gid]]
-                    reasons[gid].append(Reason(
-                        rule_id=priority_rule,
-                        description=f"Small group ({counted(len(members), 'person', 'people')}) received priority at table {table.id}.",
-                        points=1))
-            else:
-                table_names = ", ".join(tables[j].id for j in sorted(group_tables[gid]))
-                reasons[gid].append(Reason(
-                    rule_id=priority_rule,
-                    description=f"Small group seated at {table_names}; no priority-table point earned."))
-                compromises.append(Compromise(
-                    rule_id=priority_rule,
-                    description=f"Small group {gid} is at table {table_names}, not a designated small-group table.",
-                    lost_points=1))
-        breakdown.append(ScoreItem(rule_id=priority_rule, points=earned))
     assignments = []
     for gid, members in groups.items():
         if gid not in split_groups:
