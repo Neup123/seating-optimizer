@@ -321,6 +321,9 @@ export function createApp(root, api = createGateway()) {
       .filter(([, target]) => typeof target === "string" && target.startsWith("attribute."))
       .map(([header, target]) => [target.slice("attribute.".length), header]));
   }
+  function attributeLabel(key, importHeaders) {
+    return importHeaders.get(key) || key.replace(/_+/g, " ").replace(/^./, char => char.toUpperCase());
+  }
   function listEndpoint(view) {
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
@@ -331,7 +334,7 @@ export function createApp(root, api = createGateway()) {
     const importHeaders = people ? importColumnHeaders() : null;
     for (const field of (state.listFields || [])) if (available.has(field)) {
       query.append("fields", field);
-      if (people) query.append("field_labels", importHeaders.get(field) || field);
+      if (people) query.append("field_labels", attributeLabel(field, importHeaders));
     }
     return "/v1/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
   }
@@ -1196,7 +1199,7 @@ export function createApp(root, api = createGateway()) {
               : (state.listFields || []).filter(k => k !== key);
             loadView(state.view);
           });
-          label.append(checkbox, element("span", "", importHeaders.get(key) || key));
+          label.append(checkbox, element("span", "", attributeLabel(key, importHeaders)));
           picker.append(label);
         }
         views.append(picker);

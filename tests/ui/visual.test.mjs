@@ -761,7 +761,7 @@ test("table priority checkbox persists between creation, editing, layout and sol
 });
 
 
-test("list field picker displays original import headers for mapped attribute kinds across redraws", async () => {
+test("list field picker and printable titles humanize unmapped attributes across redraws", async () => {
   const { app, $, dom, calls } = await setup(async path => {
     if (path === "/v1/solve") return {
       ...plan, assignments: plan.assignments.map(entry => ({
@@ -774,7 +774,6 @@ test("list field picker displays original import headers for mapped attribute ki
   });
   app.state.mapping = {
     "Spoken languages": "attribute.language",
-    "Age band": "attribute.age_layer",
     "Guest name": "name"
   };
   app.state.guests = [{ id: "g1", name: "Alice" }];
@@ -791,9 +790,12 @@ test("list field picker displays original import headers for mapped attribute ki
       label.querySelector("input").value, label.textContent.trim()
     ]));
   assert.deepEqual(labels(), {
-    Babies: "Babies", age_layer: "Age band", language: "Spoken languages"
+    Babies: "Babies", age_layer: "Age layer", language: "Spoken languages"
   });
   assert.doesNotMatch($(".list-field-picker").textContent, /\b(?:age_layer|language)\b/);
+  app.state.mapping["Age band"] = "attribute.age_layer";
+  app.render();
+  assert.equal(labels().age_layer, "Age band");
   const language = $(".list-field-picker input[value='language']");
   language.checked = true;
   language.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
@@ -818,6 +820,14 @@ test("list field picker displays original import headers for mapped attribute ki
   await until(() => latestPeopleParams().getAll("field_labels")[0] === "Preferred language");
   await until(() => !!$("#list-preview"));
   assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Preferred language", "Age band"]);
+  delete app.state.mapping["Age band"];
+  app.render();
+  assert.equal(labels().age_layer, "Age layer");
+  assert.equal(labels().language, "Preferred language");
+  assert.equal($(".list-field-picker input[value='age_layer']").checked, true);
+  assert.doesNotMatch($(".list-field-picker").textContent, /\bage_layer\b/);
+  await until(() => latestPeopleParams().getAll("field_labels")[1] === "Age layer");
+  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Preferred language", "Age layer"]);
 });
 
 test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
