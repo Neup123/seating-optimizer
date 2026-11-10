@@ -97,12 +97,37 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
 
   await expect(page.locator("#notice")).toContainText("Solver returned");
   await expect(page.locator("#view-table")).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("pre").first()).toContainText("Table G-0");
+  await expect(page.locator(".working-table-section").first()).toContainText("Table G-0");
   await expect(page.getByText("Per-assignment explanations")).toBeVisible();
   await expect(page.getByText("Compromises and empty chairs")).toBeVisible();
 
-  // The same solved Plan is the source for all four printable list variants.
-  for (const [view, endpoint] of [
+  // Working views are selectable, not embedded print documents.
+  for (const view of ["people", "people-floor", "groups", "groups-table"]) {
+    await page.locator("#view-" + view).click();
+    await expect(page.locator(".plan-entry").first()).toBeVisible();
+    await expect(page.locator("#list-preview")).toHaveCount(0);
+    await expect(page.locator("#print-list")).toHaveCount(0);
+    await page.locator(".plan-target").first().click();
+    await expect(page.locator("#plan-selection")).toBeVisible();
+    await page.locator("#clear-plan-selection").click();
+  }
+  await page.locator("#view-table").click();
+  await page.locator(".plan-target").first().click();
+  await page.locator("#inspect-selection").click();
+  await expect(page.locator(".plan-details").first()).toContainText("Solver explanation");
+  await page.locator("#view-people").click();
+  await expect(page.locator("#plan-selection")).toBeVisible();
+  await page.locator("#plan-search").fill("Family 00");
+  await expect(page.locator(".plan-entry")).toHaveCount(1);
+  await page.locator("#plan-sort").selectOption("name");
+  await page.locator("#plan-filter-floor").selectOption("ground");
+  await expect(page.locator(".plan-entry")).toHaveCount(1);
+  await page.locator("#plan-search").fill("");
+  await page.locator("#plan-filter-floor").selectOption("");
+
+  // The server-created print pages are displayed only in the dedicated preview.
+  await page.locator("#view-print").click();
+  for (const [format, endpoint] of [
     ["people", "people-list/html?group_by=combined"],
     ["people-floor", "people-list/html?group_by=floor"],
     ["groups", "table-list/html?group_by=combined"],
@@ -110,13 +135,11 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   ]) {
     const defaultRequest = page.waitForResponse(r =>
       r.url().includes(endpoint + "&include_reasons=false"));
-    await page.locator("#view-" + view).click();
+    await page.locator("#print-format").selectOption(format);
     expect((await defaultRequest).status()).toBe(200);
     await expect(page.locator("#print-reasons")).not.toBeChecked();
     await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /<table>/);
     const clean = await page.locator("#list-preview").getAttribute("srcdoc");
-    // Single-row imported registrations have no individual member names:
-    // human-facing lists show one party/count line, not 120 synthetic names.
     expect((clean.match(/data-group-id=/g) || []).length).toBe(60);
     expect((clean.match(/data-guest-id=/g) || []).length).toBe(0);
     expect(clean).toContain("Family 00 â€” 2");
@@ -131,19 +154,19 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
     expect((await withReasons).status()).toBe(200);
     await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /class="reason"/);
   }
-
-
+  // Floor maps are working SVGs; their printable counterpart is the PDF.
   await page.locator("#view-floor").click();
-  await expect(page.locator("#floor-preview")).toBeVisible();
-  const firstSrc = await page.locator("#floor-preview").getAttribute("srcdoc");
-  expect(firstSrc).toContain('data-zone-id="ground"');
-  expect(firstSrc).toContain('data-group-id="registration:9"');
+  await expect(page.locator("#working-floor-svg")).toBeVisible();
+  await expect(page.locator('#working-floor-svg [data-table-id="G-0"]')).toBeVisible();
   await page.locator("#plan-floor-select").selectOption("first");
-  const secondSrc = await page.locator("#floor-preview").getAttribute("srcdoc");
-  expect(secondSrc).toContain('data-zone-id="first"');
+  await expect(page.locator('#working-floor-svg [data-table-id="F-0"]')).toBeVisible();
+  await page.locator("#view-cards").click();
+  await expect(page.locator(".working-table-card").first()).toBeVisible();
+  await expect(page.locator("#cards-preview")).toHaveCount(0);
 
   const pdfResponse = page.waitForResponse(response => response.url().endsWith("/v1/exports/table-cards/pdf"));
-  await page.locator("#view-cards").click();
+  await page.locator("#view-print").click();
+  await page.locator("#print-format").selectOption("cards");
   expect((await pdfResponse).status()).toBe(200);
   await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
   await expect(page.locator("#cards-per-page")).toHaveValue("1");
@@ -157,6 +180,11 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   expect((await twoResponse).status()).toBe(200);
   await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
   await page.locator("#cards-per-page").selectOption("1");
+  const floorPdf = page.waitForResponse(r => r.url().endsWith("/v1/exports/floor-map/pdf"));
+  await page.locator("#print-format").selectOption("floor");
+  expect((await floorPdf).status()).toBe(200);
+  await expect(page.locator("#floor-preview")).toHaveAttribute("src", /^blob:/);
+  await expect(page.locator("#print-preview-document")).toBeVisible();
 
   await page.locator("#view-json").click();
   await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
@@ -254,7 +282,7 @@ test("single-floor venue and rules template prepared before import works in a ne
   await page.locator("#nav-plan").click();
   await page.locator("#solve-plan").click();
   await expect(page.locator("#notice")).toContainText("Solver returned");
-  await expect(page.locator("pre").first()).toContainText("Table H1");
+  await expect(page.locator(".working-table-section").first()).toContainText("Table H1");
 });
 
 test("transient solve network failures show Retry and recover without losing the imported plan inputs", async ({ page }) => {
@@ -285,7 +313,7 @@ test("transient solve network failures show Retry and recover without losing the
   offline = false;
   await page.locator("#retry-action").click();
   await expect(page.locator("#notice")).toContainText("Solver returned");
-  await expect(page.locator("pre").first()).toContainText("Table T1");
+  await expect(page.locator(".working-table-section").first()).toContainText("Table T1");
   await expect(page.locator("#retry-action")).toHaveCount(0);
   await page.unroute("**/v1/solve");
 });
