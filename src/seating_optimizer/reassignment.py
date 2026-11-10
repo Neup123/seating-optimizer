@@ -389,13 +389,17 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     blockers: set[str] = set()
     unknown = False
     attempts = 0
+    checked_candidates = 0
     max_attempts = 32
+    max_candidates = 256
     max_options = 8
 
     def check(layout: dict[str, str], kind: str, title: str, *, split: bool = False):
-        nonlocal attempts, unknown
-        if len(options) >= max_options - 1 or attempts >= max_attempts:
+        nonlocal attempts, unknown, checked_candidates
+        if (len(options) >= max_options - 1 or attempts >= max_attempts or
+                checked_candidates >= max_candidates):
             return
+        checked_candidates += 1
         if set(layout) != set(previous) | set(ids):
             return
         signature = tuple(sorted(layout.items()))
@@ -445,6 +449,8 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     # Free seats: the main staged solve normally would have used these,
     # but full verification is still required (hard restrictions may block).
     for target in tables:
+        if checked_candidates >= max_candidates:
+            break
         if free[target] >= len(ids):
             check({**previous, **{g: target for g in ids}},
                   "free-space", f"Seat at table {target} without moving others")
@@ -452,6 +458,8 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     # Move an occupant elsewhere so that the deferred party can occupy its
     # former seats. All displaced parties remain whole.
     for target in tables:
+        if checked_candidates >= max_candidates:
+            break
         for other in at_table[target]:
             other_ids = [g.id for g in groups[other]]
             for destination in tables:
@@ -465,13 +473,23 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     # Many-for-one: displace two or three smaller parties from one target
     # into distinct available blocks, without splitting them.
     for target in tables:
+        if checked_candidates >= max_candidates:
+            break
         others = at_table[target]
         for count in range(2, min(3, len(others)) + 1):
             for displaced in combinations(others, count):
                 relocating = [(other, [g.id for g in groups[other]]) for other in displaced]
                 blocks = {t: free[t] for t in tables if t != target}
                 assignments = []
+                branch_steps = 0
                 def pack(i: int):
+                    nonlocal branch_steps
+                    branch_steps += 1
+                    if (branch_steps > max_candidates or
+                            checked_candidates >= max_candidates or
+                            attempts >= max_attempts or
+                            len(options) >= max_options - 1):
+                        return
                     if i == len(relocating):
                         layout = {**previous, **{g: target for g in ids}}
                         for (_, members), destination in zip(relocating, assignments):
@@ -495,6 +513,8 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     # Chain: A pending -> target, one incumbent -> middle, middle -> free
     # destination. It is never permitted to weaken an infinite-weight rule.
     for target in tables:
+        if checked_candidates >= max_candidates:
+            break
         for other in at_table[target]:
             other_ids = [g.id for g in groups[other]]
             for middle in tables:
