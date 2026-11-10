@@ -158,7 +158,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "zone_companionship"]
 
 
 class Rule(Model):
@@ -176,8 +176,18 @@ class Rule(Model):
             raise ValueError("Hard rules must not carry a weight")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
-        if self.shape in {"fill_efficiency", "global_pattern"} and self.mode != "soft":
+        if self.shape in {"fill_efficiency", "global_pattern", "zone_companionship"} and self.mode != "soft":
             raise ValueError("Fill efficiency and global patterns must be soft")
+        if self.shape == "zone_companionship":
+            # Exclusions are explicit group IDs, never inferred from another
+            # rule, attributes, or an apparent single-family zone.
+            if set(self.parameters) - {"exclude_groups"}:
+                raise ValueError("Zone companionship accepts only exclude_groups")
+            excluded = self.parameters.get("exclude_groups", [])
+            if (not isinstance(excluded, list)
+                    or any(not isinstance(gid, str) or not gid.strip() for gid in excluded)
+                    or len(excluded) != len(set(excluded))):
+                raise ValueError("Zone companionship exclusions must be distinct nonempty group IDs")
         if self.shape == "global_pattern":
             # Validate before Rule can enter Problem, VenueConfiguration, or an API payload.
             validate_pattern(self.parameters, rule_id=self.id)

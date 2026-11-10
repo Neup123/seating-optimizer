@@ -432,7 +432,7 @@ components:
       properties:
         name: {type: string}
         label: {type: string}
-        kind: {type: string, enum: [text, zone, table, target, select, pattern]}
+        kind: {type: string, enum: [text, zone, table, target, select, pattern, group_exclusions]}
         required: {type: boolean}
         choices: {type: array, items: {type: string}}
     RuleShapeSpec:
@@ -440,7 +440,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, zone_companionship]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard]}}
@@ -484,9 +484,12 @@ components:
         id: {type: string}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, zone_companionship]
         mode: {type: string, enum: [soft, hard]}
-        parameters: {type: object, additionalProperties: true}
+        parameters:
+          type: object
+          additionalProperties: true
+          description: "For zone_companionship, an optional exclude_groups array of registered group IDs; excluded lone parties do not incur its penalty."
         weight: {type: [integer, 'null'], minimum: 1}
     ManualInstruction:
       type: object
