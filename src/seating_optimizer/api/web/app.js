@@ -1,15 +1,16 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
+import { renderPlanWorkspace } from "./plan-workspace.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const VIEWS = [["table", "Table view"], ["people", "People list"], ["people-floor", "People by floor"],
   ["groups", "Table list"], ["groups-table", "Per-table lists"],
-  ["floor", "Floor maps"], ["cards", "Table cards"], ["json", "JSON plan"]];
+  ["floor", "Floor maps"], ["cards", "Table cards"], ["print", "Print preview"], ["json", "JSON plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table"]);
 const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected"];
+  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat"];
 
 function storedJSON(key, fallback) {
   try {
@@ -193,6 +194,8 @@ export function createApp(root, api = createGateway()) {
       catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+       selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
+       workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
       templateName: "", templateSelected: "", storageWarning: ""
     };
@@ -214,6 +217,7 @@ export function createApp(root, api = createGateway()) {
   }
   let viewObjectUrl = null;
   let listContentEndpoint = null;
+  let viewRequest = 0;
   let working = false;
   let noticesIssued = 0;
 
@@ -329,7 +333,7 @@ export function createApp(root, api = createGateway()) {
     }
     finally { working = false; }
   }
-  function invalidate() { state.plan = null; state.viewContent = null; }
+  function invalidate() { state.plan = null; state.viewContent = null; state.selectedPlanItem = null; clearObjectUrl(); ++viewRequest; }
   function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
   function configuredTables() { return state.tables.filter(t => Number.isInteger(Number(t.capacity)) && Number(t.capacity) > 0); }
   function projectProblem() {
@@ -408,10 +412,10 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
-    if (state.screen === "plan" && LIST_VIEWS.has(state.view) &&
-        typeof state.viewContent === "string" &&
-        listContentEndpoint !== listEndpoint(state.view)) {
-      void loadView(state.view);
+    if (state.screen === "plan" && state.view === "print" &&
+        LIST_VIEWS.has(state.printFormat) && typeof state.viewContent === "string" &&
+        listContentEndpoint !== listEndpoint(state.printFormat)) {
+      void loadView("print");
       return;
     }
     saveSession();
@@ -1161,6 +1165,12 @@ export function createApp(root, api = createGateway()) {
         state.plan = plan;
         state.view = "table";
         state.viewContent = null;
+        state.selectedPlanItem = null;
+        state.expandedPartyKey = null;
+        state.workspaceFloor = "";
+        state.focusedTableId = "";
+        ++viewRequest;
+        clearObjectUrl();
         announce("Solver returned " + plan.status.toUpperCase() + "; " +
           (plan.assignments?.length || 0) + " group " +
           ((plan.assignments?.length || 0) === 1 ? "assignment." : "assignments."));
