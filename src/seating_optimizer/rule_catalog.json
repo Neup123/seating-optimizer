@@ -3,7 +3,7 @@
     {
       "shape": "attribute_grouping",
       "title": "Attribute grouping",
-      "description": "Reward guests sharing an attribute value at a table.",
+      "description": "Per-pair criterion: reward guests with the same attribute value together, or penalize cross-value pairs actually seated together. Polarity: positive or negative, selected per rule.",
       "modes": [
         "soft",
         "hard"
@@ -22,6 +22,16 @@
           "label": "Attribute value (optional)",
           "kind": "text",
           "required": false
+        },
+        {
+          "name": "effect",
+          "label": "Pair scoring",
+          "kind": "select",
+          "required": true,
+          "choices": [
+            "reward",
+            "penalty"
+          ]
         }
       ]
     },
@@ -131,6 +141,17 @@
       ],
       "default_mode": "hard",
       "default_weight": null,
+      "fields": []
+    },
+    {
+      "shape": "split_penalty",
+      "title": "Family split penalty",
+      "description": "Negative points per additional table occupied by a family. Structural, no criterion. A high default weight is editable or removable; size it above the ordinary score pool.",
+      "modes": [
+        "soft"
+      ],
+      "default_mode": "soft",
+      "default_weight": 1000000,
       "fields": []
     },
     {

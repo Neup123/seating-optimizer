@@ -158,7 +158,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty"]
 
 
 class Rule(Model):
@@ -176,8 +176,12 @@ class Rule(Model):
             raise ValueError("Hard rules must not carry a weight")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
-        if self.shape in {"fill_efficiency", "global_pattern"} and self.mode != "soft":
-            raise ValueError("Fill efficiency and global patterns must be soft")
+        if self.shape in {"fill_efficiency", "global_pattern", "split_penalty"} and self.mode != "soft":
+            raise ValueError("Fill efficiency, global patterns and split penalties must be soft")
+        if self.shape == "attribute_grouping" and self.parameters.get("effect", "reward") not in {"reward", "penalty"}:
+            raise ValueError("Attribute grouping effect must be reward or penalty")
+        if self.shape == "split_penalty" and self.parameters:
+            raise ValueError("Split penalty is structural and takes no parameters")
         if self.shape == "global_pattern":
             # Validate before Rule can enter Problem, VenueConfiguration, or an API payload.
             validate_pattern(self.parameters, rule_id=self.id)
