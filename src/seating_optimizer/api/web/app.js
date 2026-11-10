@@ -180,6 +180,7 @@ export function createApp(root, api = createGateway()) {
     state.error = false;
   }
   let viewObjectUrl = null;
+  let listContentEndpoint = null;
   let working = false;
   let noticesIssued = 0;
 
@@ -315,6 +316,11 @@ export function createApp(root, api = createGateway()) {
       layout: state.layout.floors.length ? state.layout : null
     };
   }
+  function importColumnHeaders() {
+    return new Map(Object.entries(state.mapping || {})
+      .filter(([, target]) => typeof target === "string" && target.startsWith("attribute."))
+      .map(([header, target]) => [target.slice("attribute.".length), header]));
+  }
   function listEndpoint(view) {
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
@@ -322,7 +328,11 @@ export function createApp(root, api = createGateway()) {
     const available = new Set((state.plan?.assignments || []).flatMap(
       entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))));
     const query = new URLSearchParams({group_by: by, include_reasons: String(Boolean(state.includeReasons))});
-    for (const field of (state.listFields || [])) if (available.has(field)) query.append("fields", field);
+    const importHeaders = people ? importColumnHeaders() : null;
+    for (const field of (state.listFields || [])) if (available.has(field)) {
+      query.append("fields", field);
+      if (people) query.append("field_labels", importHeaders.get(field) || field);
+    }
     return "/v1/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
   }
   function tableCardsEndpoint() {
@@ -362,6 +372,12 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
+    if (state.screen === "plan" && LIST_VIEWS.has(state.view) &&
+        typeof state.viewContent === "string" &&
+        listContentEndpoint !== listEndpoint(state.view)) {
+      void loadView(state.view);
+      return;
+    }
     saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
@@ -1150,9 +1166,7 @@ export function createApp(root, api = createGateway()) {
       const available = [...new Set((plan.assignments || []).flatMap(
         entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
       if (available.length) {
-        const importHeaders = new Map(Object.entries(state.mapping || {})
-          .filter(([, target]) => typeof target === "string" && target.startsWith("attribute."))
-          .map(([header, target]) => [target.slice("attribute.".length), header]));
+        const importHeaders = importColumnHeaders();
         const picker = element("fieldset", "list-field-picker");
         picker.append(element("legend", "", "Additional import columns"));
         for (const key of available) {
@@ -1294,12 +1308,12 @@ export function createApp(root, api = createGateway()) {
     render();
     try {
       if (LIST_VIEWS.has(view)) {
-        const reasons = state.includeReasons;
-        const fields = JSON.stringify(state.listFields || []);
-        const content = await api.post(listEndpoint(view), state.plan, "text");
-        if (view !== state.view || reasons !== state.includeReasons ||
-            fields !== JSON.stringify(state.listFields || [])) return;
+        const endpoint = listEndpoint(view);
+        const content = await api.post(endpoint, state.plan, "text");
+        if (view !== state.view) return;
+        if (endpoint !== listEndpoint(view)) return loadView(view);
         state.viewContent = content;
+        listContentEndpoint = endpoint;
       }
       else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);

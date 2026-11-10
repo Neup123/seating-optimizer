@@ -161,6 +161,47 @@ def test_people_print_columns_and_group_sizes(mode):
     assert '(1 person)' in rows[-1][2].text
 
 
+@pytest.mark.parametrize('mode', ['combined', 'floor'])
+def test_people_print_attribute_titles_use_import_headers_without_changing_values(mode):
+    plan = plan_fixture()
+    for entry in plan.assignments:
+        for attrs in entry.guest_attributes:
+            attrs['language'] = attrs.pop('Language')
+            if 'Notes' in attrs:
+                attrs['age_layer'] = attrs.pop('Notes')
+    root = xml(render_people_list_html(
+        plan, group_by=mode, fields=['language', 'age_layer'],
+        field_labels=['Spoken languages', 'Age & layer'],
+    ))
+    headings = [th.text for th in root.findall('.//thead/tr/th')][5:]
+    assert headings[:2] == ['Spoken languages', 'Age & layer']
+    assert 'language' not in headings and 'age_layer' not in headings
+    rows = root.findall('.//tr[@data-guest-id]')
+    assert [row[5].text for row in rows] == ['English', 'Greek', 'Hebrew']
+    assert [row[6].text for row in rows] == ['near window', 'near window', '—']
+
+
+def test_people_print_api_field_labels_only_change_titles():
+    plan = plan_fixture()
+    for entry in plan.assignments:
+        for attrs in entry.guest_attributes:
+            attrs['language'] = attrs.pop('Language')
+    client = TestClient(app)
+    response = client.post('/v1/exports/people-list/html',
+        params=[('fields', 'language'), ('field_labels', 'Preferred language')],
+        json=plan.model_dump(mode='json'))
+    assert response.status_code == 200, response.text
+    root = xml(response.text)
+    assert root.find('.//thead/tr/th[6]').text == 'Preferred language'
+    assert [row[5].text for row in root.findall('.//tr[@data-guest-id]')] == [
+        'English', 'Greek', 'Hebrew']
+    invalid = client.post('/v1/exports/people-list/html',
+        params=[('fields', 'language'), ('field_labels', 'One'),
+                ('field_labels', 'Extra')],
+        json=plan.model_dump(mode='json'))
+    assert invalid.status_code == 422
+
+
 @pytest.mark.parametrize('mode', ['combined', 'table'])
 def test_table_print_columns_preserve_distinct_and_missing_values(mode):
     root = xml(render_table_list_html(plan_fixture(), group_by=mode, fields=['Language', 'Notes']))
