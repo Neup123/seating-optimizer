@@ -19,6 +19,7 @@ from seating_optimizer import (
     ImportPreview, RuleCatalog,
 )
 from seating_optimizer.importer import ImportResult
+from seating_optimizer.reassignment import ReassignRequest, ReassignResponse, propose_reassignment
 
 
 class LayoutFile(BaseModel):
@@ -99,6 +100,13 @@ def create_app() -> FastAPI:
     def solve_problem(problem: Problem) -> Plan:
         try:
             return solve(problem)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/reassign/options", response_model=ReassignResponse)
+    def reassignment_options(request: ReassignRequest) -> ReassignResponse:
+        try:
+            return propose_reassignment(request)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
