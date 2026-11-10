@@ -196,7 +196,7 @@ export function createApp(root, api = createGateway()) {
       sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
-       manualInstructions: [], nextManualId: 1, reassignMode: null,
+       manualInstructions: [], nextManualId: 1, overflowChoice: "", reassignMode: null,
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
@@ -593,6 +593,10 @@ export function createApp(root, api = createGateway()) {
     spec.fields.forEach(f => {
       if (f.kind === "select" && f.choices.length) params[f.name] = f.choices[0];
     });
+    if (spec.shape === "low_priority") {
+      params.selector = "group";
+      params.grade = 1;
+    }
     if (spec.shape === "global_pattern") {
       // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
       params.scope = "global";
@@ -684,7 +688,7 @@ export function createApp(root, api = createGateway()) {
 
   function renderRules() {
     const area = element("div", "form-measure rules-flow");
-    const form = card("Build consideration rules", "All shapes and their fields come from the API catalog. Rule records, modes and positive weights are sent unchanged to CP-SAT.");
+    const form = card("Build consideration rules", "Considerations and graded priority marks are editable rule instances. Markers control order, not points.");
     if (!state.catalog) {
       form.append(element("p", "problem", "Rule catalog is unavailable. Use Retry above."));
       return append(area, form);
@@ -740,8 +744,10 @@ export function createApp(root, api = createGateway()) {
         }, { id: "rule-shape-" + i }));
       section.append(grid(
         textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); }, { id: "rule-id-" + i, required: true }),
-        selectField(rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
+        selectField(rule.shape === "low_priority" ? "Order marker" :
+          rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
           spec.modes.map(m => [m,
+            m === "mark" ? "Grade marker (no score)" :
             rule.shape === "table_property_need"
               ? (m === "hard" ? "Require (hard)" : "Prefer (soft, weighted per affected guest)")
               : (m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)")]),
@@ -753,7 +759,7 @@ export function createApp(root, api = createGateway()) {
         rule.mode === "soft"
           ? textField("Points weight", rule.weight, value => { rule.weight = Number(value); invalidate(); },
               { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
-          : element("p", "muted", "HARD — no weight")
+          : element("p", "muted", rule.mode === "mark" ? "Order only — no score" : "HARD — no weight")
       ));
       const fields = element("div", "grid three");
       if (rule.shape === "global_pattern") {
@@ -770,11 +776,22 @@ export function createApp(root, api = createGateway()) {
         fields.append(label);
       }
       spec.fields.forEach(field => {
-        const original = rule.parameters[field.name] || "";
+        if (rule.shape === "low_priority") {
+          if (field.name === "group_id" && rule.parameters.selector !== "group") return;
+          if (field.name === "threshold" && rule.parameters.selector !== "size_below") return;
+        }
+        const original = rule.parameters[field.name] ?? "";
         const update = value => {
+          if (field.name === "selector" && rule.shape === "low_priority") {
+            delete rule.parameters.group_id;
+            delete rule.parameters.threshold;
+            if (value === "size_below") rule.parameters.threshold = 4;
+          }
           if (value === "") delete rule.parameters[field.name];
-          else rule.parameters[field.name] = value;
+          else rule.parameters[field.name] = (rule.shape === "low_priority" &&
+            ["grade", "threshold"].includes(field.name)) ? Number(value) : value;
           invalidate();
+          if (field.name === "selector" && rule.shape === "low_priority") render();
         };
         if (field.kind === "pattern") fields.append(renderPatternEditor(rule, i));
         else if (field.kind === "select") fields.append(selectField(field.label,
@@ -795,7 +812,8 @@ export function createApp(root, api = createGateway()) {
           fields.append(selectField(field.label, list, original, update,
             { id: "rule-" + i + "-" + field.name }));
         } else fields.append(textField(field.label, original, update,
-          { id: "rule-" + i + "-" + field.name, required: field.required }));
+          { id: "rule-" + i + "-" + field.name, required: field.required,
+            ...(rule.shape === "low_priority" ? { type: "number", min: 1, step: 1 } : {}) }));
       });
       section.append(fields);
       area.append(section);
