@@ -549,6 +549,17 @@ def solve(problem: Problem) -> Plan:
                         score = model.NewIntVar(0, triangular[-1], f"pairs:{rule.id}:{value}:{j}")
                         model.AddElement(count, triangular, score)
                         terms.append(rule.weight * score)
+        elif rule.shape == "small_group_priority":
+            priority_tables = [j for j, table in enumerate(tables) if table.small_group_priority]
+            for gid, members in groups.items():
+                if len(members) > 2 or not priority_tables:
+                    continue
+                if gid in split_groups:
+                    preferred = model.NewBoolVar(f"small-priority:{rule.id}:{gid}")
+                    model.AddMaxEquality(preferred, [x[gid, j] for j in priority_tables])
+                    terms.append(rule.weight * preferred)
+                else:
+                    terms.extend(rule.weight * x[gid, j] for j in priority_tables)
         elif rule.shape == "split_penalty":
             # An atomic party occupies exactly one table and costs nothing.
             # No constant penalty exists outside an operator's rule instance.
@@ -642,7 +653,31 @@ def solve(problem: Problem) -> Plan:
     for rule in problem.rules:
         p = rule.parameters
         points = 0
-        if rule.shape == "split_penalty":
+        if rule.shape == "small_group_priority":
+            priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
+            for gid, members in groups.items():
+                if len(members) > 2 or not priority_tables:
+                    continue
+                matched = sorted(group_tables[gid] & priority_tables)
+                if matched:
+                    points += rule.weight
+                    for j in matched:
+                        reason = Reason(
+                            rule_id=rule.id,
+                            description=(f"Small group ({counted(len(members), 'person', 'people')}) "
+                                         f"received priority at table {tables[j].id}."),
+                            points=rule.weight / len(matched))
+                        if gid in split_groups:
+                            table_reasons[gid, j].append(reason)
+                        else:
+                            reasons[gid].append(reason)
+                else:
+                    names = ", ".join(sorted(tables[j].id for j in group_tables[gid]))
+                    compromises.append(Compromise(
+                        rule_id=rule.id,
+                        description=f"Small group {group_name(gid)} is at {names}, not a designated small-group table.",
+                        lost_points=rule.weight))
+        elif rule.shape == "split_penalty":
             for gid in split_groups:
                 extra_tables = len(group_tables[gid]) - 1
                 if extra_tables <= 0:

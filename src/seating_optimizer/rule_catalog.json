@@ -155,6 +155,17 @@
       "fields": []
     },
     {
+      "shape": "small_group_priority",
+      "title": "Small-party table preference",
+      "description": "Positive points per party of one or two guests placed at a table marked for small groups. Table tags alone grant no points; add this rule to activate the preference.",
+      "modes": [
+        "soft"
+      ],
+      "default_mode": "soft",
+      "default_weight": 1,
+      "fields": []
+    },
+    {
       "shape": "fill_efficiency",
       "title": "Fill efficiency",
       "description": "Penalize empty chairs on occupied tables.",
