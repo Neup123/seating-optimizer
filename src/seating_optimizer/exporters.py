@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 
 from .models import Plan
 from .display import counted, party_lines, party_totals
-from .list_exports import render_people_list_html, render_table_list_html
+from .list_exports import render_people_list_html, render_table_list_html, render_not_seated_list_html
 from .print_exports import render_floor_pdf, render_floor_svg, render_table_cards_pdf
 
 Renderer = Callable[[Plan], str | bytes]
@@ -45,6 +45,7 @@ def render(plan: Plan, format: str, renderers: Mapping[str, Renderer] | None = N
     """Caller-provided renderer mapping permits integration without changing the core."""
     available: dict[str, Renderer] = {"table": render_table, "json": render_json,
         "people-list-html": render_people_list_html, "table-list-html": render_table_list_html,
+        "not-seated-list-html": render_not_seated_list_html,
         "floor-map-svg": lambda p: render_floor_svg(p).model_dump_json(indent=2),
         "floor-map-pdf": render_floor_pdf, "table-cards-pdf": render_table_cards_pdf}
     if renderers:

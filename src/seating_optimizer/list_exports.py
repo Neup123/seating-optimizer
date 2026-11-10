@@ -9,7 +9,7 @@ from html import escape
 from typing import Literal
 
 from .models import Assignment, Plan
-from .display import party_header, party_totals, visible_member_names
+from .display import assignment_name, party_header, party_totals, visible_member_names
 
 
 def _text(value: str) -> str:
@@ -193,3 +193,57 @@ def render_table_list_html(
                         f'<h2>{_text(heading)}</h2><table><thead><tr>{cols}</tr></thead>'
                         f'<tbody>{"".join(rows)}</tbody></table></section>')
     return _document("Table list", plan.session_id, sections, group_by == "table")
+
+
+
+def render_not_seated_list_html(plan: Plan) -> str:
+    """Print only the operator-recorded unseated groups, regardless of solve status.
+
+    Unlike the seated people/table exports, this also works for an infeasible
+    capacity alarm and a pending low-priority review. It does not classify,
+    select, or change any guest's seating status.
+    """
+    seen_groups: set[str] = set()
+    seen_guests: set[str] = set()
+    assigned_guests = {guest_id for entry in plan.assignments for guest_id in entry.guest_ids}
+    rows: list[str] = []
+    total_people = 0
+    for group in plan.not_seated:
+        if group.group_id in seen_groups:
+            raise ValueError(f"Duplicate not-seated group {group.group_id}")
+        seen_groups.add(group.group_id)
+        if not group.guest_ids or len(group.guest_ids) != len(group.guest_names):
+            raise ValueError(f"Guest IDs and names differ for not-seated group {group.group_id}")
+        guest_ids = set(group.guest_ids)
+        if len(guest_ids) != len(group.guest_ids) or guest_ids & seen_guests:
+            raise ValueError(f"Duplicate not-seated guest in group {group.group_id}")
+        if guest_ids & assigned_guests:
+            raise ValueError(f"Guest appears both seated and not seated in group {group.group_id}")
+        seen_guests |= guest_ids
+        size = len(group.guest_ids)
+        total_people += size
+        # Reuse the same registered-name and synthetic-member discipline as
+        # the existing printable table list; do not invent individual names.
+        label = assignment_name(group)
+        names = visible_member_names(group)
+        people = (", ".join(
+            f'<span class="person" data-guest-id="{_text(guest_id)}">{_text(name)}</span>'
+            for guest_id, name in zip(group.guest_ids, names)
+        ) if names else "—")
+        rows.append(
+            f'<tr data-group-id="{_text(group.group_id)}">'
+            f'<td>{_text(label)} — {size}</td><td>{size}</td><td>{people}</td></tr>'
+        )
+    if rows:
+        section = ('<section class="print-group" data-list="not-seated">'
+                   f'<h2>{len(rows)} ' + ('family' if len(rows) == 1 else 'families') +
+                   f' · {total_people} ' + ('person' if total_people == 1 else 'people') +
+                   '</h2><table><thead><tr><th>Registered party</th>'
+                   '<th>People</th><th>Named members</th></tr></thead>'
+                   f'<tbody>{"".join(rows)}</tbody></table></section>')
+    else:
+        # Existing empty-list convention: a titled document with a clear
+        # empty message and no fabricated group, person, or table row.
+        section = ('<section class="print-group" data-list="not-seated">'
+                   '<p class="empty">No one is currently marked not seated.</p></section>')
+    return _document("Not seated in the main room", plan.session_id, [section], False)
