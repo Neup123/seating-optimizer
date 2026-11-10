@@ -1369,35 +1369,40 @@ export function createApp(root, api = createGateway()) {
   }
 
   async function loadView(view) {
-    if (LIST_VIEWS.has(view) && state.view !== view) state.includeReasons = false;
-    if (view === "floor" && state.plan?.layout?.floors?.length) {
-      state.focusedFloor = state.plan.layout.floors[0].zone_id;
-    }
+    const request = ++viewRequest;
+    if (view === "print" && state.view !== view) state.includeReasons = false;
+    if (view === "floor" && state.plan?.layout?.floors?.length &&
+        !state.focusedFloor) state.focusedFloor = state.plan.layout.floors[0].zone_id;
     state.view = view;
     state.viewContent = null;
     state.viewError = "";
     clearObjectUrl();
     render();
     try {
-      if (LIST_VIEWS.has(view)) {
-        const endpoint = listEndpoint(view);
-        const content = await api.post(endpoint, state.plan, "text");
-        if (view !== state.view) return;
-        if (endpoint !== listEndpoint(view)) return loadView(view);
-        state.viewContent = content;
-        listContentEndpoint = endpoint;
-      }
-      else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
-      else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
-      else if (view === "floor") state.viewContent = await api.post("/v1/exports/floor-map/svg", state.plan);
-      else {
-        const density = state.cardsPerPage;
-        const blob = await api.post(tableCardsEndpoint(), state.plan, "blob");
-        if (density !== state.cardsPerPage || state.view !== "cards") return;
-        if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser");
-        viewObjectUrl = URL.createObjectURL(blob);
+      if (view === "print") {
+        const format = state.printFormat;
+        if (LIST_VIEWS.has(format)) {
+          const endpoint = listEndpoint(format);
+          const result = await api.post(endpoint, state.plan, "text");
+          if (request !== viewRequest) return;
+          if (endpoint !== listEndpoint(format)) return loadView("print");
+          state.viewContent = result;
+          listContentEndpoint = endpoint;
+        } else {
+          const density = state.cardsPerPage;
+          const endpoint = format === "floor" ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+          const blob = await api.post(endpoint, state.plan, "blob");
+          if (request !== viewRequest || (format === "cards" && density !== state.cardsPerPage)) return;
+          if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser.");
+          viewObjectUrl = URL.createObjectURL(blob);
+        }
+      } else if (view === "json") {
+        const json = await api.post("/v1/exports/json", state.plan);
+        if (request !== viewRequest) return;
+        state.viewContent = json;
       }
     } catch (error) {
+      if (request !== viewRequest) return;
       state.viewError = friendlyApiError(error);
       state.notice = state.viewError;
       state.error = true;
@@ -1405,6 +1410,7 @@ export function createApp(root, api = createGateway()) {
       render();
       return;
     }
+    if (request !== viewRequest) return;
     if (state.error) {
       state.error = false;
       state.notice = "Export preview loaded successfully.";
