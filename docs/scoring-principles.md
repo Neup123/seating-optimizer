@@ -57,13 +57,17 @@ criterion (§6).
   (e.g. a language) earn pair points together, or lose points mixed (§4, §6).
 - **Table-composition patterns** — a table's overall composition matches or
   violates a stated pattern.
+- **Zone companionship** — a group that ends up the only group in its floor
+  or zone, while another floor or zone is in use, is penalised for its
+  isolation. See §12.
 
 ### 3.3 Family vs venue — the family against the table and the room
 
 Concerns where the family sits, regardless of who its neighbours are.
 
 - **Zone placement** — a floor or area is preferred (or, in hard form,
-  required).
+  required). In its general form the preference is an ordered tier list,
+  tried in sequence — see §11.
 - **Table-property needs** — a guest need matched by a table tag
   (e.g. `mobility=wheelchair` → `accessible`); see
   [table-properties.md](table-properties.md).
@@ -93,6 +97,7 @@ Decided polarities:
 | Holes | Negative | per empty seat |
 | Combination criteria | Either — operator's choice per criterion | per pair |
 | Zone / table fit | Positive | per preferred placement |
+| Zone companionship | Negative | per lone group |
 
 ## 5. The split principle
 
@@ -131,6 +136,11 @@ When concerns compete, they resolve in this order:
 4. **Holes** — empty seats are the least important problem in the system.
    A full house is never bought with a split: leaving seats empty is
    always preferable to breaking a family.
+
+Two mechanisms stand outside this ladder because they are staged rather
+than weighted: low-priority solving order (§9) and tiered placement
+preference (§11). Each resolves its stage first; the ladder then applies
+within the stage.
 
 ## 8. No selection authority
 
@@ -185,9 +195,71 @@ must override:
 - **Holes get the smallest weight on the ladder** (§7): the fill term is a
   tie-breaker between otherwise-equal plans, nothing more.
 
-## 11. Worked examples
+## 11. Tiered placement preference
 
-### 11.1 The clan of 36 — why consolidation beats scatter
+A group can carry an ordered preference over locations — floors or zones,
+named areas, or specific tables — in either direction: *seat us on
+floor 2*, or *do not seat us on floor 1* (a negative preference is simply
+a tier list defined by what it excludes). This is family-vs-venue (§3.3),
+but its semantics are **staged, not weighted**: it is not one more pile of
+points traded against the others.
+
+The solver works the tiers in order. It first tries to seat the group
+**entirely within tier 1**. Only when the group cannot fit in tier 1 does
+it move on to tier 2, and so on. *Cannot fit* means there is no usable
+capacity for the whole group: no room is left, or what remains is only
+small holes the group cannot use — seats exist on paper, but not in a
+shape this group can occupy. It does not mean the tier is literally empty
+of seats.
+
+Within a tier, the ordinary arithmetic applies unchanged (weights, §10;
+the priority ladder, §7). Tier overflow decides **where** a group sits; it
+does not license **splitting** it. A group that overflows to tier 2 is
+still seated whole there, and if a plan ever does divide a group across
+tiers, the split penalty (§5) charges for it exactly as for any other
+split.
+
+Like every rule here, this is a type, not a baked-in behaviour (§2): the
+engine provides the tiered-preference rule type — the group it applies
+to, an ordered list of locations, a direction — and the operator adds
+instances as data.
+
+## 12. No lonely zone — companionship
+
+A floor or zone that holds exactly one group, while another floor or zone
+is also in use, leaves that group isolated: one family of 7 alone on a
+floor while the other floor is full will feel the evening is happening
+elsewhere. The companionship term penalises that state — **per lone
+group**. It is an inter-family term (§3.2): what a group is scored
+against is the company its zone does or does not provide.
+
+The polarity is deliberately **negative** (§4). The positive face — a
+reward for every accompanied group — would pay out to nearly every group
+in nearly every plan, and a signal that fires almost everywhere says
+almost nothing. The penalty fires only on the actual failure: a group
+left alone.
+
+Companionship is a soft term, not a hard rule: sometimes one group in a
+zone is unavoidable — capacity, hard restrictions, the shape of the
+venue — and then the solver simply pays the points and trades them
+against everything else (§7, §10). Two boundaries keep it honest:
+
+- **A single-zone event is exempt.** If the whole event uses one floor,
+  no group is alone *relative to anyone*; there is no penalty.
+- **Deliberate solitude is an exclusion, not a guess.** A group that
+  wants to sit apart is exempted in the instance data; the engine never
+  infers it.
+
+The term is structural: it is computed from the finished plan and the
+venue's zone map — which zones are in use, and how many groups each
+holds — not from any operator-supplied criterion. In that it resembles
+the split term (§5), not mixing (§6). The engine provides a
+zone-companionship rule type; whether it applies, to which zones, and at
+what weight are instance data (§2).
+
+## 13. Worked examples
+
+### 13.1 The clan of 36 — why consolidation beats scatter
 
 An upper floor holds four 14-seat tables and three 12-seat tables (92
 seats). A 36-guest family, hard-restricted to this floor, exceeds every
@@ -212,7 +284,7 @@ positive-only "wholeness reward" both plans would simply forfeit the same
 reward, and the scatter's extra damage would be free — which is why the
 split term is negative and per-table (§4, §5).
 
-### 11.2 One criterion, two faces — language at a single table
+### 13.2 One criterion, two faces — language at a single table
 
 Criterion instance supplied by the operator: *language*. One 8-seat table
 holds a 7-guest Hebrew-speaking family and 1 Greek-speaking guest. Let *w*
@@ -232,7 +304,7 @@ face, every mixed pair is an active cost, so the solver keeps hunting for
 a cleaner arrangement. Which face applies is the operator's choice on the
 criterion instance (§4, §6) — the engine's duty is to offer both.
 
-### 11.3 A low-priority family that only fits by splitting
+### 13.3 A low-priority family that only fits by splitting
 
 A family of 6 is marked low-priority (§9). Everyone else is seated first;
 what remains is 4 free seats at one table and 2 at another, and no seated
