@@ -1190,3 +1190,134 @@ test("blocked reassignment names the infinite rule and does not offer Apply", as
   assert.match(root.textContent, /hard capacity/);
   assert.equal(root.querySelectorAll("[id^='apply-option-']").length, 0);
 });
+
+
+test("graded priority editor supports direct and criterion marks as removable rule data", async () => {
+  const spec = {
+    shape: "low_priority", title: "Low-priority family",
+    description: "Order without points", modes: ["mark"], default_mode: "mark",
+    default_weight: null, fields: [
+      { name: "selector", label: "Apply mark to", kind: "select", required: true,
+        choices: ["group", "size_below"] },
+      { name: "group_id", label: "Family", kind: "target", required: false, choices: [] },
+      { name: "threshold", label: "Size below", kind: "text", required: false, choices: [] },
+      { name: "grade", label: "Grade", kind: "text", required: true, choices: [] },
+    ],
+  };
+  catalog.shapes.push(spec);
+  try {
+    const { dom, app, $, root } = await setup();
+    app.state.guests = [{ id: "a", name: "Alice", group_id: "family-a", attributes: {} }];
+    app.show("rules");
+    setValue($("#new-rule-shape"), "low_priority", dom.window);
+    click($("#add-rule"));
+    assert.equal(app.state.rules[0].shape, "low_priority");
+    assert.equal(app.state.rules[0].mode, "mark");
+    assert.equal(app.state.rules[0].weight, null);
+    assert.equal(app.state.rules[0].parameters.grade, 1);
+    assert.ok($("#rule-0-group_id"));
+    setValue($("#rule-0-group_id"), "family-a", dom.window);
+    setValue($("#rule-0-grade"), "6", dom.window);
+    assert.deepEqual(app.state.rules[0].parameters,
+      { selector: "group", group_id: "family-a", grade: 6 });
+    assert.equal($("#rule-weight-0"), null);
+    setValue($("#rule-0-selector"), "size_below", dom.window);
+    assert.equal($("#rule-0-group_id"), null);
+    assert.ok($("#rule-0-threshold"));
+    setValue($("#rule-0-threshold"), "4", dom.window);
+    assert.deepEqual(app.state.rules[0].parameters,
+      { selector: "size_below", grade: 6, threshold: 4 });
+    assert.match(root.textContent, /Order only/);
+    click($("#delete-rule-0"));
+    assert.equal(app.state.rules.length, 0);
+  } finally {
+    catalog.shapes.pop();
+  }
+});
+
+test("overcapacity alarms require the operator to choose who becomes not seated", async () => {
+  const initial = {
+    ...structuredClone(plan), status: "infeasible", total_score: null,
+    assignments: [], tables: [], not_seated: [], pending_groups: [],
+    priority_marks: [{ group_id: "family-one", group_name: "Family One",
+      grade: 3, guest_count: 2, source_rule_ids: ["priority"] }],
+    message: "Too many people — short by 1.",
+    conflicting_constraints: ["Too many people — short by 1: 5 guests, 4 chairs."]
+  };
+  const { app, $, root, calls } = await setup(async (path, payload) => {
+    if (path === "/v1/solve") return {
+      ...structuredClone(plan), manual_instructions: payload.manual_instructions,
+      priority_marks: initial.priority_marks, pending_groups: [],
+      not_seated: [{ group_id: "family-one", group_name: "Family One",
+        guest_ids: ["g1", "g2"], guest_names: ["Alice", "Bob"], grade: 3 }],
+    };
+    return {};
+  });
+  app.state.guests = [
+    { id: "g1", name: "Alice", group_id: "family-one", attributes: {} },
+    { id: "g2", name: "Bob", group_id: "family-one", attributes: {} },
+  ];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = structuredClone(layout);
+  app.state.plan = initial;
+  app.show("plan");
+  assert.match(root.textContent, /short by 1/);
+  assert.equal(app.state.manualInstructions.length, 0);
+  assert.ok($("#confirm-unseat"));
+  click($("#confirm-unseat"));
+  await until(() => app.state.manualInstructions.length === 1);
+  assert.equal(app.state.manualInstructions[0].action, "unseat");
+  assert.equal(app.state.manualInstructions[0].group_id, "family-one");
+  assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
+  assert.ok(calls.some(([path, payload]) => path === "/v1/solve" &&
+    payload.manual_instructions?.[0]?.action === "unseat"));
+});
+
+test("pending review shows solver options and persists only an applied decision", async () => {
+  const pending = {
+    ...structuredClone(plan), status: "needs_review", total_score: 0,
+    priority_marks: [{ group_id: "later", group_name: "Later Family",
+      grade: 4, guest_count: 2, source_rule_ids: ["defer"] }],
+    pending_groups: [{ group_id: "later", group_name: "Later Family",
+      grade: 4, guest_count: 2, source_rule_ids: ["defer"] }],
+    not_seated: [], manual_instructions: [], message: "Low-priority grade 4 cannot fit.",
+  };
+  const { app, $, root, calls } = await setup(async (path, payload) => {
+    if (path === "/v1/reassign/options") {
+      const direction = { id: payload.instruction.id, group_id: "later", action: "unseat" };
+      return { status: "available", blockers: [], options: [{
+        id: "option-1", kind: "leave_unseated", title: "Leave Later Family unseated",
+        movements: [{ group_id: "later", party_name: "Later Family",
+          before: [], after: [], people: 2 }],
+        score_delta: 0, soft_rule_warnings: [],
+        plan: { ...structuredClone(plan), manual_instructions: [direction],
+          not_seated: [{ group_id: "later", group_name: "Later Family",
+            guest_ids: ["l1", "l2"], guest_names: ["Later one", "Later two"], grade: 4 }],
+          pending_groups: [] }
+      }] };
+    }
+    return {};
+  });
+  app.state.plan = pending;
+  app.state.guests = [
+    { id: "g1", name: "Alice", group_id: "family-one", attributes: {} },
+    { id: "g2", name: "Bob", group_id: "family-one", attributes: {} },
+    { id: "l1", name: "Later one", group_id: "later", attributes: {} },
+    { id: "l2", name: "Later two", group_id: "later", attributes: {} }
+  ];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
+  app.state.layout = structuredClone(layout);
+  app.show("plan");
+  assert.ok($("#pending-options-later"));
+  assert.equal(app.state.manualInstructions.length, 0);
+  click($("#pending-options-later"));
+  await until(() => !!$("#apply-option-1"));
+  assert.equal(app.state.manualInstructions.length, 0);
+  assert.equal(calls.filter(([path]) => path === "/v1/reassign/options").length, 1);
+  click($("#apply-option-1"));
+  assert.equal(app.state.manualInstructions[0].action, "unseat");
+  assert.equal(app.state.plan.not_seated[0].group_id, "later");
+  assert.match(root.textContent, /Operator-selected not seated/);
+});
