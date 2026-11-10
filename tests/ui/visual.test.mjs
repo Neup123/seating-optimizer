@@ -1190,3 +1190,60 @@ test("blocked reassignment names the infinite rule and does not offer Apply", as
   assert.match(root.textContent, /hard capacity/);
   assert.equal(root.querySelectorAll("[id^='apply-option-']").length, 0);
 });
+
+
+test("zone companionship is catalog-driven, with editable exclusions saved in the instance", async () => {
+  const companionshipSpec = {
+    shape: "zone_companionship", title: "Zone companionship",
+    description: "Penalty for a lone non-excluded group with another zone in use",
+    modes: ["soft"], default_mode: "soft", default_weight: 2,
+    fields: [{ name: "exclude_groups", label: "Deliberately alone parties",
+      kind: "group_exclusions", required: false, choices: [] }]
+  };
+  catalog.shapes.push(companionshipSpec);
+  try {
+    const { app, dom, $, storage, root } = await setup();
+    app.state.guests = [
+      { id: "a", name: "Alice", group_id: "party-one", group_name: "The Smiths" },
+      { id: "b", name: "Bob", group_id: "party-one", group_name: "The Smiths" },
+      { id: "c", name: "Clara", group_id: "party-two", group_name: "The Greens" },
+      { id: "d", name: "David" },
+    ];
+    app.show("rules");
+    setValue($("#new-rule-shape"), "zone_companionship", dom.window);
+    click($("#add-rule"));
+    const rule = app.state.rules[0];
+    assert.equal(rule.shape, "zone_companionship");
+    assert.equal(rule.mode, "soft");
+    assert.equal(rule.weight, 2);
+    assert.deepEqual(rule.parameters, { exclude_groups: [] });
+    assert.equal($("#rule-weight-0").value, "2");
+    assert.match(root.textContent, /Optional: explicitly exempt parties/);
+    const options = [...$("#rule-0-exclude-add").options];
+    assert.equal(options.filter(o => o.value === "party-one").length, 1,
+      "A registered family appears exactly once, not once per person");
+    assert.ok(options.some(o => o.value === "guest:d"),
+      "A guest without a group ID uses the solver's canonical party ID");
+    setValue($("#rule-weight-0"), "13", dom.window);
+    setValue($("#rule-0-exclude-add"), "party-one", dom.window);
+    assert.equal(rule.weight, 13);
+    assert.deepEqual(rule.parameters.exclude_groups, ["party-one"]);
+    assert.ok($("#rule-0-exclude-party-one"));
+    assert.match(root.textContent, /The Smiths/);
+
+    setValue($("#rule-0-exclude-add"), "guest:d", dom.window);
+    assert.deepEqual(rule.parameters.exclude_groups, ["party-one", "guest:d"]);
+    const stored = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
+    assert.deepEqual(stored.data.rules[0].parameters.exclude_groups,
+      ["party-one", "guest:d"]);
+    assert.equal(stored.data.rules[0].weight, 13);
+
+    click($("#rule-0-exclude-party-one"));
+    assert.deepEqual(rule.parameters.exclude_groups, ["guest:d"]);
+    assert.equal($("#rule-0-exclude-party-one"), null);
+    const next = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
+    assert.deepEqual(next.data.rules[0].parameters.exclude_groups, ["guest:d"]);
+  } finally {
+    catalog.shapes.pop();
+  }
+});
