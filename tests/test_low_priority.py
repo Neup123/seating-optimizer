@@ -139,6 +139,7 @@ def test_failed_pending_family_offers_verified_split_or_operator_unseat():
         problem=p, plan=partial,
         instruction=ManualInstruction(id="owner-split", group_id="deferred", action="seat_pending")))
     assert response.status == "available"
+    assert len(response.options) <= 8  # Search remains bounded even for larger venues.
     split = next(option for option in response.options if option.kind == "split")
     assert split.plan.status in {"optimal", "feasible"}
     assert split.plan.not_seated == []
