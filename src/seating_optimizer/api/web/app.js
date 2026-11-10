@@ -23,12 +23,16 @@ function partyName(assignment) {
   const names = assignment.guest_names || [];
   const proposed = assignment.group_name?.trim();
   if (proposed && !/^(registration:|guest:)/i.test(proposed) &&
-      !names.some(name => name.trim().toLocaleLowerCase() === proposed.toLocaleLowerCase()))
+      (names.length === 1 ||
+       !names.some(name => name.trim().toLocaleLowerCase() === proposed.toLocaleLowerCase())))
     return proposed;
   const parts = names.map(name => /^(.*) \((\d+)\/(\d+)\)$/.exec(name));
   if (parts.length && parts.every(part => part && part[1] === parts[0][1] && part[3] === parts[0][3]) &&
       !names.some(name => name === parts[0][1]))
     return parts[0][1];
+  if (names.length === 1 && names[0]?.trim() &&
+      !/^(registration:|guest:)/i.test(names[0].trim()))
+    return names[0].trim();
   let neutral = names.length === 1 ? "Guest" : "Party";
   while (names.some(name => name.trim().toLocaleLowerCase() === neutral.toLocaleLowerCase()))
     neutral = "Unnamed " + neutral;
@@ -44,7 +48,7 @@ function partyMembers(assignment) {
   const parts = names.map(name => /^(.*) \((\d+)\/(\d+)\)$/.exec(name));
   const generated = parts.length && parts.every(part => part && part[1] === parts[0][1] &&
     part[3] === parts[0][3]) && parts[0][1] === partyName(assignment);
-  if (generated || names.every(name => name === partyName(assignment))) return [];
+  if (generated || names.every(name => !name.trim() || name === partyName(assignment))) return [];
   return names;
 }
 
@@ -1342,7 +1346,7 @@ export function createApp(root, api = createGateway()) {
       const total = partyTotals.get(a.group_id);
       const sizeLabel = total > a.guest_ids.length
         ? a.guest_ids.length + "/" + total
-        : a.guest_ids.length + (a.guest_ids.length === 1 ? " person" : " people");
+        : String(a.guest_ids.length);
       part.append(element("h4", "", partyName(a) + " — " + sizeLabel + " → " + a.table_id),
         element("p", "muted", (people.length ? people.join(", ") + " · " : "") +
           Number(a.points).toFixed(2) + (Math.abs(Number(a.points)) === 1 ? " point" : " points")));

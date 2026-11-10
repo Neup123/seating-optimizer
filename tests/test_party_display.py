@@ -4,6 +4,8 @@ from __future__ import annotations
 from io import BytesIO
 from xml.etree import ElementTree
 
+import pytest
+
 from pypdf import PdfReader
 
 from seating_optimizer import (
@@ -117,7 +119,7 @@ def test_singular_generated_explanations_show_person_chair_and_point():
     ))
     assert plan.status in ("feasible", "optimal")
     text = render(plan, "table")
-    assert "Guest — 1" in text
+    assert "Alice — 1" in text
     assert text.count("Alice") == 1
     assert "1 empty chair" in text
     assert "1 empty chairs" not in text
@@ -364,3 +366,43 @@ def test_neutral_party_header_does_not_equal_a_member_named_party():
     assert "  Party — 2" not in text
     assert "Unnamed Party — 2" in render_table_list_html(plan)
     assert "Unnamed Party — 2" in render_people_list_html(plan)
+
+@pytest.mark.parametrize(("content", "mapping"), [
+    (b"Name,Size\\nGreen Family,1\\n", None),
+    (b"Registrant,Party Count\\nGreen Family,1\\n",
+     {"Registrant": "name", "Party Count": "size"}),
+    (b"Registrant,Party Count,Registered Group\\nGreen Family,1,Green Family\\n",
+     {"Registrant": "name", "Party Count": "size", "Registered Group": "group_name"}),
+])
+def test_named_size_one_registration_is_the_party_heading(content, mapping):
+    imported = import_registrations(content, "single.csv", mapping=mapping)
+    assert not imported.has_errors, imported.issues
+    assert len(imported.guests) == 1
+    assert imported.guests[0].group_name == "Green Family"
+    plan = _solve_greens(imported.guests)
+    assert plan.assignments[0].group_name == "Green Family"
+    for output in (render(plan, "table"), render_people_list_html(plan),
+                   render_table_list_html(plan), render_floor_svg(plan).pages[0].svg):
+        assert "Green Family — 1" in output
+        assert "Guest — 1" not in output
+    assert "Green Family — 1" in PdfReader(BytesIO(render_table_cards_pdf(plan))).pages[0].extract_text()
+    assert render(plan, "table").count("Green Family") == 1
+
+
+def test_manual_named_and_unnamed_size_one_party_headings():
+    manual = _solve_greens([Guest(id="manual", name="Green Family")])
+    assert manual.assignments[0].group_name == "Green Family"
+    assert "Green Family — 1" in render(manual, "table")
+    assert "Guest — 1" not in render(manual, "table")
+    anonymous = Plan(
+        session_id="unknown", status="feasible",
+        tables=[TableUsage(table_id="A", zone_id="hall", capacity=1, occupied=1, empty_seats=0)],
+        assignments=[Assignment(group_id="guest:unknown", table_id="A",
+                                guest_ids=["unknown"], guest_names=[""])],
+    )
+    assert "Guest — 1" in render(anonymous, "table")
+    assert "Guest — 1" in render_people_list_html(anonymous)
+    assert "Guest — 1" in render_table_list_html(anonymous)
+    assert "Green Family" not in render(anonymous, "table")
+
+

@@ -156,12 +156,17 @@ def solve(problem: Problem) -> Plan:
     groups, lookup = _prepare(problem)
     # Resolve identity across the ENTIRE party, never from its first member.
     # This also protects direct API solve payloads that bypass the importer.
-    group_names = {
-        gid: distinct_party_name(
-            gid, [guest.group_name for guest in members],
-            [guest.name for guest in members])
-        for gid, members in groups.items()
-    }
+    group_names = {}
+    for gid, members in groups.items():
+        names = [guest.name for guest in members]
+        label = distinct_party_name(gid, [guest.group_name for guest in members], names)
+        # Manual/API single-person registrations need the same display
+        # identity as imported registrations, even without group_name metadata.
+        if not label and len(members) == 1:
+            registered = names[0].strip()
+            if registered and not registered.casefold().startswith(("registration:", "guest:")):
+                label = registered
+        group_names[gid] = label
     def group_name(gid):
         members = groups[gid]
         return party_name_for(gid, group_names[gid], [guest.name for guest in members])

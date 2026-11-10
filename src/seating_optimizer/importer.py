@@ -242,9 +242,9 @@ def import_registrations(
     for group_id, members in grouped.items():
         sources = party_rows[group_id]
         explicit = [label for _, _, label in sources if label]
-        # A sole multi-person registration is labelled by its registration
-        # name (e.g. Huge Clan). Shared IDs need their own named column.
-        inferred = sources[0][0] if len(sources) == 1 and sources[0][1] > 1 else None
+        # A single registration's name is the party label at every size,
+        # including size 1. Shared IDs need an explicit party-name column.
+        inferred = sources[0][0] if len(sources) == 1 else None
         label = distinct_party_name(
             group_id, explicit if explicit else [inferred],
             [guest.name for guest in members])

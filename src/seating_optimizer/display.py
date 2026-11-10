@@ -34,7 +34,7 @@ def distinct_party_name(group_id: str, candidates: list[str | None], names: list
     labels: dict[str, str] = {}
     for candidate in candidates:
         label = (candidate or "").strip()
-        if (not label or label.casefold() in members
+        if (not label or (len(names) != 1 and label.casefold() in members)
                 or label.casefold().startswith(("registration:", "guest:"))):
             continue
         labels.setdefault(label.casefold(), label)
@@ -52,6 +52,12 @@ def party_name_for(group_id: str, group_name: str | None, names: list[str]) -> s
             and not inferred.casefold().startswith(("registration:", "guest:"))
             and inferred.casefold() not in {name.strip().casefold() for name in names}):
         return inferred
+    # A single registered guest is also the party's registered name.
+    # The stored group_name may be missing in old plans or manual API inputs.
+    if len(names) == 1:
+        registered = names[0].strip()
+        if registered and not registered.casefold().startswith(("registration:", "guest:")):
+            return registered
     members = {name.strip().casefold() for name in names}
     neutral = "Guest" if len(names) == 1 else "Party"
     while neutral.casefold() in members:
@@ -67,7 +73,7 @@ def visible_member_names(entry: Assignment) -> list[str]:
     """An imported registration has no individually named guests."""
     party = assignment_name(entry)
     generated = synthetic_party_name(entry.guest_names)
-    if generated == party or all(name == party for name in entry.guest_names):
+    if generated == party or all(not name.strip() or name == party for name in entry.guest_names):
         return []
     return list(entry.guest_names)
 

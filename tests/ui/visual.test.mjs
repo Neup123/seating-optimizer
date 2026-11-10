@@ -932,7 +932,7 @@ test("assignment cards use party labels once, hide generated members, and plural
     guest_ids: ["a"], guest_names: ["Alice Green"], reasons: [], points: 0
   }];
   app.show("plan");
-  assert.match($(".reason-card").textContent, /Green Family — 1 person → A/);
+  assert.match($(".reason-card").textContent, /Green Family — 1 → A/);
   assert.match($(".reason-card").textContent, /Alice Green/);
   assert.doesNotMatch($(".reason-card").textContent, /1 people/);
   app.state.plan.assignments = [{
@@ -940,7 +940,23 @@ test("assignment cards use party labels once, hide generated members, and plural
     guest_ids: ["a", "b"], guest_names: ["Alice Green", "Bob Green"], reasons: [], points: 0
   }];
   app.show("plan");
-  assert.match($(".reason-card").textContent, /Green Family — 2 people → A/);
+  assert.match($(".reason-card").textContent, /Green Family — 2 → A/);
+
+  app.state.plan.assignments = [{
+    group_id: "registration:4", group_name: "Green Family", table_id: "A",
+    guest_ids: ["solo"], guest_names: ["Green Family"], reasons: [], points: 0
+  }];
+  app.show("plan");
+  assert.match($(".reason-card h4").textContent, /Green Family — 1 → A/);
+  assert.equal($(".reason-card").textContent.split("Green Family").length - 1, 1);
+  assert.doesNotMatch($(".reason-card").textContent, /Guest — 1/);
+
+  app.state.plan.assignments = [{
+    group_id: "guest:unknown", group_name: null, table_id: "A",
+    guest_ids: ["unknown"], guest_names: [""], reasons: [], points: 0
+  }];
+  app.show("plan");
+  assert.match($(".reason-card h4").textContent, /Guest — 1 → A/);
 });
 
 
