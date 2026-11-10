@@ -1187,8 +1187,9 @@ export function createApp(root, api = createGateway()) {
 
   function proposeReassignment(direction) {
     void attempt(async () => {
-      if (!state.plan || !["optimal", "feasible"].includes(state.plan.status))
-        throw Error("Optimize a valid plan before making a manual direction.");
+      if (!state.plan || !(["optimal", "feasible"].includes(state.plan.status) ||
+            (direction.action === "seat_pending" && state.plan.status === "needs_review")))
+        throw Error("A solved plan or low-priority review is required before checking options.");
       const instruction = { ...direction, id: "manual-" + (state.nextManualId++) };
       const previousPlan = state.plan;
       const response = await api.post("/v1/reassign/options", {
@@ -1214,8 +1215,8 @@ export function createApp(root, api = createGateway()) {
     state.manualInstructions = deepCopy(instructions);
     state.plan = deepCopy(option.plan);
     resetPlanPreview();
-    announce("Reassignment applied: " + option.title +
-      ". All views and printable pages now use the updated plan.");
+    announce("Operator decision saved: " + option.title +
+      ". The updated plan retains the confirmed direction.");
   }
 
   function removeInstruction(id) {
@@ -1227,9 +1228,6 @@ export function createApp(root, api = createGateway()) {
       state.manualInstructions = remaining;
       try {
         const updated = await api.post("/v1/solve", projectProblem());
-        if (!["optimal", "feasible"].includes(updated.status))
-          throw Error("Re-solving without this direction did not produce a feasible plan: " +
-            (updated.conflicting_constraints || []).join("; "));
         state.plan = updated;
         state.manualInstructions = deepCopy(updated.manual_instructions || remaining);
         resetPlanPreview();
@@ -1277,7 +1275,7 @@ export function createApp(root, api = createGateway()) {
         const stored = card("Saved manual directions", "These remain mandatory when seating is re-optimized.");
         for (const instruction of state.manualInstructions) {
           stored.append(row(element("span", "", instruction.group_id + " · " + instruction.action +
-            " · " + instruction.place_type + " " + instruction.place_id),
+            (instruction.place_id ? " · " + instruction.place_type + " " + instruction.place_id : "")),
           action("Remove", () => {
             state.manualInstructions = state.manualInstructions.filter(item => item.id !== instruction.id);
             render();
@@ -1288,6 +1286,70 @@ export function createApp(root, api = createGateway()) {
       return area;
     }
     const plan = state.plan;
+    function renderNotSeated() {
+      if (!plan.not_seated?.length) return null;
+      const panel = card("Operator-selected not seated", "Only explicitly recorded choices appear here.");
+      for (const group of plan.not_seated) {
+        const instruction = state.manualInstructions.find(i =>
+          i.group_id === group.group_id && i.action === "unseat");
+        panel.append(row(
+          element("span", "", group.group_name + " · " + group.guest_ids.length + " people"),
+          instruction ? action("Restore", () => removeInstruction(instruction.id),
+            "quiet small", "restore-" + group.group_id) : element("span", "", "")));
+      }
+      return panel;
+    }
+    function renderOvercapacity() {
+      const panel = card("Over-capacity — human selection required",
+        "No family has been dropped automatically. Choose explicitly who belongs on the not-seated list.");
+      const grouped = new Map();
+      state.guests.forEach(g => {
+        const gid = g.group_id || "guest:" + g.id;
+        if (!grouped.has(gid)) grouped.set(gid, []);
+        grouped.get(gid).push(g);
+      });
+      const marked = new Map((plan.priority_marks || []).map(m => [m.group_id, m]));
+      const excluded = new Set((plan.not_seated || []).map(g => g.group_id));
+      const choices = [...grouped.entries()].filter(([gid]) => !excluded.has(gid))
+        .map(([gid, members]) => {
+          const mark = marked.get(gid);
+          const title = mark?.group_name || importedPartyName(members[0]) || gid;
+          const grade = mark ? " · grade " + mark.grade : "";
+          return { gid, mark, title: title + " (" + members.length + ")" + grade };
+        })
+        .sort((a,b) => {
+          if (!!a.mark !== !!b.mark) return a.mark ? -1 : 1;
+          return (b.mark?.grade || 0) - (a.mark?.grade || 0) ||
+            a.title.localeCompare(b.title);
+        });
+      if (!choices.length) return panel;
+      if (!choices.some(x => x.gid === state.overflowChoice))
+        state.overflowChoice = choices[0].gid;
+      panel.append(row(
+        selectField("Choose family", choices.map(x => [x.gid, x.title]),
+          state.overflowChoice, v => { state.overflowChoice = v; },
+          { id: "overflow-choice" }),
+        action("Move to not seated", () => attempt(async () => {
+          const group_id = state.overflowChoice;
+          if (!choices.some(item => item.gid === group_id))
+            throw Error("Select a registered family.");
+          const direction = { id: "manual-" + state.nextManualId++,
+            group_id, action: "unseat" };
+          const oldDirections = state.manualInstructions;
+          state.manualInstructions = [...state.manualInstructions, direction];
+          try {
+            const updated = await api.post("/v1/solve", projectProblem());
+            state.plan = updated;
+            state.manualInstructions = deepCopy(updated.manual_instructions || state.manualInstructions);
+            resetPlanPreview();
+            announce("Recorded the operator's not-seated decision for " + group_id + ".");
+          } catch (error) {
+            state.manualInstructions = oldDirections;
+            throw error;
+          }
+        }), "secondary small", "confirm-unseat")));
+      return panel;
+    }
     const status = card("Solution report", "Status: " + plan.status.toUpperCase() +
       " · Score: " + (plan.total_score ?? "—") +
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
@@ -1302,10 +1364,36 @@ export function createApp(root, api = createGateway()) {
         status.append(explanations);
       }
       area.append(status);
+      const unseated = renderNotSeated();
+      if (unseated) area.append(unseated);
+      if (plan.message?.toLowerCase().includes("short by"))
+        area.append(renderOvercapacity());
       return area;
     }
     status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
     area.append(status);
+    const unseated = renderNotSeated();
+    if (unseated) area.append(unseated);
+    if (plan.status === "needs_review") {
+      const panel = card("Low-priority placement needs a decision",
+        "Earlier families remain seated. Nothing pending was moved to not seated.");
+      panel.append(element("p", "problem", plan.message));
+      for (const mark of plan.pending_groups || []) {
+        const line = element("div", "row between");
+        line.append(element("span", "", mark.group_name + " · " +
+          mark.guest_count + " people · grade " + mark.grade));
+        line.append(action("Find options", () => proposeReassignment({
+          group_id: mark.group_id, action: "seat_pending"
+        }), "secondary small", "pending-options-" + mark.group_id));
+        panel.append(line);
+      }
+      area.append(panel);
+      area.append(renderPlanWorkspace(state, {
+        partyName, partyMembers, refresh: render,
+        proposeReassignment, applyReassignment, removeInstruction
+      }));
+      return area;
+    }
     const views = card("Plan views");
     const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
     VIEWS.forEach(([name,title]) => {
