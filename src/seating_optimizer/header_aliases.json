@@ -44,10 +44,16 @@
     "family code",
     "household",
     "household id",
-    "household name",
-    "party name",
     "group",
     "booking group"
+  ],
+  "group_name": [
+    "group name",
+    "party name",
+    "family name",
+    "household name",
+    "party label",
+    "registration group name"
   ],
   "attribute.language": [
     "language",

@@ -19,6 +19,35 @@ function storedJSON(key, fallback) {
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
 
+function partyName(assignment) {
+  const names = assignment.guest_names || [];
+  const proposed = assignment.group_name?.trim();
+  if (proposed && !/^(registration:|guest:)/i.test(proposed) &&
+      !names.some(name => name.trim().toLocaleLowerCase() === proposed.toLocaleLowerCase()))
+    return proposed;
+  const parts = names.map(name => /^(.*) \((\d+)\/(\d+)\)$/.exec(name));
+  if (parts.length && parts.every(part => part && part[1] === parts[0][1] && part[3] === parts[0][3]) &&
+      !names.some(name => name === parts[0][1]))
+    return parts[0][1];
+  let neutral = names.length === 1 ? "Guest" : "Party";
+  while (names.some(name => name.trim().toLocaleLowerCase() === neutral.toLocaleLowerCase()))
+    neutral = "Unnamed " + neutral;
+  return neutral;
+}
+function importedPartyName(guest) {
+  if (guest.group_name?.trim()) return guest.group_name.trim();
+  const generated = /^(.*) \((\d+)\/(\d+)\)$/.exec(guest.name || "");
+  return generated ? generated[1] : (guest.name || guest.group_id || guest.id);
+}
+function partyMembers(assignment) {
+  const names = assignment.guest_names || [];
+  const parts = names.map(name => /^(.*) \((\d+)\/(\d+)\)$/.exec(name));
+  const generated = parts.length && parts.every(part => part && part[1] === parts[0][1] &&
+    part[3] === parts[0][3]) && parts[0][1] === partyName(assignment);
+  if (generated || names.every(name => name === partyName(assignment))) return [];
+  return names;
+}
+
 
 function element(tag, className, text) {
   const n = document.createElement(tag);
@@ -444,7 +473,8 @@ export function createApp(root, api = createGateway()) {
     const mappingCard = card("Map columns", "Automatic matches are preselected. Choose a target or enter any custom attribute key. Unmapped columns are preserved under their original header.");
     const choices = [["", "Unmapped (preserve as attribute)"],
       ["name", "Guest / registration name"], ["size", "Party size"],
-      ["group_id", "Group ID"], ["attribute.language", "Attribute: language"],
+      ["group_id", "Group ID"], ["group_name", "Group name"],
+      ["attribute.language", "Attribute: language"],
       ["attribute.age_layer", "Attribute: age layer"],
       ["attribute.mobility", "Attribute: mobility"], ["custom", "Custom attribute..."]];
     const sheet = element("div", "table-scroll");
@@ -742,7 +772,7 @@ export function createApp(root, api = createGateway()) {
           const seen = new Set();
           state.guests.forEach(g => {
             const val = g.group_id || g.id;
-            if (!seen.has(val)) { seen.add(val); list.push([val, val]); }
+            if (!seen.has(val)) { seen.add(val); list.push([val, importedPartyName(g)]); }
           });
           fields.append(selectField(field.label, list, original, update,
             { id: "rule-" + i + "-" + field.name }));
@@ -1128,7 +1158,8 @@ export function createApp(root, api = createGateway()) {
         state.view = "table";
         state.viewContent = null;
         announce("Solver returned " + plan.status.toUpperCase() + "; " +
-          (plan.assignments?.length || 0) + " group assignments.");
+          (plan.assignments?.length || 0) + " group " +
+          ((plan.assignments?.length || 0) === 1 ? "assignment." : "assignments."));
         if (plan.status === "optimal" || plan.status === "feasible") await loadView("table");
       }), "primary", "solve-plan")
     ));
@@ -1276,7 +1307,8 @@ export function createApp(root, api = createGateway()) {
         "Every matched table is listed, including empty tables with no guest-level explanation cards.");
       (plan.pattern_matches || []).forEach(match => {
         matches.append(element("p", "reason", match.description +
-          " (" + (match.points > 0 ? "+" : "") + match.points + " points)"));
+          " (" + (match.points > 0 ? "+" : "") + match.points +
+          (Math.abs(Number(match.points)) === 1 ? " point)" : " points)")));
       });
       area.append(matches);
     }
@@ -1285,7 +1317,7 @@ export function createApp(root, api = createGateway()) {
     if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));
     else compromises.append(issuesList(plan.compromises.map(c => ({
       row: null, column: c.rule_id, severity: "warning",
-      message: c.description + " (lost " + c.lost_points + " points)"
+      message: c.description + " (lost " + c.lost_points + (c.lost_points === 1 ? " point)" : " points)")
     }))));
     const tableWrap = element("div", "table-scroll");
     const table = document.createElement("table");
@@ -1301,10 +1333,19 @@ export function createApp(root, api = createGateway()) {
     table.append(body); tableWrap.append(table); compromises.append(tableWrap); area.append(compromises);
     const reasons = card("Per-assignment explanations", "Plain-language reasons and point contributions reported by the engine.");
     const list = element("div", "reasons");
+    const partyTotals = new Map();
+    (plan.assignments || []).forEach(a =>
+      partyTotals.set(a.group_id, (partyTotals.get(a.group_id) || 0) + a.guest_ids.length));
     (plan.assignments || []).forEach(a => {
       const part = element("article", "reason-card");
-      part.append(element("h4", "", a.group_id + " (" + a.guest_ids.length + " people) → " + a.table_id),
-        element("p", "muted", a.guest_names.join(", ") + " · " + Number(a.points).toFixed(2) + " points"));
+      const people = partyMembers(a);
+      const total = partyTotals.get(a.group_id);
+      const sizeLabel = total > a.guest_ids.length
+        ? a.guest_ids.length + "/" + total
+        : a.guest_ids.length + (a.guest_ids.length === 1 ? " person" : " people");
+      part.append(element("h4", "", partyName(a) + " — " + sizeLabel + " → " + a.table_id),
+        element("p", "muted", (people.length ? people.join(", ") + " · " : "") +
+          Number(a.points).toFixed(2) + (Math.abs(Number(a.points)) === 1 ? " point" : " points")));
       const ul = document.createElement("ul");
       (a.reasons || []).forEach(r => ul.append(element("li", "",
         r.description + " (" + Number(r.points).toFixed(2) + " pts)")));

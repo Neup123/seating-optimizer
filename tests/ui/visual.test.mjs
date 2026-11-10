@@ -145,6 +145,39 @@ test("guest import shows detected headers, lets owner override mapping, and neve
   assert.equal(req.mapping.Count, "size");
 });
 
+
+test("Group name is available as an import mapping target and sent to the API", async () => {
+  const preview = {
+    headers: ["Guest Name", "Party Size", "Group ID", "Household Title"],
+    mapping: { "Guest Name": "name", "Party Size": "size", "Group ID": "group_id" },
+    detected_mapping: { "Guest Name": "name", "Party Size": "size", "Group ID": "group_id" },
+    sample_rows: [{ "Guest Name": "Alice Green", "Party Size": "1",
+      "Group ID": "greens", "Household Title": "The Greens" }],
+    rows_seen: 2, targets: ["name", "size", "group_id", "group_name"], issues: []
+  };
+  const { dom, $, calls, app } = await setup(async (path, payload) => {
+    if (path === "/v1/import/preview") return preview;
+    if (path === "/v1/import") return {
+      guests: [{ id: "a", name: "Alice Green", group_id: "greens", group_name: "The Greens",
+        attributes: {} }], mapping: payload.mapping, rows_seen: 2, rows_imported: 2, issues: []
+    };
+    return {};
+  });
+  upload($("#guest-file"), "greens.csv",
+    new TextEncoder().encode("Guest Name,Party Size,Group ID,Household Title\nAlice Green,1,greens,The Greens\n"),
+    dom.window);
+  await until(() => !!$("#map-household-title"));
+  const picker = $("#map-household-title");
+  assert.ok(Array.from(picker.options).some(o =>
+    o.value === "group_name" && o.textContent === "Group name"));
+  setValue(picker, "group_name", dom.window);
+  click($("#import-guests"));
+  await until(() => app.state.guests.length === 1);
+  const importCall = calls.filter(([path]) => path === "/v1/import").at(-1)[1];
+  assert.equal(importCall.mapping["Household Title"], "group_name");
+  assert.equal(app.state.guests[0].group_name, "The Greens");
+});
+
 test("all seven rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
   const { app, dom, $, $$ } = await setup();
   app.show("rules");
@@ -856,4 +889,87 @@ test("list field picker uses imported names and sends the selected columns to pr
   await until(() => calls.some(([path]) => path.includes("fields=Language")));
   await until(() => !!$("#list-preview")); // preview is re-fetched after a picker change
   assert.ok(app.state.listFields.includes("Language"));
+});
+
+
+test("assignment cards use party labels once, hide generated members, and pluralize people and points", async () => {
+  const synthetic = { ...plan,
+    tables: [{ table_id: "A", zone_id: "ground", capacity: 6, occupied: 6, empty_seats: 0 }],
+    assignments: [{
+      group_id: "registration:2", group_name: "Huge Clan", table_id: "A",
+      guest_ids: Array.from({ length: 6 }, (_, i) => "r2-m" + (i + 7)),
+      guest_names: Array.from({ length: 6 }, (_, i) => "Huge Clan (" + (i + 7) + "/12)"),
+      reasons: [{ rule_id: "split", description: "Group Huge Clan split across adjacent tables A, B.", points: 1 }],
+      points: 1
+    }, {
+      group_id: "registration:2", group_name: "Huge Clan", table_id: "B",
+      guest_ids: Array.from({ length: 6 }, (_, i) => "r2-m" + (i + 1)),
+      guest_names: Array.from({ length: 6 }, (_, i) => "Huge Clan (" + (i + 1) + "/12)"),
+      reasons: [], points: 0
+    }]
+  };
+  const { app, $, root } = await setup(async path => {
+    if (path === "/v1/solve") return synthetic;
+    if (path === "/v1/exports/table") return "Huge Clan — 6/12";
+    return {};
+  });
+  app.state.guests = [{ id: "r2-m7", name: "Huge Clan (7/12)", group_name: "Huge Clan" }];
+  app.state.zones = [{ id: "ground", name: "Ground" }];
+  app.state.tables = [{ id: "A", zone_id: "ground", capacity: 6 }];
+  app.show("plan");
+  click($("#solve-plan"));
+  await until(() => !!$(".reason-card"));
+  const card = $(".reason-card");
+  assert.match(card.textContent, /Huge Clan — 6\/12 → A/);
+  assert.equal(root.querySelectorAll(".reason-card").length, 2);
+  assert.match(root.querySelectorAll(".reason-card")[1].textContent, /Huge Clan — 6\/12 → B/);
+  assert.doesNotMatch(card.textContent, /registration:2|Huge Clan \(\d+\/12\)/);
+  assert.match(card.querySelector("p").textContent, /1\.00 point$/);
+  assert.doesNotMatch(card.textContent, /1 people|1 points/);
+
+  app.state.plan.assignments = [{
+    group_id: "registration:3", group_name: "Green Family", table_id: "A",
+    guest_ids: ["a"], guest_names: ["Alice Green"], reasons: [], points: 0
+  }];
+  app.show("plan");
+  assert.match($(".reason-card").textContent, /Green Family — 1 person → A/);
+  assert.match($(".reason-card").textContent, /Alice Green/);
+  assert.doesNotMatch($(".reason-card").textContent, /1 people/);
+  app.state.plan.assignments = [{
+    group_id: "registration:3", group_name: "Green Family", table_id: "A",
+    guest_ids: ["a", "b"], guest_names: ["Alice Green", "Bob Green"], reasons: [], points: 0
+  }];
+  app.show("plan");
+  assert.match($(".reason-card").textContent, /Green Family — 2 people → A/);
+});
+
+
+test("rule targets display imported party labels while preserving internal IDs as values", async () => {
+  const { app, $, dom } = await setup();
+  app.state.guests = [
+    { id: "r2-m1", name: "Huge Clan (1/12)", group_id: "registration:2", group_name: "Huge Clan" },
+    { id: "r2-m2", name: "Huge Clan (2/12)", group_id: "registration:2", group_name: "Huge Clan" }
+  ];
+  app.show("rules");
+  setValue($("#new-rule-shape"), "pair", dom.window);
+  click($("#add-rule"));
+  const options = [...$("#rule-0-left").options];
+  assert.deepEqual(options.map(option => [option.value, option.textContent]), [
+    ["", "Select guest or group"], ["registration:2", "Huge Clan"]
+  ]);
+  setValue($("#rule-0-left"), "registration:2", dom.window);
+  assert.equal(app.state.rules[0].parameters.left, "registration:2");
+});
+
+
+test("global pattern match card uses singular facts and points", async () => {
+  const { app, root } = await setup();
+  app.state.plan = { ...plan, pattern_matches: [{
+    rule_id: "lonely-chair", table_id: "G1", points: -1,
+    description: "Global pattern matched table G1 (1 group, 1 occupied seat, 1 empty seat); penalty 1 point."
+  }] };
+  app.show("plan");
+  assert.match(root.textContent, /1 group, 1 occupied seat, 1 empty seat/);
+  assert.match(root.textContent, /\(-1 point\)/);
+  assert.doesNotMatch(root.textContent, /1 groups|1 empty seats|-1 points/);
 });

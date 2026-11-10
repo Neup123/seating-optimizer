@@ -8,6 +8,7 @@ from time import perf_counter
 from ortools.sat.python import cp_model
 
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
+from .display import counted, distinct_party_name, party_name_for
 from .models import Assignment, Compromise, PatternMatch, Plan, Problem, Reason, ScoreItem, TableUsage
 from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
@@ -97,8 +98,8 @@ def _capacity_obstruction(groups, tables, splittable=frozenset()):
         return None
     chairs = sum(table.capacity for table in tables)
     if guests > chairs:
-        return (f"Not enough chairs: {guests} guests need seats, but only {chairs} chairs "
-                f"are available across {len(tables)} tables (short by {guests - chairs}).")
+        return (f"Not enough chairs: {counted(guests, 'guest')} need seats, but only {counted(chairs, 'chair')} "
+                f"are available across {counted(len(tables), 'table')} (short by {guests - chairs}).")
     if not sizes:
         return None
     largest = max(sizes)
@@ -115,8 +116,8 @@ def _capacity_obstruction(groups, tables, splittable=frozenset()):
         minimum_tables = large + (half + 1) // 2
         if minimum_tables > len(tables):
             return (f"Party packing: at least {minimum_tables} tables of {capacity} chairs "
-                    f"are needed for these {len(sizes)} parties ({guests} guests), "
-                    f"but only {len(tables)} tables ({chairs} chairs) are available. "
+                    f"are needed for these {counted(len(sizes), 'party', 'parties')} ({counted(guests, 'guest')}), "
+                    f"but only {counted(len(tables), 'table')} ({counted(chairs, 'chair')}) are available. "
                     "Unused chairs at different tables cannot be combined while parties stay together.")
     return None
 
@@ -124,8 +125,8 @@ def _capacity_obstruction(groups, tables, splittable=frozenset()):
 def _party_packing_summary(groups, tables):
     guests = sum(len(members) for members in groups.values())
     chairs = sum(table.capacity for table in tables)
-    return (f"Party packing: {len(groups)} parties ({guests} guests) cannot be placed "
-            f"at {len(tables)} tables ({chairs} chairs) while keeping each party together. "
+    return (f"Party packing: {counted(len(groups), 'party', 'parties')} ({counted(guests, 'guest')}) cannot be placed "
+            f"at {counted(len(tables), 'table')} ({counted(chairs, 'chair')}) while keeping each party together. "
             "Reconsider table sizes/counts or party grouping; total chairs alone do not guarantee a fit.")
 
 
@@ -153,6 +154,18 @@ def solve(problem: Problem) -> Plan:
     """Solve one session. A separate Problem is used for each meal sitting."""
     start = perf_counter()
     groups, lookup = _prepare(problem)
+    # Resolve identity across the ENTIRE party, never from its first member.
+    # This also protects direct API solve payloads that bypass the importer.
+    group_names = {
+        gid: distinct_party_name(
+            gid, [guest.group_name for guest in members],
+            [guest.name for guest in members])
+        for gid, members in groups.items()
+    }
+    def group_name(gid):
+        members = groups[gid]
+        return party_name_for(gid, group_names[gid], [guest.name for guest in members])
+
     tables = problem.tables
     # The only exception to atomic groups is a lone group that fits no
     # table. A together-linked group is still handled by the existing
@@ -198,8 +211,8 @@ def solve(problem: Problem) -> Plan:
             return Plan(
                 session_id=problem.session_id, status="infeasible",
                 conflicting_constraints=[
-                    f"Party too large — not achievable: group {gid} has {len(groups[gid])} "
-                    "guests, no single table fits, and no connected adjacent-table "
+                    f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
+                    "no single table fits, and no connected adjacent-table "
                     "set on one drawn floor has sufficient permitted capacity."
                     + detail
                 ],
@@ -270,7 +283,7 @@ def solve(problem: Problem) -> Plan:
             return Plan(
                 session_id=problem.session_id, status="infeasible",
                 conflicting_constraints=[
-                    f"Not achievable: together-linked party of {party_size} people has "
+                    f"Not achievable: together-linked party of {counted(party_size, 'person', 'people')} has "
                     "no connected adjacent-table cluster on a single drawn floor "
                     "with enough chairs. Keep each group whole and adjust the layout."
                 ],
@@ -608,7 +621,7 @@ def solve(problem: Problem) -> Plan:
             if rule.mode == "soft" and total_matches * rule.weight > points:
                 compromises.append(Compromise(rule_id=rule.id,
                     description=(
-                        next((f"Group {gid} sits in zone {tables[placed[gid]].zone_id} "
+                        next((f"Group {group_name(gid)} sits in zone {tables[placed[gid]].zone_id} "
                               f"instead of a preferred zone {', '.join(sorted(allowed))}."
                               for gid, members in groups.items()
                               if any(_matched(g, rule) for g in members)
@@ -630,14 +643,14 @@ def solve(problem: Problem) -> Plan:
                     points += earned
                     reasons[gid].append(Reason(
                         rule_id=rule.id,
-                        description=(f"Guest need {need}: {len(successful)} of {count} affected "
-                                     f"guests use tables with property {p['property']}."),
+                        description=(f"Guest need {need}: {len(successful)} of "
+                                     f"{counted(count, 'affected guest')} at tables with property {p['property']}."),
                         points=earned))
                     if rule.mode == "soft" and len(successful) < count:
                         lost = rule.weight * (count - len(successful))
                         compromises.append(Compromise(
                             rule_id=rule.id,
-                            description=f"Group {gid} has {count - len(successful)} guests without {p['property']}.",
+                            description=f"Group {group_name(gid)} has {counted(count - len(successful), 'guest')} without {p['property']}.",
                             lost_points=lost))
                     continue
                 table = tables[placed[gid]]
@@ -648,7 +661,7 @@ def solve(problem: Problem) -> Plan:
                     reasons[gid].append(Reason(
                         rule_id=rule.id,
                         description=(f"Guest need {need} met: table {table.id} has "
-                                     f"property {p['property']} ({count} affected guest(s))."),
+                                     f"property {p['property']} ({counted(count, 'affected guest')})."),
                         points=earned))
                 elif rule.mode == "soft":
                     lost = rule.weight * count
@@ -659,7 +672,7 @@ def solve(problem: Problem) -> Plan:
                         points=0))
                     compromises.append(Compromise(
                         rule_id=rule.id,
-                        description=(f"Group {gid} needs {need} at a table with property "
+                        description=(f"Group {group_name(gid)} needs {need} at a table with property "
                                      f"{p['property']}, but sits at {table.id}."),
                         lost_points=lost))
         elif rule.shape == "pair":
@@ -697,9 +710,9 @@ def solve(problem: Problem) -> Plan:
                             description=description, points=points / len({a, b})))
                 elif rule.mode == "soft":
                     compromises.append(Compromise(rule_id=rule.id,
-                        description=(f"Pair preference not met: {p['left']} at "
+                        description=(f"Pair preference not met: {group_name(a)} at "
                                      f"{', '.join(sorted(tables[j].id for j in group_tables[a]))} "
-                                     f"and {p['right']} at "
+                                     f"and {group_name(b)} at "
                                      f"{', '.join(sorted(tables[j].id for j in group_tables[b]))} "
                                      f"should be {p['relation']}. "
                                      + ("Hard pins involved: " + ", ".join(r.id for r in problem.rules
@@ -712,7 +725,7 @@ def solve(problem: Problem) -> Plan:
         elif rule.shape == "pin":
             gid = lookup[p["target"]]
             reasons[gid].append(Reason(rule_id=rule.id,
-                description=f"Hard pin keeps {p['target']} at table {p['table']}."))
+                description=f"Hard pin keeps {group_name(gid)} at table {p['table']}."))
         elif rule.shape == "global_pattern":
             if p.get("enabled", False):
                 sign = -1 if p.get("effect", "penalty") == "penalty" else 1
@@ -727,9 +740,10 @@ def solve(problem: Problem) -> Plan:
                     earned = sign * rule.weight
                     points += earned
                     message = (f"Global pattern [{description}] matched table {table.id} "
-                               f"({facts['groups_at_table']} groups, {facts['occupied_seats']} occupied seats, "
-                               f"{facts['empty_seats']} empty seats); "
-                               f"{p.get('effect', 'penalty')} {rule.weight} point(s).")
+                               f"({counted(facts['groups_at_table'], 'group')}, "
+                               f"{counted(facts['occupied_seats'], 'occupied seat')}, "
+                               f"{counted(facts['empty_seats'], 'empty seat')}); "
+                               f"{p.get('effect', 'penalty')} {counted(rule.weight, 'point')}.")
                     matched_tables.append(PatternMatch(
                         rule_id=rule.id, table_id=table.id, description=message, points=earned))
                     if earned < 0:
@@ -749,14 +763,14 @@ def solve(problem: Problem) -> Plan:
                 points -= rule.weight * holes
                 if holes:
                     compromises.append(Compromise(rule_id=rule.id,
-                        description=f"Table {table.id} has {holes} empty chairs.",
+                        description=f"Table {table.id} has {counted(holes, 'empty chair')}.",
                         lost_points=rule.weight * holes))
                     for gid in ids:
                         if j in group_tables[gid]:
                             count = sum(guest_placed[g.id] == j for g in groups[gid])
                             share = -rule.weight * holes * count / usage[j]
                             reason = Reason(rule_id=rule.id,
-                                description=f"Fill efficiency: {holes} empty chairs at table {table.id}.",
+                                description=f"Fill efficiency: {counted(holes, 'empty chair')} at table {table.id}.",
                                 points=share)
                             if gid in split_groups:
                                 table_reasons[gid, j].append(reason)
@@ -778,14 +792,14 @@ def solve(problem: Problem) -> Plan:
                     for j in matched:
                         table_reasons[gid, j].append(Reason(
                             rule_id=priority_rule,
-                            description=(f"Small group ({len(members)} people) received "
+                            description=(f"Small group ({counted(len(members), 'person', 'people')}) received "
                                          f"priority at table {tables[j].id}."),
                             points=1 / len(matched)))
                 else:
                     table = tables[placed[gid]]
                     reasons[gid].append(Reason(
                         rule_id=priority_rule,
-                        description=f"Small group ({len(members)} people) received priority at table {table.id}.",
+                        description=f"Small group ({counted(len(members), 'person', 'people')}) received priority at table {table.id}.",
                         points=1))
             else:
                 table_names = ", ".join(tables[j].id for j in sorted(group_tables[gid]))
@@ -801,7 +815,7 @@ def solve(problem: Problem) -> Plan:
     for gid, members in groups.items():
         if gid not in split_groups:
             assignments.append(Assignment(
-                group_id=gid, table_id=tables[placed[gid]].id,
+                group_id=gid, group_name=group_names[gid], table_id=tables[placed[gid]].id,
                 guest_ids=[guest.id for guest in members],
                 guest_names=[guest.name for guest in members],
                 guest_attributes=[guest.attributes for guest in members],
@@ -811,8 +825,8 @@ def solve(problem: Problem) -> Plan:
         table_names = ", ".join(sorted(tables[j].id for j in group_tables[gid]))
         explanation = Reason(
             rule_id=f"adjacent-fallback:{gid}",
-            description=(f"Group {gid} split across adjacent tables {table_names} because "
-                         f"no single table fits its {len(members)} guests."))
+            description=(f"Group {group_name(gid)} split across adjacent tables {table_names} because "
+                         f"no single table fits its {counted(len(members), 'guest')}."))
         for j in sorted(group_tables[gid]):
             subset = [g for g in members if guest_placed[g.id] == j]
             share = len(subset) / len(members)
@@ -821,7 +835,7 @@ def solve(problem: Problem) -> Plan:
                 for r in reasons[gid]
             ] + [explanation]
             assignments.append(Assignment(
-                group_id=gid, table_id=tables[j].id,
+                group_id=gid, group_name=group_names[gid], table_id=tables[j].id,
                 guest_ids=[g.id for g in subset],
                 guest_names=[g.name for g in subset],
                 guest_attributes=[g.attributes for g in subset],

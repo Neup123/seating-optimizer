@@ -9,6 +9,7 @@ from html import escape
 from typing import Literal
 
 from .models import Assignment, Plan
+from .display import party_header, party_totals, visible_member_names
 
 
 def _text(value: str) -> str:
@@ -42,9 +43,8 @@ def _field_value(attrs: dict, field: str) -> str:
     return "—" if value is None or value == "" else str(value)
 
 
-def _group_label(entry: Assignment) -> str:
-    count = len(entry.guest_ids)
-    return f"{entry.group_id} ({count} {'person' if count == 1 else 'people'})"
+def _group_label(entry: Assignment, totals: dict[str, int]) -> str:
+    return party_header(entry, totals)
 
 
 def _document(title: str, session_id: str, sections: list[str], split: bool) -> str:
@@ -80,6 +80,7 @@ def render_people_list_html(
                                      or any(not label.strip() for label in field_labels)):
         raise ValueError("field_labels must contain one nonempty title per selected field")
     headings = field_labels if field_labels is not None else selected
+    totals = party_totals(plan)
     table_zones = {table.table_id: table.zone_id for table in plan.tables}
     if len(table_zones) != len(plan.tables):
         raise ValueError("Duplicate table IDs in plan")
@@ -104,12 +105,28 @@ def render_people_list_html(
         rows = []
         for entry in entries:
             guest_attributes = entry.guest_attributes or [{} for _ in entry.guest_ids]
-            for guest_id, guest_name, guest_attrs in zip(entry.guest_ids, entry.guest_names, guest_attributes):
+            if not visible_member_names(entry):
+                # Registration-only parties have no individual names. Preserve
+                # IDs in the Plan/JSON, not as invented people in print.
+                cells = "".join(
+                    f"<td>{_text(' / '.join(dict.fromkeys(_field_value(attrs, field) for attrs in guest_attributes)))}</td>"
+                    for field in selected
+                )
+                rows.append(
+                    f'<tr data-group-id="{_text(entry.group_id)}" data-table-id="{_text(entry.table_id)}">'
+                    f'<td>—</td><td>—</td><td>{_text(_group_label(entry, totals))}</td>'
+                    f'<td>{_text(entry.table_id)}</td><td>{_text(table_zones[entry.table_id])}</td>'
+                    + cells + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
+                )
+                continue
+            for index, (guest_id, guest_name, guest_attrs) in enumerate(zip(
+                    entry.guest_ids, entry.guest_names, guest_attributes)):
                 rows.append(
                     f'<tr data-guest-id="{_text(guest_id)}" data-group-id="{_text(entry.group_id)}" '
                     f'data-table-id="{_text(entry.table_id)}">'
                     f'<td>{_text(guest_name)}</td><td>{_text(guest_id)}</td>'
-                    f'<td>{_text(_group_label(entry))}</td><td>{_text(entry.table_id)}</td>'
+                    f'<td>{_text(_group_label(entry, totals)) if index == 0 else "—"}</td>'
+                    f'<td>{_text(entry.table_id)}</td>'
                     f'<td>{_text(table_zones[entry.table_id])}</td>'
                     + "".join(f"<td>{_text(_field_value(guest_attrs, field))}</td>" for field in selected)
                     + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
@@ -130,6 +147,7 @@ def render_table_list_html(
     if group_by not in ("combined", "table"):
         raise ValueError("table list group_by must be combined or table")
     selected = _selected_fields(plan, fields)
+    totals = party_totals(plan)
     table_by_id = {table.table_id: table for table in plan.tables}
     if len(table_by_id) != len(plan.tables):
         raise ValueError("Duplicate table IDs in plan")
@@ -159,7 +177,7 @@ def render_table_list_html(
                 people = ", ".join(
                     f'<span class="person" data-guest-id="{_text(guest_id)}">{_text(name)}</span>'
                     for guest_id, name in zip(entry.guest_ids, entry.guest_names)
-                )
+                ) if visible_member_names(entry) else "—"
                 guest_attrs = entry.guest_attributes or [{} for _ in entry.guest_ids]
                 cells = "".join(
                     f"<td>{_text(' / '.join(dict.fromkeys(_field_value(attrs, field) for attrs in guest_attrs)))}</td>"
@@ -168,7 +186,7 @@ def render_table_list_html(
                 rows.append(
                     f'<tr data-group-id="{_text(entry.group_id)}" data-table-id="{_text(table.table_id)}">'
                     f'<td>{_text(table.table_id)}</td><td>{_text(table.zone_id)}</td>'
-                    f'<td>{_text(_group_label(entry))}</td><td>{people}</td>'
+                    f'<td>{_text(_group_label(entry, totals))}</td><td>{people}</td>'
                     + cells + (f"<td>{_reasons(entry)}</td>" if include_reasons else "") + "</tr>"
                 )
         sections.append(f'<section class="print-group {"split" if group_by == "table" else ""}"{attrs}>'

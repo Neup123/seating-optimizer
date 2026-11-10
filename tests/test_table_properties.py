@@ -19,9 +19,9 @@ client = TestClient(app)
 
 def guests():
     return [
-        Guest(id="wheelchair", name="Wheelchair guest", group_id="family",
+        Guest(id="wheelchair", name="Wheelchair guest", group_id="family", group_name="family",
               attributes={"mobility": "wheelchair"}),
-        Guest(id="escort", name="Escort", group_id="family", attributes={"mobility": "mobile"}),
+        Guest(id="escort", name="Escort", group_id="family", group_name="family", attributes={"mobility": "mobile"}),
         Guest(id="other", name="Another guest", attributes={"mobility": "mobile"}),
     ]
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from .models import Plan
+from .display import counted, party_lines, party_totals
 from .list_exports import render_people_list_html, render_table_list_html
 from .print_exports import render_floor_pdf, render_floor_svg, render_table_cards_pdf
 
@@ -17,20 +18,21 @@ def render_table(plan: Plan) -> str:
         return (f"Session {plan.session_id}: {plan.status.upper()}\n"
                 f"{plan.message}\n" + (details + "\n" if details else ""))
     lines = [f"Session: {plan.session_id} | Status: {plan.status} | Score: {plan.total_score}"]
+    totals = party_totals(plan)
     for table in plan.tables:
         lines.append("")
         lines.append(f"Table {table.table_id} | Zone {table.zone_id} | "
-                     f"{table.occupied}/{table.capacity} chairs | {table.empty_seats} empty")
+                     f"{table.occupied}/{table.capacity} chairs | {counted(table.empty_seats, 'empty chair')}")
         for entry in plan.assignments:
             if entry.table_id == table.table_id:
-                lines.append(f"  {entry.group_id} ({len(entry.guest_ids)} people): {', '.join(entry.guest_names)}")
+                lines.extend(f"  {line}" for line in party_lines(entry, totals))
                 for reason in entry.reasons:
-                    lines.append(f"    - {reason.description} ({reason.points:+g} points)")
+                    lines.append(f"    - {reason.description} ({reason.points:+g} {'point' if abs(reason.points) == 1 else 'points'})")
     if plan.compromises:
         lines.append("")
         lines.append("Compromises:")
         for issue in plan.compromises:
-            lines.append(f"  - [{issue.rule_id}] {issue.description} (lost {issue.lost_points} points)")
+            lines.append(f"  - [{issue.rule_id}] {issue.description} (lost {counted(issue.lost_points, 'point')})")
     return "\n".join(lines) + "\n"
 
 
