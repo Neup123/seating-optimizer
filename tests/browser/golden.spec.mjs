@@ -120,7 +120,11 @@ test("golden 120 guests complete the actual UI/API workflow: import â†’ rules â†
   await page.locator("#plan-search").fill("Family 00");
   await expect(page.locator(".plan-entry")).toHaveCount(1);
   await page.locator("#plan-sort").selectOption("name");
-  await page.locator("#plan-filter-floor").selectOption("ground");
+  const family00 = plan.assignments.find(a => a.group_name === "Family 00" ||
+    (a.guest_names || []).some(name => name.startsWith("Family 00")));
+  expect(family00).toBeDefined();
+  const familyFloor = plan.tables.find(t => t.table_id === family00.table_id).zone_id;
+  await page.locator("#plan-filter-floor").selectOption(familyFloor);
   await expect(page.locator(".plan-entry")).toHaveCount(1);
   await page.locator("#plan-search").fill("");
   await page.locator("#plan-filter-floor").selectOption("");
