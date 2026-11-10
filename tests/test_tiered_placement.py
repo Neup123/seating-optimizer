@@ -131,7 +131,12 @@ def test_reversed_negative_direction_keeps_floor_one_last_until_needed(allow_spl
 def test_specific_tables_and_mixed_locations_use_union_and_explicit_order():
     rule = tiers({"zones": [], "tables": ["U"]},
                  {"zones": ["lower"], "tables": ["U2"]})
-    p = scene(target=8, upper=5, more_upper=8, rules=[rule])
+    p = scene(target=8, upper=5, more_upper=8, rules=[
+        rule,
+        Rule(id="scenic", shape="table_property_need", mode="soft", weight=4,
+             parameters={"attribute": "category", "value": "main", "property": "scenic"}),
+    ])
+    p.tables[2].properties = ["scenic"]
     result = solve(p)
     # U alone is too small, U2 is available in the next tier.
     assert_whole(result, "U2")
