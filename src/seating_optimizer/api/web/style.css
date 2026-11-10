@@ -123,3 +123,38 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .pattern-clause input[aria-invalid="true"]{border-color:#c14e32;background:#fff8f5}
 .field-error{font-size:12px;color:#a33824;line-height:1.4}
 .field-error[hidden]{display:none}
+
+/* v2 CRM working surfaces never inherit paper layout or printing controls. */
+.plan-workspace{display:grid;gap:12px;min-width:0}
+.plan-toolbar{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:4px 0 12px}
+.plan-toolbar .field{flex:1 1 190px;max-width:320px}
+.plan-toolbar input,.plan-toolbar select{width:100%}
+.plan-selection{border:1px solid #8bbac2;border-radius:11px;background:#f2fbfc;padding:14px;display:grid;gap:8px}
+.plan-selection .muted{margin:0}
+.working-table-grid{display:grid;gap:13px}
+.working-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:14px}
+.working-table-section,.working-table-card{border:1px solid #d6e3e8;border-radius:12px;padding:15px;background:#f9fcfd;min-width:0}
+.working-table-section h3,.working-table-card h3{margin:0 0 5px}
+.working-table-section>.muted,.working-table-card>.muted{margin:0 0 10px}
+.plan-entry{border:1px solid #e2ebee;border-radius:10px;background:white;padding:9px 11px;margin:8px 0;min-width:0}
+.plan-entry.is-selected{border-color:#1c7a89;background:#f2fbfc}
+.plan-entry-line{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.plan-entry-line>.muted{margin:0 auto 0 0}
+.plan-target,.plan-person{width:auto;text-align:left;border:1px solid transparent;border-radius:8px;background:transparent;padding:6px 7px;color:#176a79;font-weight:700;white-space:normal}
+.plan-target[aria-pressed=true],.plan-person[aria-pressed=true]{background:#c9edf0;border-color:#7bb7be}
+.plan-target:hover,.plan-person:hover{background:#e6f5f7}
+.plan-members{display:flex;flex-wrap:wrap;gap:5px;padding:5px 0 0 7px}
+.plan-person{font-size:12px;border-color:#e0edf0;background:#f5fafb}
+.plan-details{border-top:1px solid #dfeaed;margin-top:10px;padding-top:10px;font-size:13px;overflow-wrap:anywhere}
+.plan-details h4{font-size:13px;margin:8px 0}
+.plan-details ul{margin:5px 0 9px;padding-left:20px}
+.plan-details .muted{margin:4px 0}
+.working-floor-map{background:#f4fafb;border:1px solid #c4d9df;border-radius:10px;overflow:hidden}
+.working-floor-map svg{display:block;width:100%;max-height:560px}
+.working-floor-map g{cursor:pointer}
+.working-floor-map :is(rect,ellipse,circle){fill:#d8eef0;stroke:#28798a;stroke-width:2}
+.working-floor-map g.focused :is(rect,ellipse,circle){fill:#b4e7e9;stroke:#125c6e;stroke-width:4}
+.working-floor-map g:focus-visible :is(rect,ellipse,circle){stroke:#ca6f16;stroke-width:4}
+.working-floor-map text{fill:#194652;font-size:16px;font-weight:700;pointer-events:none}
+@media(max-width:660px){.plan-toolbar{display:grid;grid-template-columns:1fr}.plan-toolbar .field{max-width:none;width:100%}}
+@media print{.plan-workspace,.plan-toolbar,.plan-selection{display:none!important}}
