@@ -1,0 +1,282 @@
+/* Interactive v2 working surfaces. All placement data comes from the solved API Plan. */
+import { assignmentMatchesSelection, selectedPlanAssignments, togglePlanSelection,
+  partyTotals, portionLabel } from "./plan-selection.js";
+
+function el(tag, css = "", text) {
+  const node = document.createElement(tag);
+  if (css) node.className = css;
+  if (text !== undefined) node.textContent = String(text);
+  return node;
+}
+function clicker(text, fn, css = "secondary small", id) {
+  const node = el("button", css, text);
+  node.type = "button";
+  if (id) node.id = id;
+  node.addEventListener("click", fn);
+  return node;
+}
+function choice(label, options, current, fn, id) {
+  const holder = el("label", "field");
+  holder.append(el("span", "", label));
+  const select = el("select");
+  select.id = id;
+  for (const [value, text] of options) {
+    const option = el("option", "", text);
+    option.value = value; select.append(option);
+  }
+  select.value = current;
+  select.addEventListener("change", () => fn(select.value));
+  holder.append(select);
+  return holder;
+}
+function tableOf(plan, id) {
+  return (plan.tables || []).find(table => table.table_id === id);
+}
+function floorOf(plan, assignment) {
+  return tableOf(plan, assignment.table_id)?.zone_id || "";
+}
+function memberNames(assignment, partyMembers) {
+  const names = partyMembers(assignment);
+  return names.length === (assignment.guest_ids || []).length ? names : [];
+}
+
+export function renderPlanWorkspace(state, { partyName, partyMembers, refresh }) {
+  const plan = state.plan;
+  const area = el("div", "plan-workspace");
+  const totals = partyTotals(plan);
+  const assignments = plan.assignments || [];
+  const floors = [...new Set((plan.tables || []).map(table => table.zone_id || ""))];
+  const selectItem = (kind, id) => {
+    state.selectedPlanItem = togglePlanSelection(state.selectedPlanItem, kind, id);
+    refresh();
+  };
+  const nameFor = a => portionLabel(a, totals, partyName);
+  const sorted = items => [...items].sort((left, right) => {
+    const by = state.workspaceSort || "table";
+    const key = a => by === "name" ? partyName(a).toLocaleLowerCase() :
+      by === "size" ? (a.guest_ids || []).length : a.table_id;
+    const a = key(left), b = key(right);
+    return (typeof a === "number" ? a - b : String(a).localeCompare(String(b))) ||
+      left.table_id.localeCompare(right.table_id) || left.group_id.localeCompare(right.group_id);
+  });
+  const query = (state.workspaceQuery || "").toLocaleLowerCase().trim();
+  const matches = a => {
+    if (state.workspaceFloor && floorOf(plan, a) !== state.workspaceFloor) return false;
+    if (!query) return true;
+    return [partyName(a), a.table_id, floorOf(plan, a),
+      ...(a.guest_names || []), ...(a.reasons || []).map(r => r.description)]
+      .some(value => String(value || "").toLocaleLowerCase().includes(query));
+  };
+
+  if (state.selectedPlanItem) {
+    const chosen = selectedPlanAssignments(plan, state.selectedPlanItem);
+    if (chosen.length) {
+      const selection = el("section", "plan-selection", "");
+      selection.id = "plan-selection";
+      const isPerson = state.selectedPlanItem.kind === "person";
+      const name = isPerson
+        ? (chosen[0].guest_names || [])[chosen[0].guest_ids.indexOf(state.selectedPlanItem.id)] || "Person"
+        : partyName(chosen[0]);
+      selection.append(el("strong", "", "Selected " + (isPerson ? "person: " : "party: ") + name),
+        el("span", "muted", " At " + [...new Set(chosen.map(a => a.table_id))].join(", ") + "."));
+      const bar = el("div", "row");
+      bar.append(clicker("Inspect selection", () => {
+        state.expandedPartyKey = chosen[0].group_id + "@" + chosen[0].table_id;
+        refresh();
+      }, "secondary small", "inspect-selection"));
+      if (isPerson) bar.append(clicker("Select whole party", () => {
+        state.selectedPlanItem = { kind: "party", id: chosen[0].group_id };
+        refresh();
+      }, "secondary small", "select-whole-party"));
+      bar.append(clicker("Focus table", () => {
+        state.workspaceFloor = floorOf(plan, chosen[0]);
+        state.focusedTableId = chosen[0].table_id;
+        refresh();
+      }, "secondary small", "focus-selected-table"));
+      bar.append(clicker("Clear selection", () => {
+        state.selectedPlanItem = null; refresh();
+      }, "quiet small", "clear-plan-selection"));
+      selection.append(bar);
+      area.append(selection);
+    } else {
+      // Invalidate stale selections after a new solve or replacement plan.
+      state.selectedPlanItem = null;
+    }
+  }
+
+  const listLike = ["table", "people", "people-floor", "groups", "groups-table"].includes(state.view);
+  if (listLike) {
+    const toolbar = el("div", "plan-toolbar");
+    const search = el("label", "field");
+    search.append(el("span", "", "Search parties, people, tables, reasons"));
+    const input = el("input");
+    input.type = "search"; input.id = "plan-search"; input.value = state.workspaceQuery || "";
+    input.placeholder = "Search this view";
+    input.addEventListener("input", () => {
+      state.workspaceQuery = input.value;
+      const caret = input.selectionStart;
+      refresh();
+      const next = document.getElementById("plan-search");
+      if (next) { next.focus(); if (caret !== null) next.setSelectionRange(caret, caret); }
+    });
+    search.append(input);
+    toolbar.append(search,
+      choice("Floor", [["", "All floors"], ...floors.map(f => [f, f || "Unspecified"])],
+        state.workspaceFloor || "", value => { state.workspaceFloor = value; refresh(); }, "plan-filter-floor"),
+      choice("Sort", [["table", "Table"], ["name", "Party name"], ["size", "Party size"]],
+        state.workspaceSort || "table", value => { state.workspaceSort = value; refresh(); }, "plan-sort"));
+    area.append(toolbar);
+  }
+
+  function detail(a) {
+    const details = el("div", "plan-details");
+    const people = memberNames(a, partyMembers);
+    details.append(el("h4", "", nameFor(a) + " · Table " + a.table_id));
+    details.append(el("p", "muted", "Members: " +
+      (people.length ? people.join(", ") : (a.guest_ids || []).length + " registered " +
+      ((a.guest_ids || []).length === 1 ? "person" : "people"))));
+    const ruleIds = new Set((a.reasons || []).map(reason => reason.rule_id));
+    const related = (state.rules || []).filter(rule => ruleIds.has(rule.id) ||
+      (rule.shape === "pin" && (rule.parameters?.target === a.group_id ||
+        (a.guest_ids || []).includes(rule.parameters?.target))));
+    details.append(el("h4", "", "Rules for this assignment"));
+    if (related.length) {
+      const rules = el("ul");
+      for (const rule of related) rules.append(el("li", "", (rule.shape || "Rule") +
+        " (" + rule.id + "; " + (rule.mode || "soft") + ")"));
+      details.append(rules);
+    } else details.append(el("p", "muted", "No matching rule records in the current editor."));
+    details.append(el("h4", "", "Solver explanation"));
+    if (!(a.reasons || []).length) details.append(el("p", "muted", "No individual explanation recorded."));
+    else {
+      const reasons = el("ul");
+      for (const reason of a.reasons) reasons.append(el("li", "",
+        reason.description + " (" + Number(reason.points || 0).toFixed(2) + " points)"));
+      details.append(reasons);
+    }
+    return details;
+  }
+
+  function assignmentRow(a, withPeople = false) {
+    const key = a.group_id + "@" + a.table_id;
+    const holder = el("article", "plan-entry");
+    holder.dataset.groupId = a.group_id;
+    holder.dataset.tableId = a.table_id;
+    if (assignmentMatchesSelection(a, state.selectedPlanItem)) holder.classList.add("is-selected");
+    const line = el("div", "plan-entry-line");
+    const party = clicker(nameFor(a), () => selectItem("party", a.group_id), "plan-target");
+    party.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "party" &&
+      state.selectedPlanItem.id === a.group_id));
+    line.append(party, el("span", "muted", "Table " + a.table_id +
+      " · " + (floorOf(plan, a) || "Unspecified floor")));
+    const show = state.expandedPartyKey === key;
+    line.append(clicker(show ? "Hide details" : "Details", () => {
+      state.expandedPartyKey = show ? null : key; refresh();
+    }, "quiet small", "details-" + encodeURIComponent(key).replace(/%/g, "_")));
+    holder.append(line);
+    if (withPeople) {
+      const named = memberNames(a, partyMembers);
+      if (named.length) {
+        const members = el("div", "plan-members");
+        named.forEach((name, index) => {
+          const id = a.guest_ids[index];
+          const b = clicker(name, () => selectItem("person", id), "plan-person");
+          b.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "person" &&
+            state.selectedPlanItem.id === id));
+          members.append(b);
+        });
+        holder.append(members);
+      }
+    }
+    if (show) holder.append(detail(a));
+    return holder;
+  }
+  function tableSection(t, variant) {
+    const holder = el("section", variant === "cards" ? "working-table-card" : "working-table-section");
+    holder.dataset.tableId = t.table_id;
+    holder.append(el("h3", "", "Table " + t.table_id),
+      el("p", "muted", (t.zone_id || "Unspecified floor") + " · " +
+        t.occupied + "/" + t.capacity + " chairs · " + t.empty_seats + " empty"));
+    const items = sorted(assignments.filter(a => a.table_id === t.table_id && matches(a)));
+    if (!items.length) holder.append(el("p", "muted", "No matching parties at this table."));
+    else for (const a of items) holder.append(assignmentRow(a, variant === "people"));
+    return holder;
+  }
+
+  if (state.view === "floor") {
+    const active = state.focusedFloor || floors[0] || "";
+    const switcher = choice("Floor", floors.map(f => [f, f || "Unspecified floor"]),
+      active, value => { state.focusedFloor = value; state.focusedTableId = ""; refresh(); }, "plan-floor-select");
+    area.append(switcher);
+    const layout = (plan.layout?.floors || []).find(f => f.zone_id === active);
+    if (layout) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.id = "working-floor-svg";
+      svg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", "Interactive floor layout for " + active);
+      for (const drawing of layout.tables || []) {
+        const table = tableOf(plan, drawing.table_id);
+        const group = document.createElementNS(svg.namespaceURI, "g");
+        group.setAttribute("data-table-id", drawing.table_id);
+        group.setAttribute("role", "button");
+        group.setAttribute("tabindex", "0");
+        group.setAttribute("aria-label", "Focus table " + drawing.table_id);
+        group.setAttribute("class", state.focusedTableId === drawing.table_id ? "focused" : "");
+        const shape = document.createElementNS(svg.namespaceURI,
+          drawing.shape === "circle" ? "circle" : drawing.shape === "ellipse" ? "ellipse" : "rect");
+        if (drawing.shape === "rectangle") {
+          ["x","y","width","height"].forEach(k => shape.setAttribute(k, drawing[k]));
+        } else {
+          shape.setAttribute("cx", drawing.x + drawing.width / 2);
+          shape.setAttribute("cy", drawing.y + drawing.height / 2);
+          shape.setAttribute("rx", drawing.width / 2);
+          shape.setAttribute("ry", drawing.height / 2);
+          if (drawing.shape === "circle") { shape.removeAttribute("rx"); shape.removeAttribute("ry");
+            shape.setAttribute("r", Math.min(drawing.width, drawing.height) / 2); }
+        }
+        const title = document.createElementNS(svg.namespaceURI, "text");
+        title.setAttribute("x", drawing.x + drawing.width / 2);
+        title.setAttribute("y", drawing.y + drawing.height / 2);
+        title.setAttribute("text-anchor", "middle");
+        title.textContent = drawing.table_id + " · " + (table?.occupied || 0) +
+          "/" + (table?.capacity || 0);
+        group.append(shape, title);
+        const focus = () => { state.focusedTableId = drawing.table_id; refresh(); };
+        group.addEventListener("click", focus);
+        group.addEventListener("keydown", e => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); focus(); }
+        });
+        svg.append(group);
+      }
+      area.append(el("div", "working-floor-map"));
+      area.lastChild.append(svg);
+    }
+    const tables = (plan.tables || []).filter(t => t.zone_id === active &&
+      (!state.focusedTableId || state.focusedTableId === t.table_id));
+    area.append(clicker("Show all floor tables", () => { state.focusedTableId = ""; refresh(); }, "quiet small"));
+    for (const t of tables) area.append(tableSection(t, "floor"));
+  } else if (state.view === "table" || state.view === "groups-table" || state.view === "cards") {
+    const tables = [...(plan.tables || [])].filter(t => !state.workspaceFloor ||
+      t.zone_id === state.workspaceFloor);
+    const grid = el("div", state.view === "cards" ? "working-card-grid" : "working-table-grid");
+    for (const t of tables) grid.append(tableSection(t, state.view));
+    area.append(grid);
+  } else if (["people", "people-floor", "groups"].includes(state.view)) {
+    const items = sorted(assignments.filter(matches));
+    if (state.view === "people-floor") {
+      for (const floor of floors) {
+        const section = el("section", "working-table-section");
+        section.append(el("h3", "", floor || "Unspecified floor"));
+        const matching = items.filter(a => floorOf(plan, a) === floor);
+        for (const a of matching) section.append(assignmentRow(a, true));
+        if (!matching.length) section.append(el("p", "muted", "No matching people."));
+        area.append(section);
+      }
+    } else {
+      for (const a of items) area.append(assignmentRow(a, state.view === "people"));
+      if (!items.length) area.append(el("p", "empty", "No entries match these filters."));
+    }
+  }
+  return area;
+}
