@@ -707,14 +707,14 @@ test("list field picker displays original import headers for mapped attribute ki
   await until(() => !!app.state.plan);
   click($("#view-people"));
   await until(() => !!$(".list-field-picker"));
-  const labels = () => Object.fromEntries([...$(".list-field-choice")?.parentNode
-    .querySelectorAll(".list-field-choice") || []].map(label => [
+  const labels = () => Object.fromEntries(
+    [...$(".list-field-picker").querySelectorAll(".list-field-choice")].map(label => [
       label.querySelector("input").value, label.textContent.trim()
     ]));
   assert.deepEqual(labels(), {
     Babies: "Babies", age_layer: "Age band", language: "Spoken languages"
   });
-  assert.doesNotMatch($(".list-field-picker").textContent, /\\b(?:age_layer|language)\\b/);
+  assert.doesNotMatch($(".list-field-picker").textContent, /\b(?:age_layer|language)\b/);
   const language = $(".list-field-picker input[value='language']");
   language.checked = true;
   language.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
