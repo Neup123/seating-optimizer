@@ -1144,6 +1144,10 @@ test("reassignment in every working view offers consequences, applies the plan a
   click($("#solve-plan"));
   await until(() => calls.some(([path, payload]) =>
     path === "/v1/solve" && payload.manual_instructions?.[0]?.id === "manual-1"));
+  await until(() => $("#notice")?.textContent.includes("Solver returned"));
+  // The solve handler also awaits the current view load before releasing
+  // the app-wide action guard. Do not click Remove while that action runs.
+  await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(app.state.plan.assignments[0].table_id, "G2",
     "Re-solving continues to honour the stored direction");
   await until(() => !!$("#stored-instructions"));
