@@ -1420,7 +1420,7 @@ test("an over-capacity alarm can print previously operator-selected people witho
   app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
   app.state.layout = structuredClone(layout);
   app.show("plan");
-  assert.match($("#confirm-unseat").textContent, /Move to not seated/);
+  assert.equal($("#confirm-unseat"), null, "No new selection is offered when everyone here is already unseated");
   assert.ok($("#open-not-seated-print"));
   assert.equal($("#list-preview"), null);
   click($("#open-not-seated-print"));
