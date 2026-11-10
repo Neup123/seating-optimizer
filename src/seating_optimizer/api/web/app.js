@@ -593,6 +593,7 @@ export function createApp(root, api = createGateway()) {
     spec.fields.forEach(f => {
       if (f.kind === "select" && f.choices.length) params[f.name] = f.choices[0];
     });
+    if (spec.shape === "zone_companionship") params.exclude_groups = [];
     if (spec.shape === "global_pattern") {
       // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
       params.scope = "global";
@@ -680,6 +681,41 @@ export function createApp(root, api = createGateway()) {
       invalidate(); render();
     }, "secondary small", "rule-" + index + "-add-pattern"));
     return panel;
+  }
+
+  function renderCompanionshipExclusions(rule, index) {
+    const area = element("div", "exclusion-editor");
+    area.append(element("p", "muted",
+      "Optional: explicitly exempt parties deliberately seated alone. Excluded parties still count as companions for other groups."));
+    const list = element("div", "exclusion-list");
+    const excluded = Array.isArray(rule.parameters.exclude_groups) ? rule.parameters.exclude_groups : [];
+    const choices = new Map();
+    state.guests.forEach(guest => {
+      const id = guest.group_id || "guest:" + guest.id;
+      if (!choices.has(id)) choices.set(id, importedPartyName(guest));
+    });
+    excluded.forEach(gid => {
+      const chip = element("span", "exclusion-chip", choices.get(gid) || gid);
+      const remove = action("×", () => {
+        rule.parameters.exclude_groups = excluded.filter(id => id !== gid);
+        invalidate(); render();
+      }, "quiet small exclusion-remove", "rule-" + index + "-exclude-" + gid);
+      remove.title = "Remove " + (choices.get(gid) || gid) + " from deliberate-solitude exclusions";
+      remove.setAttribute("aria-label", remove.title);
+      chip.append(remove); list.append(chip);
+    });
+    if (!excluded.length) list.append(element("span", "muted", "No excluded parties"));
+    area.append(list);
+    area.append(selectField("Exclude a registered party", [
+      ["", "Select a party to exclude"],
+      ...[...choices].filter(([gid]) => !excluded.includes(gid))
+        .map(([gid, name]) => [gid, name])
+    ], "", value => {
+      if (!value || excluded.includes(value)) return;
+      rule.parameters.exclude_groups = [...excluded, value];
+      invalidate(); render();
+    }, { id: "rule-" + index + "-exclude-add" }));
+    return area;
   }
 
   function renderRules() {
@@ -777,6 +813,8 @@ export function createApp(root, api = createGateway()) {
           invalidate();
         };
         if (field.kind === "pattern") fields.append(renderPatternEditor(rule, i));
+        else if (field.kind === "group_exclusions")
+          fields.append(renderCompanionshipExclusions(rule, i));
         else if (field.kind === "select") fields.append(selectField(field.label,
           field.choices, original, update, { id: "rule-" + i + "-" + field.name }));
         else if (field.kind === "zone") fields.append(selectField(field.label,
