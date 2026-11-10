@@ -180,6 +180,7 @@ export function createApp(root, api = createGateway()) {
     state.error = false;
   }
   let viewObjectUrl = null;
+  let listContentEndpoint = null;
   let working = false;
   let noticesIssued = 0;
 
@@ -371,6 +372,12 @@ export function createApp(root, api = createGateway()) {
     return sidebar;
   }
   function render() {
+    if (state.screen === "plan" && LIST_VIEWS.has(state.view) &&
+        typeof state.viewContent === "string" &&
+        listContentEndpoint !== listEndpoint(state.view)) {
+      void loadView(state.view);
+      return;
+    }
     saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
@@ -1303,8 +1310,10 @@ export function createApp(root, api = createGateway()) {
       if (LIST_VIEWS.has(view)) {
         const endpoint = listEndpoint(view);
         const content = await api.post(endpoint, state.plan, "text");
-        if (view !== state.view || endpoint !== listEndpoint(view)) return;
+        if (view !== state.view) return;
+        if (endpoint !== listEndpoint(view)) return loadView(view);
         state.viewContent = content;
+        listContentEndpoint = endpoint;
       }
       else if (view === "table") state.viewContent = await api.post("/v1/exports/table", state.plan, "text");
       else if (view === "json") state.viewContent = await api.post("/v1/exports/json", state.plan);
