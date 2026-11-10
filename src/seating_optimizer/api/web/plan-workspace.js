@@ -139,6 +139,15 @@ export function renderPlanWorkspace(state, { partyName, partyMembers, refresh })
     const related = (state.rules || []).filter(rule => ruleIds.has(rule.id) ||
       (rule.shape === "pin" && (rule.parameters?.target === a.group_id ||
         (a.guest_ids || []).includes(rule.parameters?.target))));
+    const members = el("div", "plan-members");
+    (a.guest_ids || []).forEach((id, index) => {
+      const member = clicker(people[index] || "Member " + (index + 1),
+        () => selectItem("person", id), "plan-person");
+      member.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "person" &&
+        state.selectedPlanItem.id === id));
+      members.append(member);
+    });
+    details.append(members);
     details.append(el("h4", "", "Rules for this assignment"));
     if (related.length) {
       const rules = el("ul");
@@ -199,7 +208,7 @@ export function renderPlanWorkspace(state, { partyName, partyMembers, refresh })
         t.occupied + "/" + t.capacity + " chairs · " + t.empty_seats + " empty"));
     const items = sorted(assignments.filter(a => a.table_id === t.table_id && matches(a)));
     if (!items.length) holder.append(el("p", "muted", "No matching parties at this table."));
-    else for (const a of items) holder.append(assignmentRow(a, variant === "people"));
+    else for (const a of items) holder.append(assignmentRow(a, true));
     return holder;
   }
 
