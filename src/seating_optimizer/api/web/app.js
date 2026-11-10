@@ -451,7 +451,7 @@ export function createApp(root, api = createGateway()) {
       cell.append(sel);
       if (selected === "custom") {
         const custom = textField("Attribute key", value.startsWith("attribute.") ?
-          value.slice(10) : "", next => { state.mapping[header] = "attribute." + next; }, {
+          value.slice(10) : "", next => { state.mapping[header] = "attribute." + next; render(); }, {
           id: "custom-" + header.replace(/[^a-z0-9]+/gi, "-").toLowerCase()
         });
         cell.append(custom);
@@ -460,6 +460,20 @@ export function createApp(root, api = createGateway()) {
       body.append(rowEl);
     });
     table.append(body); sheet.append(table); mappingCard.append(sheet);
+    // The API rejects duplicate targets; surface the conflict at selection time
+    // instead of letting a zero-guest response be the first indication.
+    const mappedSources = new Map();
+    for (const header of state.preview.headers) {
+      const target = state.mapping[header];
+      if (!target) continue;
+      mappedSources.set(target, [...(mappedSources.get(target) || []), header]);
+    }
+    const duplicateMappings = [...mappedSources].filter(([, sources]) => sources.length > 1);
+    for (const [target, sources] of duplicateMappings) {
+      mappingCard.append(element("p", "problem warning",
+        "Multiple columns mapped to " + target + ": " + sources.join(", ") +
+        ". Choose a different target before importing."));
+    }
     const buttons = row(action("Review corrected mapping", () => attempt(async () => {
       if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to review its mapping.");
       state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
@@ -478,6 +492,7 @@ export function createApp(root, api = createGateway()) {
         announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
       }
     }), "primary", "import-guests"));
+    buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;
     mappingCard.append(buttons);
     area.append(mappingCard);
     if (state.preview.issues?.length || state.importResult?.issues?.length) {
