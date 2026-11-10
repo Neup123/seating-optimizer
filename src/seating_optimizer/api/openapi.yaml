@@ -237,6 +237,24 @@ paths:
               schema: {type: string}
         '422':
           description: Nonfeasible plan or contradictory assignment data
+  /v1/exports/not-seated-list/html:
+    post:
+      operationId: exportNotSeatedListHtml
+      summary: Print the operator-selected people not seated in the main room
+      description: Reads only Plan.not_seated without selecting, removing, or assigning anyone. Valid for feasible, needs_review, and infeasible plans, including capacity alarms. An empty list produces a titled page with an explicit empty message and no people rows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Print-ready HTML for the other room, containing exactly the recorded not-seated groups and their people
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Inconsistent not-seated group or guest identity data
   /v1/exports/floor-map/svg:
     post:
       operationId: exportFloorMapSvg
