@@ -482,6 +482,9 @@ components:
       required: [id, shape, mode]
       properties:
         id: {type: string}
+        name: {type: string, default: '', description: Optional rule-instance label; falls back to id in displays.}
+        description: {type: string, default: '', description: Optional operator-authored instance note, separate from catalog type description.}
+        enabled: {type: boolean, default: true, description: An absent value means enabled. False removes this instance from solver constraints, scores, and explanations without deleting its configuration.}
         shape:
           type: string
           enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern]
