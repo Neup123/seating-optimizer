@@ -1282,3 +1282,22 @@ test("global-pattern clause toggle remains independent of rule-instance toggle",
     catalog.shapes.pop();
   }
 });
+
+
+test("custom instance name is shown in conflict text while rule ID remains recoverable", async () => {
+  const { app, root } = await setup();
+  app.state.rules = [
+    { id: "hard-1", name: "Seat the family downstairs", description: "",
+      enabled: true, shape: "pin", mode: "hard", weight: null,
+      parameters: { target: "a", table: "G1" } },
+    { id: "hard-2", shape: "pin", mode: "hard", weight: null,
+      parameters: { target: "a", table: "G2" } },
+  ];
+  app.state.plan = { ...structuredClone(plan), status: "infeasible",
+    conflicting_constraints: ["rule:hard-1", "rule:hard-2"],
+    message: "The hard constraints conflict.", assignments: [], tables: [] };
+  app.show("plan");
+  assert.match(root.textContent, /Seat the family downstairs \[rule:hard-1\]/);
+  assert.match(root.textContent, /rule:hard-2/,
+    "A legacy rule without a name still uses its id");
+});
