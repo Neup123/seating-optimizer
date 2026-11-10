@@ -1266,7 +1266,7 @@ test("overcapacity alarms require the operator to choose who becomes not seated"
   assert.equal(app.state.manualInstructions.length, 0);
   assert.ok($("#confirm-unseat"));
   click($("#confirm-unseat"));
-  await until(() => app.state.manualInstructions.length === 1);
+  await until(() => app.state.plan.not_seated?.length === 1);
   assert.equal(app.state.manualInstructions[0].action, "unseat");
   assert.equal(app.state.manualInstructions[0].group_id, "family-one");
   assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
