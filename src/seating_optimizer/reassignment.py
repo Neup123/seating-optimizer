@@ -320,7 +320,7 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
                  (instruction.place_id if instruction.action == "move_to" else
                   f"an allowed table outside {instruction.place_type} {instruction.place_id}") +
                  "; table capacities are infinite-weight constraints.")
-    blockers.update(f"Hard rule {rule.id} ({rule.shape}) must remain satisfied."
+    blockers.update(f"Hard rule {rule.display_name} ({rule.shape}) must remain satisfied."
                     for rule in problem.rules if rule.enabled and rule.mode == "hard")
     return ReassignResponse(status="unknown" if unknown else "blocked",
                             blockers=sorted(blockers))

@@ -1254,6 +1254,14 @@ export function createApp(root, api = createGateway()) {
     });
   }
 
+  function explainRuleRefs(value) {
+    // Keep the server's machine identifiers intact in Plan/JSON, but show
+    // the operator's name next to them in human-facing diagnostics.
+    return String(value).replace(/\brule:([\w.-]+)/g, (whole, id) => {
+      const label = ruleLabel(state.rules.find(rule => rule.id === id), id);
+      return label === id ? whole : label + " [rule:" + id + "]";
+    });
+  }
   function renderPlan() {
     const area = element("div");
     const controls = card("Solve seating", "Optimization runs only in the API. Hard constraints remain mandatory; time-limited results report feasible versus optimal.");
@@ -1310,7 +1318,7 @@ export function createApp(root, api = createGateway()) {
         status.append(element("h3", "", "Why no seating plan fits"));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
-          explanations.append(element("div", "problem", explanation));
+          explanations.append(element("div", "problem", explainRuleRefs(explanation)));
         }
         status.append(explanations);
       }
@@ -1432,7 +1440,7 @@ export function createApp(root, api = createGateway()) {
     } else {
       views.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
-        proposeReassignment, applyReassignment, removeInstruction
+        proposeReassignment, applyReassignment, removeInstruction, explainRuleRefs
       }));
     }
     area.append(views);
