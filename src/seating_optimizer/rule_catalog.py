@@ -13,7 +13,7 @@ from .models import Model, Shape
 class RuleField(Model):
     name: str
     label: str
-    kind: Literal["text", "zone", "table", "target", "select", "pattern", "tiers"]
+    kind: Literal["text", "zone", "table", "target", "select", "pattern"]
     required: bool = True
     choices: list[str] = Field(default_factory=list)
 
@@ -22,8 +22,8 @@ class RuleShapeSpec(Model):
     shape: Shape
     title: str
     description: str
-    modes: list[Literal["soft", "hard", "staged"]]
-    default_mode: Literal["soft", "hard", "staged"]
+    modes: list[Literal["soft", "hard", "mark", "staged"]]
+    default_mode: Literal["soft", "hard", "mark", "staged"]
     default_weight: int | None = None
     fields: list[RuleField] = Field(default_factory=list)
 
