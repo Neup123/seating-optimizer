@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .generic_solver import GenericProblem, solve_generic
+from .generic_evaluator import score_fixed_plan
 from .importer import import_registrations
 from .models import Guest, ManualInstruction, Problem, Rule, SolverConfig, Table, Zone
 from .rule_migration import migrate_rules
@@ -188,6 +189,31 @@ def _placement(plan):
     return {g: a.table_id for a in plan.assignments for g in a.guest_ids}
 
 
+def _assert_same_objective_on_fixed_plan(case, engine, plan, generic_problem):
+    """Avoid confusing different timed incumbents with different objectives.
+
+    The reference solver's own reported objective must equal the generic
+    scoring formula applied to that SAME fixed seating arrangement. This
+    catches missing family-internal pairs independently of CP-SAT search.
+    """
+    if plan.status not in ("optimal", "feasible", "needs_review"):
+        return
+    guest_tables = _placement(plan)
+    calculated, breakdown = score_fixed_plan(
+        generic_problem.guests, generic_problem.tables,
+        guest_tables, generic_problem.rules
+    )
+    assert plan.total_score == calculated, (
+        case.name, engine, "fixed-plan objective mismatch",
+        plan.total_score, calculated, breakdown
+    )
+    reported = {r.rule_id: r.points for r in plan.score_breakdown}
+    assert reported == breakdown, (
+        case.name, engine, "fixed-plan instance breakdown mismatch",
+        reported, breakdown
+    )
+
+
 def _compare(case: Case, legacy, generic, *, score_tolerance=0):
     assert legacy.status == generic.status or (
         case.expected_status == "feasible" and
@@ -275,6 +301,8 @@ def corpus_gate(root: Path, *, strict_placement=False, time_limit=None,
         new = solve_generic(generic_problem)
         _expected(case, old, engine="legacy")
         _expected(case, new, engine="generic")
+        _assert_same_objective_on_fixed_plan(case, "legacy", old, generic_problem)
+        _assert_same_objective_on_fixed_plan(case, "generic", new, generic_problem)
         delta = _compare(case, old, new, score_tolerance=score_tolerance)
         if strict_placement and old.status in ("optimal", "feasible"):
             assert _placement(old) == _placement(new), case.name
