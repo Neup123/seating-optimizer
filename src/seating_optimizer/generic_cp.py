@@ -210,6 +210,29 @@ def _pair_term(rule, b, *, within):
     known = [g for g in b.problem.guests if guest_value(g, field) is not None]
     selected = b.matching(rule.criterion)
     others = [g for g in known if g.id not in {p.id for p in selected}]
+    if rule.mode == "hard":
+        # Hard criterion relations are constraints, never points. This is the
+        # same within/across family split as the soft evaluator.
+        if rule.polarity is None:
+            raise ValueError(f"Rule {rule.display_name}: hard pairs require polarity")
+        candidates = []
+        if rule.polarity == "penalty" and criterion.value is not None:
+            candidates = [(a, other) for a in selected for other in others]
+        else:
+            members = selected if criterion.value is not None else known
+            candidates = list(combinations(members, 2))
+        lit = b.guard(rule)
+        for a, other in candidates:
+            if (group_id(a) == group_id(other)) != within:
+                continue
+            same_value = guest_value(a, field) == guest_value(other, field)
+            if rule.polarity == "reward" and same_value:
+                for j in range(b.n):
+                    b.model.Add(b.guest_at[a.id, j] == b.guest_at[other.id, j]).OnlyEnforceIf(lit)
+            elif rule.polarity == "penalty" and not same_value:
+                for j in range(b.n):
+                    b.model.Add(b.guest_at[a.id, j] + b.guest_at[other.id, j] <= 1).OnlyEnforceIf(lit)
+        return
     categories = defaultdict(list)
     for guest in selected if criterion.value is not None else known:
         categories[str(guest_value(guest, field))].append(guest.id)
