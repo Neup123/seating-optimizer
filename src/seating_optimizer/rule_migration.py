@@ -135,7 +135,7 @@ def migrate_rules(items: list[Any]) -> tuple[list[GenericRule], dict[str, Any]]:
         "instance_ids": [item.id for item in converted],
         "compatibility_notes": [
             "Legacy attribute_grouping includes same-family pair points; "
-            "v2 scope=across excludes them. Compare scores before enabling v2.",
+            "v2 criterion_pairs preserves them even when scope=across (§13.1).",
             "Legacy soft table-property needs earn rewards when satisfied; "
             "v2 property_need penalizes unsatisfied affected guests.",
         ],
