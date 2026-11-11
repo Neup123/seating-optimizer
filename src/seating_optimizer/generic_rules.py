@@ -315,7 +315,7 @@ def split_dominance_warnings(rules: Sequence[GenericRule], *,
         return []
     ordinary = 0
     for rule in active:
-        if rule.id == split.id or rule.mechanism == "holes_term":
+        if rule is split or rule.mechanism == "holes_term":
             continue
         count = (guest_count * (guest_count - 1) // 2
                  if rule.mechanism in ("criterion_pairs", "own_attribute_grouping")
