@@ -98,10 +98,12 @@ def compare_value(actual: Any, op: str, expected: Any) -> bool:
     if op == "in":
         return any(compare_value(actual, "==", item) for item in expected)
     a, b = _coerce(actual, expected)
-    if op in ("<", "<=", ">", ">=") and (
-        not _number(a) or not _number(b)
-    ):
-        return False
+    if op in ("<", "<=", ">", ">="):
+        if not _number(actual) or not _number(expected):
+            return False
+        # Imported CSV numeric fields are strings; ordered comparison must
+        # be numeric, never lexicographic (e.g. 100 < 65 is false).
+        a, b = float(actual), float(expected)
     if op == "==":
         return type(a) is type(b) and a == b
     if op == "!=":
