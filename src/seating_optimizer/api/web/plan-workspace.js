@@ -41,7 +41,8 @@ function memberNames(assignment, partyMembers) {
 }
 
 export function renderPlanWorkspace(state, {
-  partyName, partyMembers, refresh, proposeReassignment, applyReassignment, removeInstruction
+  partyName, partyMembers, refresh, proposeReassignment, applyReassignment, removeInstruction,
+  explainRuleRefs = value => value
 }) {
   const plan = state.plan;
   const area = el("div", "plan-workspace");
@@ -178,7 +179,8 @@ export function renderPlanWorkspace(state, {
         ? "The solver has not proved infeasibility. Raise the time limit and try again."
         : "All routes must satisfy infinite-weight rules and table capacities."));
       const details = el("ul");
-      for (const blocker of response.blockers || []) details.append(el("li", "", blocker));
+      for (const blocker of response.blockers || []) details.append(
+        el("li", "", explainRuleRefs(blocker)));
       panel.append(details);
     }
     for (const option of response.options || []) {
