@@ -65,7 +65,9 @@ class Build:
         self._counts = {}
         self._choose = {}
         self._products = {}
+        self.fallback_by_rule = {}
         self._linked_neighbours()
+        self._linked_together_clusters()
 
     def guard(self, rule):
         key = rule.display_name
@@ -149,6 +151,68 @@ class Build:
             self.model.Add(sum(roots.values()) == 1)
             for j in range(n):
                 self.model.Add(sum(incoming[j]) + roots[j] == self.x[gid, j])
+
+    def _linked_together_clusters(self):
+        """Keep whole families adjacent when a named together cluster exceeds a table.
+
+        This is the generic inter-family pair mechanism's legacy adjacency
+        exception. It never splits a constituent family or invents a new rule.
+        """
+        together_rules = [
+            r for r in self.problem.rules
+            if r.enabled and (r.engine, r.mechanism) == ("inter", "pair_relation")
+            and r.relation == "together"
+        ]
+        parent = {gid: gid for gid in self.groups}
+
+        def find(gid):
+            while parent[gid] != gid:
+                parent[gid] = parent[parent[gid]]
+                gid = parent[gid]
+            return gid
+
+        def join(a, b):
+            a, b = find(a), find(b)
+            if a != b:
+                parent[b] = a
+
+        for r in together_rules:
+            join(self.lookup[r.targets[0]], self.lookup[r.targets[1]])
+        clusters = defaultdict(list)
+        for gid in self.groups:
+            clusters[find(gid)].append(gid)
+        adjacent = neighbouring_tables(self.problem.layout, self.tables)
+        max_table = max(t.capacity for t in self.tables)
+        for cluster_index, members in enumerate(clusters.values()):
+            matching = [r for r in together_rules
+                        if self.lookup[r.targets[0]] in members
+                        and self.lookup[r.targets[1]] in members]
+            combined = sum(len(self.groups[gid]) for gid in members)
+            if len(members) < 2 or combined <= max_table or not matching:
+                continue
+            active = self.model.NewBoolVar(f"v2:linked:{cluster_index}:active")
+            for r in matching:
+                self.fallback_by_rule[r.id] = active
+            occupied, roots, ranks = {}, {}, {}
+            incoming = {j: [] for j in range(self.n)}
+            for j in range(self.n):
+                count = sum(self.x[gid, j] for gid in members)
+                occupied[j] = self.model.NewBoolVar(f"v2:linked:{cluster_index}:used:{j}")
+                roots[j] = self.model.NewBoolVar(f"v2:linked:{cluster_index}:root:{j}")
+                ranks[j] = self.model.NewIntVar(0, self.n, f"v2:linked:{cluster_index}:rank:{j}")
+                self.model.Add(count >= 1).OnlyEnforceIf([active, occupied[j]])
+                self.model.Add(count == 0).OnlyEnforceIf([active, occupied[j].Not()])
+                self.model.Add(roots[j] <= occupied[j]).OnlyEnforceIf(active)
+                self.model.Add(ranks[j] == 0).OnlyEnforceIf([active, roots[j]])
+            for i, neighbours in adjacent.items():
+                for j in neighbours:
+                    edge = self.model.NewBoolVar(f"v2:linked:{cluster_index}:edge:{i}:{j}")
+                    incoming[j].append(edge)
+                    self.model.Add(edge <= occupied[i]).OnlyEnforceIf(active)
+                    self.model.Add(ranks[j] >= ranks[i] + 1).OnlyEnforceIf([active, edge])
+            self.model.Add(sum(roots.values()) == 1).OnlyEnforceIf(active)
+            for j in range(self.n):
+                self.model.Add(sum(incoming[j]) + roots[j] == occupied[j]).OnlyEnforceIf(active)
 
     def manual(self):
         for instruction in self.problem.manual_instructions:
@@ -285,6 +349,13 @@ def _criterion_pairs(rule, b):
 def _pair_relation(rule, b):
     a, other = (b.lookup[target] for target in rule.targets)
     together = rule.relation == "together"
+    if rule.id in b.fallback_by_rule:
+        active = b.fallback_by_rule[rule.id]
+        if rule.mode == "hard":
+            b.model.Add(active == 1).OnlyEnforceIf(b.guard(rule))
+        else:
+            b.terms.append(rule.weight * active)
+        return
     if a == other:
         if rule.mode == "hard" and not together:
             b.model.Add(0 == 1).OnlyEnforceIf(b.guard(rule))
