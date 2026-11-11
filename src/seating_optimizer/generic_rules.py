@@ -6,6 +6,7 @@ keeps its original data without validating the mechanism's content.
 """
 from __future__ import annotations
 
+import builtins
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any, Literal, Mapping, Sequence
@@ -225,7 +226,7 @@ class GenericRule(BaseModel):
     # This field is provenance only and MUST NOT drive the generic engine.
     legacy_source: dict[str, Any] | None = None
 
-    @property
+    @builtins.property
     def display_name(self) -> str:
         return self.name.strip() or self.id
 
