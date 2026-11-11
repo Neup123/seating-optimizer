@@ -158,7 +158,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority"]
 
 
 class Rule(Model):
