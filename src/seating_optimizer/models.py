@@ -158,7 +158,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "tiered_placement"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"]
 
 
 class Rule(Model):
@@ -231,12 +231,22 @@ class Rule(Model):
             raise ValueError("Mark mode is reserved for non-scoring low_priority rules")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
-        if self.shape in {"fill_efficiency", "global_pattern", "split_penalty", "small_group_priority"} and self.mode != "soft":
-            raise ValueError("Fill efficiency, global patterns, split penalties and small-group preferences must be soft")
+        if self.shape in {"fill_efficiency", "global_pattern", "split_penalty", "small_group_priority", "zone_companionship"} and self.mode != "soft":
+            raise ValueError("Fill efficiency, global patterns, split penalties, small-group preferences and zone companionship must be soft")
         if self.shape == "attribute_grouping" and self.parameters.get("effect", "reward") not in {"reward", "penalty"}:
             raise ValueError("Attribute grouping effect must be reward or penalty")
         if self.shape in {"split_penalty", "small_group_priority"} and self.parameters:
             raise ValueError(f"{self.shape} is structural and takes no parameters")
+        if self.shape == "zone_companionship":
+            # Exclusions are explicit group IDs, never inferred from another
+            # rule, attributes, or an apparent single-family zone.
+            if set(self.parameters) - {"exclude_groups"}:
+                raise ValueError("Zone companionship accepts only exclude_groups")
+            excluded = self.parameters.get("exclude_groups", [])
+            if (not isinstance(excluded, list)
+                    or any(not isinstance(gid, str) or not gid.strip() for gid in excluded)
+                    or len(excluded) != len(set(excluded))):
+                raise ValueError("Zone companionship exclusions must be distinct nonempty group IDs")
         if self.shape == "global_pattern":
             # Validate before Rule can enter Problem, VenueConfiguration, or an API payload.
             validate_pattern(self.parameters, rule_id=self.id)

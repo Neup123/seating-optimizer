@@ -450,7 +450,7 @@ components:
       properties:
         name: {type: string}
         label: {type: string}
-        kind: {type: string, enum: [text, zone, table, target, select, pattern, tiers]}
+        kind: {type: string, enum: [text, zone, table, target, select, pattern, tiers, group_exclusions]}
         required: {type: boolean}
         choices: {type: array, items: {type: string}}
     RuleShapeSpec:
@@ -458,7 +458,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard, mark, staged]}}
@@ -505,12 +505,12 @@ components:
         enabled: {type: boolean, default: true, description: An absent value means enabled. False removes this instance from solver constraints, scores, and explanations without deleting its configuration.}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]
         mode: {type: string, enum: [soft, hard, mark, staged]}
         parameters:
           type: object
           additionalProperties: true
-          description: For tiered_placement, an object with target (guest/group ID) and tiers, ordered from best to worst. Each tier has a zones array and/or a tables array. These are unions of locations, not weights; unlisted tables are a final fallback.
+          description: For tiered_placement, an object with target (guest/group ID) and tiers, ordered from best to worst. Each tier has a zones array and/or a tables array. These are unions of locations, not weights; unlisted tables are a final fallback. For zone_companionship, exclude_groups is an optional list of registered group IDs deliberately allowed to be alone.
         weight: {type: [integer, 'null'], minimum: 1, description: null for hard and staged rules}
     ManualInstruction:
       type: object

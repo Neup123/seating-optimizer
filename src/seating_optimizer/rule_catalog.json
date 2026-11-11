@@ -291,6 +291,24 @@
           "required": true
         }
       ]
+    },
+    {
+      "shape": "zone_companionship",
+      "title": "Zone companionship — avoid lonely floors",
+      "description": "Penalty for each non-excluded party sitting alone in its floor/zone while another zone is in use. A single occupied zone pays no penalty. All weight comes from this rule instance; deliberately solitary parties may be excluded.",
+      "modes": [
+        "soft"
+      ],
+      "default_mode": "soft",
+      "default_weight": 2,
+      "fields": [
+        {
+          "name": "exclude_groups",
+          "label": "Parties intentionally seated alone (no penalty)",
+          "kind": "group_exclusions",
+          "required": false
+        }
+      ]
     }
   ]
 }

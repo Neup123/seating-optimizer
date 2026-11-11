@@ -81,7 +81,7 @@ def test_catalog_covers_six_solver_shapes_and_openapi_contract():
     catalog = rule_catalog()
     shapes = {shape.shape: shape for shape in catalog.shapes}
     assert set(shapes) == {"attribute_grouping", "zone_restriction", "table_property_need", "global_pattern",
-                           "pair", "capacity", "fill_efficiency", "pin", "split_penalty", "small_group_priority", "low_priority", "tiered_placement"}
+                           "pair", "capacity", "fill_efficiency", "pin", "split_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"}
     assert shapes["capacity"].modes == ["hard"]
     assert shapes["pin"].modes == ["hard"]
     assert shapes["fill_efficiency"].modes == ["soft"]
@@ -94,6 +94,9 @@ def test_catalog_covers_six_solver_shapes_and_openapi_contract():
     assert shapes["tiered_placement"].default_mode == "staged"
     assert shapes["tiered_placement"].default_weight is None
     assert {f.kind for f in shapes["tiered_placement"].fields} == {"target", "tiers"}
+    assert shapes["zone_companionship"].modes == ["soft"]
+    assert shapes["zone_companionship"].default_weight == 2
+    assert {field.kind for field in shapes["zone_companionship"].fields} == {"group_exclusions"}
     assert {field.name for field in shapes["table_property_need"].fields} == {
         "attribute", "value", "property"
     }

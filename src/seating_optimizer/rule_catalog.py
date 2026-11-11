@@ -13,7 +13,7 @@ from .models import Model, Shape
 class RuleField(Model):
     name: str
     label: str
-    kind: Literal["text", "zone", "table", "target", "select", "pattern", "tiers"]
+    kind: Literal["text", "zone", "table", "target", "select", "pattern", "tiers", "group_exclusions"]
     required: bool = True
     choices: list[str] = Field(default_factory=list)
 
