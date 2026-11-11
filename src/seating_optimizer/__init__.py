@@ -11,8 +11,13 @@ from .models import (
     ScoreItem, SolverConfig, Table, TableUsage, Zone,
 )
 from .solver import solve
+from .generic_rules import Criterion, GenericRule, mechanism_catalog, criterion_field_state, split_dominance_warnings
+from .generic_evaluator import score_fixed_plan, hard_violations
+from .rule_migration import migrate_instance, migrate_rules, migrate_configuration, reconstruct_v1_rules
 
 __all__ = [
+    "Criterion", "GenericRule", "mechanism_catalog", "criterion_field_state", "split_dominance_warnings",
+    "score_fixed_plan", "hard_violations", "migrate_instance", "migrate_rules", "migrate_configuration", "reconstruct_v1_rules",
     "Assignment", "Compromise", "Guest", "ManualInstruction", "NotSeatedGroup", "Plan", "PriorityMark", "Problem", "Reason", "Rule",
     "FloorLayout", "TableDrawing", "VenueLayout", "VenueConfiguration", "validate_layout_references",
     "import_layout", "import_layout_files", "SvgFloorBundle", "SvgFloorPage",
