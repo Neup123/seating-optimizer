@@ -72,7 +72,10 @@ def _pairs(r: GenericRule, c: FixedContext, *, within: bool) -> int:
         relevant = [g for g in at_table if match_guest(g, selector)]
         for a, b in combinations(relevant, 2):
             same_family = c.group_id(a) == c.group_id(b)
-            if same_family != within:
+            # B2 intentionally counts family-internal pairs too: the
+            # engine relation is inter-family, but legacy §13.1 awards
+            # C(7,2) points even when all seven guests form one family.
+            if within and not same_family:
                 continue
             same_value = guest_value(a, selector.field) == guest_value(b, selector.field)
             if r.polarity == "reward" and same_value:
@@ -88,7 +91,7 @@ def _pairs(r: GenericRule, c: FixedContext, *, within: bool) -> int:
             ]
             for a in relevant:
                 for b in others:
-                    if (c.group_id(a) == c.group_id(b)) != within:
+                    if within and c.group_id(a) != c.group_id(b):
                         continue
                     points -= r.weight
     return points
