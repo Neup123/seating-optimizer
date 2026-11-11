@@ -15,7 +15,7 @@ from test_generic_engine_foundation import _legacy_instances
 
 
 def test_random_legacy_vs_generic_without_hidden_objective_terms():
-    small_random_gate(samples=12)
+    small_random_gate(samples=20)
 
 
 def test_external_corpus_directory_interface_with_synthetic_manifest(tmp_path):
