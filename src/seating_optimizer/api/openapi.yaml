@@ -467,25 +467,49 @@ components:
         layout: {$ref: '#/components/schemas/VenueLayout'}
         rules: {type: array, items: {$ref: '#/components/schemas/GenericRule'}}
     GenericPlan:
-      allOf:
-        - {$ref: '#/components/schemas/Plan'}
-        - type: object
-          properties:
-            validation_warnings: {type: array, items: {type: string}}
-            criterion_states: {type: array, items: {type: object}}
-            unseated_reasons:
-              type: array
-              items:
-                type: object
-                required: [group_id, group_name, guest_ids, guest_names, reason, status, description]
-                properties:
-                  group_id: {type: string}
-                  group_name: {type: string}
-                  guest_ids: {type: array, items: {type: string}}
-                  guest_names: {type: array, items: {type: string}}
-                  reason: {type: string, enum: [lack_of_space, operator_decision]}
-                  status: {type: string, enum: [pending, confirmed]}
-                  description: {type: string}
+      type: object
+      additionalProperties: false
+      required: [session_id, status, total_score, assignments, tables, score_breakdown, compromises, conflicting_constraints, solve_seconds, message]
+      properties:
+        session_id: {type: string}
+        status: {type: string, enum: [optimal, feasible, infeasible, unknown, needs_review]}
+        priority_marks: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        pending_groups: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        not_seated: {type: array, items: {$ref: '#/components/schemas/NotSeatedGroup'}}
+        manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
+        total_score: {type: [integer, 'null']}
+        assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/TableUsage'}}
+        score_breakdown: {type: array, items: {$ref: '#/components/schemas/ScoreItem'}}
+        pattern_matches:
+          type: array
+          description: Per-table matches (including empty tables) of enabled global pattern rules.
+          items: {$ref: '#/components/schemas/PatternMatch'}
+        compromises: {type: array, items: {$ref: '#/components/schemas/Compromise'}}
+        conflicting_constraints: {type: array, items: {type: string}}
+        solve_seconds: {type: number}
+        message: {type: string}
+        layout:
+          anyOf:
+            - {$ref: '#/components/schemas/VenueLayout'}
+            - {type: 'null'}
+        validation_warnings: {type: array, items: {type: string}}
+        criterion_states: {type: array, items: {type: object}}
+        unseated_reasons:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_name, guest_ids, guest_names, reason, status, description]
+            properties:
+              group_id: {type: string}
+              group_name: {type: string}
+              guest_ids: {type: array, items: {type: string}}
+              guest_names: {type: array, items: {type: string}}
+              reason: {type: string, enum: [lack_of_space, operator_decision]}
+              status: {type: string, enum: [pending, confirmed]}
+              description: {type: string}
+
     Zone:
       type: object
       additionalProperties: false
