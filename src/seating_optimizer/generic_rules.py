@@ -59,8 +59,10 @@ class Criterion(BaseModel):
         if self.op == "in":
             if not isinstance(self.value, list) or not self.value:
                 raise ValueError("'in' requires a nonempty value list")
-        elif isinstance(self.value, (list, dict)) or self.value is None:
+        elif isinstance(self.value, (list, dict)):
             raise ValueError("Comparison value must be a scalar")
+        elif self.value is None and self.op != "==":
+            raise ValueError("Missing values are permitted only for unfiltered grouping")
         if self.op in ("<", "<=", ">", ">=") and (
             isinstance(self.value, bool) or not _number(self.value)
         ):
@@ -125,7 +127,7 @@ def match_guest(guest: Any, criterion: Criterion | Mapping[str, Any]) -> bool:
     if c.subject != "guest":
         raise ValueError("Guest matcher requires a guest criterion")
     actual = guest_value(guest, c.field)
-    return actual is not None and compare_value(actual, c.op, c.value)
+    return actual is not None and (c.value is None or compare_value(actual, c.op, c.value))
 
 
 def match_family(members: Sequence[Any], criterion: Criterion | Mapping[str, Any]) -> bool:
