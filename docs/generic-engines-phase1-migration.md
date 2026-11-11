@@ -2,11 +2,12 @@
 
 ## Scope
 
-This is an *implementation-in-progress* ledger, not a completed equivalence
-certificate. The target base is main d6551f27b404ccec6f97dc8095b9f9bfd1da8263.
-The old solver remains unchanged and is still the production path. The new
-mechanism model, converter, and fixed-plan scorer are isolated in separate
-modules while CP-SAT integration is pending.
+This is the implementation and audit ledger, **not** a certificate that
+the external 29-verdict test-230 gate has passed. The target base is main
+d6551f27b404ccec6f97dc8095b9f9bfd1da8263. The legacy solver stays
+available through `solve(..., engine="legacy")`; the independent
+v2 CP-SAT solver is selected through `solve(..., engine="generic")` or
+`/v2/solve`. The v2 solver dispatches rules by engine/mechanism identity.
 
 The legacy repository at this base does not contain either \`test-230/\` or
 \`test-230-rerun/\` (confirmed from the recursive Git tree). Therefore the
@@ -62,15 +63,45 @@ instance metadata are preserved by the converter without branching on IDs.
 4. **No automatic unseating.** A failure to fit low-priority families remains
    reviewable, and an \`unseat\` manual instruction must come from the operator.
 
-## Verification milestones still required
+## Completed implementation surfaces
 
-- Integrate the generic mechanisms into CP-SAT variable construction and
-  diagnostic/reporting paths. Fixed-plan scoring alone is insufficient.
-- Implement D1 per-family priority staging, D2 all-unseated reason model,
-  and the versioned API read-v1/write-v2 transition.
-- Add full mechanism-by-mode CP-SAT tests (including P1/P2/P3 actual solving),
-  plus a legacy-versus-generic differential harness and random problems.
-- Restore/provide the external \`test-230/\` and \`test-230-rerun/\` corpus
-  and reproduce all 29 verdicts, including 2260 and -1997596 scores.
-- Only then open a phase-1 completion PR. Never merge from this branch
-  without coordinator acceptance.
+- \`generic_rules.py\`: typed criterion operators, 13 v2 mechanism identities,
+  disabled-instance validation exemption, absent-field diagnostics, and a
+  warning-only split-dominance guard (no weight mutation).
+- \`generic_cp.py\`: CP-SAT builders for each mechanism, hard assumptions,
+  structural chair capacities, permitted and oversized split rules,
+  connected adjacent-table fallback, and tier feasibility probing.
+- \`generic_solver.py\`: separate v2 model and solver, per-family S1 staging
+  (D1), operator-only confirmed unseating and reason-bearing pending records
+  (D2).
+- \`rule_migration.py\`: shape-driven converter, exact original provenance,
+  all 13 mappings, 17 retained instances plus the documented capacity
+  pseudo-rule retirement.
+- \`generic_evaluator.py\`: per-mechanism fixed-plan score proof with
+  attributed, per-instance breakdown.
+- \`api/app.py\` and \`api/openapi.yaml\`: parallel v2 solve, catalog, migration
+  and schema-validation routes; v1 remains readable and usable for shadow
+  comparison. No UI files were modified.
+
+## External coordinator gate
+
+The external corpus is intentionally not included in this repository.
+The coordinator will run:
+
+\`\`\`bash
+python -m seating_optimizer.equivalence --corpus-dir /path/to/workspace
+\`\`\`
+
+The harness runs small random old-versus-new comparisons and the named
+section-8 scenarios using the supplied files. The optional
+\`equivalence-cases.json\` manifest specifies exact inputs and instructions
+when necessary. The harness refuses missing inputs; the 29 historical
+records are NOT counted as 29 executable checks without their evidence.
+
+The coordinator still owns verification of 29 historical verdicts, score
+2260, split score -1997596, hard-conflict naming, and plan-shape parity.
+The scope and property-need semantic differences above may affect strict
+score equivalence; neither the solver nor the harness silently alters
+weights, changes operator decisions, or masks discrepancies.
+
+Do not merge this branch without coordinator acceptance.
