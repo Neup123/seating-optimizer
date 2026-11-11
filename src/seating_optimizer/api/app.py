@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from seating_optimizer import (
     Plan, Problem, Table, Zone, VenueLayout, VenueConfiguration, SvgFloorBundle, import_layout_files,
     import_registrations, render_floor_pdf, render_floor_svg, render_table_cards_pdf,
-    render_json, render_table, render_people_list_html, render_table_list_html,
+    render_json, render_table, render_people_list_html, render_table_list_html, render_not_seated_list_html,
     solve, preview_registrations, rule_catalog,
     ImportPreview, RuleCatalog,
 )
@@ -143,6 +143,14 @@ def create_app() -> FastAPI:
             return HTMLResponse(render_table_list_html(
                 plan, group_by=group_by, include_reasons=include_reasons, fields=fields
             ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/exports/not-seated-list/html", response_class=HTMLResponse)
+    def not_seated_list_export(plan: Plan) -> HTMLResponse:
+        """Print only explicit Plan.not_seated selections, even after an alarm."""
+        try:
+            return HTMLResponse(render_not_seated_list_html(plan))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

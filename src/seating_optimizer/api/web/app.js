@@ -5,7 +5,7 @@ const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue 
 const VIEWS = [["table", "Table view"], ["people", "People list"], ["people-floor", "People by floor"],
   ["groups", "Table list"], ["groups-table", "Per-table lists"],
   ["floor", "Floor maps"], ["cards", "Table cards"], ["print", "Print preview"], ["json", "JSON plan"]];
-const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table"]);
+const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
 const SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
@@ -199,7 +199,7 @@ export function createApp(root, api = createGateway()) {
       sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
-       manualInstructions: [], nextManualId: 1, overflowChoice: "", reassignMode: null,
+       manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
@@ -344,6 +344,7 @@ export function createApp(root, api = createGateway()) {
   function invalidate() {
     state.plan = null; state.viewContent = null; state.selectedPlanItem = null;
     state.reassignMode = null; state.reassignResponse = null;
+    state.pendingUnseatGroupId = null;
     clearObjectUrl(); ++viewRequest;
   }
   function currentFloor() { return state.layout.floors.find(f => f.zone_id === state.focusedFloor); }
@@ -375,6 +376,7 @@ export function createApp(root, api = createGateway()) {
     return importHeaders.get(key) || key.replace(/_+/g, " ").replace(/^./, char => char.toUpperCase());
   }
   function listEndpoint(view) {
+    if (view === "not-seated") return "/v1/exports/not-seated-list/html";
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
     const by = people ? (grouped ? "floor" : "combined") : (grouped ? "table" : "combined");
@@ -1250,6 +1252,31 @@ export function createApp(root, api = createGateway()) {
       ". The updated plan retains the confirmed direction.");
   }
 
+  function unseatParty(groupId) {
+    // Both workspace removal and the over-capacity chooser use the exact
+    // operator-authored "unseat" instruction from Topic 2.
+    void attempt(async () => {
+      const registered = state.guests.some(g => (g.group_id || "guest:" + g.id) === groupId);
+      if (!registered) throw Error("Select a registered party before moving it off the plan.");
+      if (state.manualInstructions.some(i => i.group_id === groupId && i.action === "unseat"))
+        throw Error("That party is already marked not seated.");
+      const previous = state.manualInstructions;
+      const direction = { id: "manual-" + state.nextManualId++, group_id: groupId, action: "unseat" };
+      state.manualInstructions = [...previous, direction];
+      try {
+        const updated = await api.post("/v1/solve", projectProblem());
+        state.plan = updated;
+        state.manualInstructions = deepCopy(updated.manual_instructions || state.manualInstructions);
+        state.selectedPlanItem = null;
+        resetPlanPreview();
+        announce("Operator moved " + groupId + " to the not-seated list.");
+      } catch (error) {
+        state.manualInstructions = previous;
+        throw error;
+      }
+    });
+  }
+
   function removeInstruction(id) {
     void attempt(async () => {
       const remaining = state.manualInstructions.filter(item => item.id !== id);
@@ -1325,6 +1352,40 @@ export function createApp(root, api = createGateway()) {
       return area;
     }
     const plan = state.plan;
+    function renderListPreview() {
+      const content = element("div");
+      if (state.viewError) content.append(element("p", "problem", state.viewError));
+      if (typeof state.viewContent !== "string") {
+        content.append(element("p", "muted", "Loading print pages…"));
+        return content;
+      }
+      const frame = element("iframe", "print-preview list-preview");
+      frame.id = "list-preview";
+      frame.title = "Print preview of " + state.printFormat;
+      frame.srcdoc = state.viewContent;
+      content.append(frame);
+      content.append(row(
+        action("Print from preview", () => {
+          const target = document.getElementById("list-preview");
+          if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
+          target.contentWindow.focus();
+          target.contentWindow.print();
+        }, "primary", "print-list"),
+        action("Download list HTML", () => {
+          downloadBlob(state.viewContent, state.printFormat +
+            (state.includeReasons && state.printFormat !== "not-seated" ? "-reasons" : "") +
+            ".html", "text/html;charset=utf-8");
+        }, "secondary", "download-list")
+      ));
+      return content;
+    }
+    function renderNotSeatedInAlarm() {
+      if (state.view !== "print" || state.printFormat !== "not-seated" ||
+          !plan.not_seated?.length) return null;
+      const preview = card("Not seated in the main room");
+      preview.append(renderListPreview());
+      return preview;
+    }
     function renderNotSeated() {
       if (!plan.not_seated?.length) return null;
       const panel = card("Operator-selected not seated", "Only explicitly recorded choices appear here.");
@@ -1335,6 +1396,12 @@ export function createApp(root, api = createGateway()) {
           element("span", "", group.group_name + " · " + group.guest_ids.length + " people"),
           instruction ? action("Restore", () => removeInstruction(instruction.id),
             "quiet small", "restore-" + group.group_id) : element("span", "", "")));
+      }
+      if (!["optimal", "feasible"].includes(plan.status)) {
+        panel.append(action("Print list", () => {
+          state.printFormat = "not-seated";
+          void loadView("print");
+        }, "secondary small", "open-not-seated-print"));
       }
       return panel;
     }
@@ -1368,25 +1435,8 @@ export function createApp(root, api = createGateway()) {
         selectField("Choose family", choices.map(x => [x.gid, x.title]),
           state.overflowChoice, v => { state.overflowChoice = v; },
           { id: "overflow-choice" }),
-        action("Move to not seated", () => attempt(async () => {
-          const group_id = state.overflowChoice;
-          if (!choices.some(item => item.gid === group_id))
-            throw Error("Select a registered family.");
-          const direction = { id: "manual-" + state.nextManualId++,
-            group_id, action: "unseat" };
-          const oldDirections = state.manualInstructions;
-          state.manualInstructions = [...state.manualInstructions, direction];
-          try {
-            const updated = await api.post("/v1/solve", projectProblem());
-            state.plan = updated;
-            state.manualInstructions = deepCopy(updated.manual_instructions || state.manualInstructions);
-            resetPlanPreview();
-            announce("Recorded the operator's not-seated decision for " + group_id + ".");
-          } catch (error) {
-            state.manualInstructions = oldDirections;
-            throw error;
-          }
-        }), "secondary small", "confirm-unseat")));
+        action("Move to not seated", () => unseatParty(state.overflowChoice),
+          "secondary small", "confirm-unseat")));
       return panel;
     }
     const status = card("Solution report", "Status: " + plan.status.toUpperCase() +
@@ -1407,6 +1457,8 @@ export function createApp(root, api = createGateway()) {
       if (unseated) area.append(unseated);
       if (plan.message?.toLowerCase().includes("short by"))
         area.append(renderOvercapacity());
+      const overflowPreview = renderNotSeatedInAlarm();
+      if (overflowPreview) area.append(overflowPreview);
       return area;
     }
     status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
@@ -1429,8 +1481,10 @@ export function createApp(root, api = createGateway()) {
       area.append(panel);
       area.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
-        proposeReassignment, applyReassignment, removeInstruction
+        proposeReassignment, applyReassignment, removeInstruction, unseatParty
       }));
+      const overflowPreview = renderNotSeatedInAlarm();
+      if (overflowPreview) area.append(overflowPreview);
       return area;
     }
     const views = card("Plan views");
@@ -1449,6 +1503,7 @@ export function createApp(root, api = createGateway()) {
       views.append(selectField("Document", [
         ["people", "People list"], ["people-floor", "People by floor"],
         ["groups", "Table list"], ["groups-table", "Per-table pages"],
+        ["not-seated", "Not seated in main room"],
         ["floor", "Floor maps PDF"], ["cards", "Table cards PDF"]
       ], state.printFormat, value => {
         state.printFormat = value;
@@ -1456,7 +1511,8 @@ export function createApp(root, api = createGateway()) {
         loadView("print");
       }, { id: "print-format" }));
       if (LIST_VIEWS.has(state.printFormat)) {
-        const toggle = element("label", "print-reasons-toggle");
+        if (state.printFormat !== "not-seated") {
+          const toggle = element("label", "print-reasons-toggle");
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.id = "print-reasons";
@@ -1465,8 +1521,9 @@ export function createApp(root, api = createGateway()) {
           state.includeReasons = checkbox.checked;
           loadView("print");
         });
-        toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
-        views.append(toggle);
+          toggle.append(checkbox, element("span", "", "Include written reasons (default off)"));
+          views.append(toggle);
+        }
         if (state.printFormat.startsWith("people")) {
           const available = [...new Set((plan.assignments || []).flatMap(
             entry => (entry.guest_attributes || []).flatMap(attrs => Object.keys(attrs))))].sort();
@@ -1492,25 +1549,7 @@ export function createApp(root, api = createGateway()) {
             views.append(picker);
           }
         }
-        if (typeof state.viewContent === "string") {
-          const frame = element("iframe", "print-preview list-preview");
-          frame.id = "list-preview";
-          frame.title = "Print preview of " + state.printFormat;
-          frame.srcdoc = state.viewContent;
-          views.append(frame);
-          views.append(row(
-            action("Print from preview", () => {
-              const target = document.getElementById("list-preview");
-              if (!target?.contentWindow?.print) throw Error("Printing unavailable in this browser.");
-              target.contentWindow.focus();
-              target.contentWindow.print();
-            }, "primary", "print-list"),
-            action("Download list HTML", () => {
-              downloadBlob(state.viewContent, state.printFormat +
-                (state.includeReasons ? "-reasons" : "") + ".html", "text/html;charset=utf-8");
-            }, "secondary", "download-list")
-          ));
-        } else views.append(element("p", "muted", "Loading print pages…"));
+        views.append(renderListPreview());
       } else {
         if (state.printFormat === "cards") views.append(selectField("Cards per page", [
           ["1", "1 per page (A5)"], ["2", "2 per page (A4)"], ["4", "4 per page (A4)"]
@@ -1546,7 +1585,7 @@ export function createApp(root, api = createGateway()) {
     } else {
       views.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
-        proposeReassignment, applyReassignment, removeInstruction, explainRuleRefs
+        proposeReassignment, applyReassignment, removeInstruction, unseatParty, explainRuleRefs
       }));
     }
     area.append(views);

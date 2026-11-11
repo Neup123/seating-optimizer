@@ -1,9 +1,9 @@
 name: Seating core API and browser tests
 on:
   push:
-    branches: [main, feature/phase-1-headless-optimizer, feat/67-rule-instance-fields]
+    branches: [main, feature/phase-1-headless-optimizer, feat/67-rule-instance-fields, feat/65-overflow-page]
   pull_request:
-    branches: [main, feat/53-interactive-views]
+    branches: [main, feat/53-interactive-views, feat/64-low-priority]
 permissions:
   contents: read
 jobs:

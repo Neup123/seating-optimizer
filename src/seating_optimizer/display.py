@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from .models import Assignment, Plan
+from .models import Assignment, NotSeatedGroup, Plan
 
 _SYNTHETIC = re.compile(r"^(.+) \(([1-9][0-9]*)/([1-9][0-9]*)\)$")
 
@@ -67,11 +67,11 @@ def party_name_for(group_id: str, group_name: str | None, names: list[str]) -> s
     return neutral
 
 
-def assignment_name(entry: Assignment) -> str:
+def assignment_name(entry: Assignment | NotSeatedGroup) -> str:
     return party_name_for(entry.group_id, entry.group_name, entry.guest_names)
 
 
-def visible_member_names(entry: Assignment) -> list[str]:
+def visible_member_names(entry: Assignment | NotSeatedGroup) -> list[str]:
     """An imported registration has no individually named guests."""
     party = assignment_name(entry)
     generated = synthetic_party_name(entry.guest_names)
