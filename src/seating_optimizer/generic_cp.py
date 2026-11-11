@@ -33,8 +33,16 @@ class Build:
         self.split = set(problem.splittable_groups)
         self.split.update(i.group_id for i in problem.manual_instructions if i.allow_split)
         max_capacity = max(t.capacity for t in self.tables)
+        linked = {
+            lookup[target] for rule in problem.rules
+            if rule.enabled and (rule.engine, rule.mechanism) == ("inter", "pair_relation")
+            and rule.relation == "together"
+            for target in (rule.targets or [])
+        }
+        # Match the legacy atomicity exception: a linked family is NOT
+        # silently split merely because its own size exceeds one table.
         self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity)
+                          if len(members) > max_capacity and gid not in linked)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
