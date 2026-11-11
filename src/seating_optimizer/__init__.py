@@ -10,12 +10,25 @@ from .models import (
     TableDrawing, VenueLayout, VenueConfiguration, validate_layout_references,
     ScoreItem, SolverConfig, Table, TableUsage, Zone,
 )
-from .solver import solve
+from .solver import solve as solve_legacy
+from .generic_solver import GenericProblem, GenericPlan, GenericVenueConfiguration, UnseatedReason, solve_generic
+
+def solve(problem, *, engine="auto"):
+    """Use v2 for GenericProblem, legacy for v1; engine overrides explicitly."""
+    selected = ("generic" if isinstance(problem, GenericProblem) else "legacy") if engine == "auto" else engine
+    if selected == "legacy":
+        if isinstance(problem, GenericProblem):
+            raise ValueError("Legacy solver requires v1 Problem, not GenericProblem")
+        return solve_legacy(problem)
+    if selected == "generic":
+        return solve_generic(problem)
+    raise ValueError(f"Unknown solver engine {selected!r}")
 from .generic_rules import Criterion, GenericRule, mechanism_catalog, criterion_field_state, split_dominance_warnings
 from .generic_evaluator import score_fixed_plan, hard_violations
 from .rule_migration import migrate_instance, migrate_rules, migrate_configuration, reconstruct_v1_rules
 
 __all__ = [
+    "GenericProblem", "GenericPlan", "GenericVenueConfiguration", "UnseatedReason", "solve_generic", "solve_legacy",
     "Criterion", "GenericRule", "mechanism_catalog", "criterion_field_state", "split_dominance_warnings",
     "score_fixed_plan", "hard_violations", "migrate_instance", "migrate_rules", "migrate_configuration", "reconstruct_v1_rules",
     "Assignment", "Compromise", "Guest", "ManualInstruction", "NotSeatedGroup", "Plan", "PriorityMark", "Problem", "Reason", "Rule",
