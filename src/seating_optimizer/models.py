@@ -158,13 +158,13 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "zone_companionship"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"]
 
 
 class Rule(Model):
     id: str
     shape: Shape
-    mode: Literal["soft", "hard", "mark"]
+    mode: Literal["soft", "hard", "mark", "staged"]
     parameters: dict[str, Any] = Field(default_factory=dict)
     weight: int | None = None
     # Rule-instance metadata, independent of the catalog's type description.
@@ -183,6 +183,28 @@ class Rule(Model):
             # Inactive instances are preserved for later re-enabling but have
             # no rule-specific validation or interpretation while switched off.
             return self
+        if self.shape == "tiered_placement":
+            if self.mode != "staged" or self.weight is not None:
+                raise ValueError("Tiered placement is staged and has no point weight")
+            p = self.parameters
+            if set(p) != {"target", "tiers"} or not isinstance(p["target"], str) or not p["target"].strip():
+                raise ValueError("Tiered placement needs a group target and ordered tiers")
+            tiers = p["tiers"]
+            if not isinstance(tiers, list) or not tiers:
+                raise ValueError("Tiered placement needs at least one tier")
+            for index, tier in enumerate(tiers, 1):
+                if not isinstance(tier, dict) or set(tier) - {"zones", "tables"}:
+                    raise ValueError(f"Tier {index} needs zone and/or table lists")
+                zones, tables = tier.get("zones", []), tier.get("tables", [])
+                if not isinstance(zones, list) or not isinstance(tables, list) or not (zones or tables):
+                    raise ValueError(f"Tier {index} must include a zone or table")
+                for items in (zones, tables):
+                    if any(not isinstance(value, str) or not value.strip() for value in items):
+                        raise ValueError(f"Tier {index} has an invalid location")
+                    if len(set(items)) != len(items):
+                        raise ValueError(f"Tier {index} repeats a location")
+        elif self.mode == "staged":
+            raise ValueError("Staged mode is reserved for tiered placement")
         if self.mode == "soft" and (self.weight is None or self.weight < 1):
             raise ValueError("Soft rules must carry a positive integer weight")
         if self.mode in {"hard", "mark"} and self.weight is not None:

@@ -602,6 +602,11 @@ export function createApp(root, api = createGateway()) {
       params.selector = "group";
       params.grade = 1;
     }
+    if (spec.shape === "tiered_placement") {
+      // The event owns all preferences; use its first configured zone only
+      // as an editable initial choice, never as a solver default.
+      params.tiers = [{ zones: state.zones[0] ? [state.zones[0].id] : [], tables: [] }];
+    }
     if (spec.shape === "zone_companionship") params.exclude_groups = [];
     if (spec.shape === "global_pattern") {
       // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
@@ -690,6 +695,79 @@ export function createApp(root, api = createGateway()) {
       invalidate(); render();
     }, "secondary small", "rule-" + index + "-add-pattern"));
     return panel;
+  }
+
+  function renderTierEditor(rule, index) {
+    const area = element("section", "tier-editor");
+    area.append(element("h3", "", "Placement tiers — first is most preferred"));
+    area.append(element("p", "muted",
+      "Each tier accepts any listed floor or table. Move to the next tier only if the entire party cannot fit. Unlisted locations are a last resort."));
+    const tiers = Array.isArray(rule.parameters.tiers) ? rule.parameters.tiers : [];
+    const update = () => { invalidate(); render(); };
+    const icon = (text, description, callback, id, disabled = false) => {
+      const button = action(text, callback, "quiet small tier-icon", id);
+      button.title = description;
+      button.setAttribute("aria-label", description);
+      button.disabled = disabled;
+      return button;
+    };
+    tiers.forEach((tier, rank) => {
+      const row = element("div", "tier-rank");
+      row.setAttribute("data-tier-rank", String(rank + 1));
+      const header = element("div", "row between tier-rank-header");
+      const title = element("strong", "", "Tier " + (rank + 1));
+      const controls = element("div", "row tier-rank-controls");
+      controls.append(icon("↑", "Move tier " + (rank + 1) + " earlier", () => {
+        [tiers[rank - 1], tiers[rank]] = [tiers[rank], tiers[rank - 1]];
+        update();
+      }, "rule-" + index + "-tier-" + rank + "-up", rank === 0));
+      controls.append(icon("↓", "Move tier " + (rank + 1) + " later", () => {
+        [tiers[rank + 1], tiers[rank]] = [tiers[rank], tiers[rank + 1]];
+        update();
+      }, "rule-" + index + "-tier-" + rank + "-down", rank === tiers.length - 1));
+      controls.append(icon("×", "Remove tier " + (rank + 1), () => {
+        tiers.splice(rank, 1); update();
+      }, "rule-" + index + "-tier-" + rank + "-remove", tiers.length === 1));
+      header.append(title, controls);
+      row.append(header);
+      const chosen = element("div", "tier-locations");
+      const locations = [
+        ["zones", "Floor", state.zones.map(z => [z.id, z.name])],
+        ["tables", "Table", state.tables.map(t => [t.id, t.id + " · " + t.zone_id])],
+      ];
+      for (const [key, type, source] of locations) {
+        for (const location of tier[key] || []) {
+          const text = source.find(([id]) => id === location)?.[1] || location;
+          const chip = element("span", "tier-location", type + ": " + text);
+          chip.append(icon("×", "Remove " + type.toLowerCase() + " " + text +
+            " from tier " + (rank + 1), () => {
+            tier[key] = (tier[key] || []).filter(id => id !== location);
+            update();
+          }, "rule-" + index + "-tier-" + rank + "-remove-" + key + "-" + location));
+          chosen.append(chip);
+        }
+      }
+      if (!chosen.children.length) chosen.append(element("span", "muted", "Choose at least one location"));
+      row.append(chosen);
+      const options = [
+        ["", "Add a floor or table"],
+        ...state.zones.map(z => ["z:" + z.id, "Floor: " + z.name]),
+        ...state.tables.map(t => ["t:" + t.id, "Table: " + t.id + " · " + t.zone_id])
+      ];
+      row.append(selectField("Add location", options, "", value => {
+        if (!value) return;
+        const key = value.slice(0, 2) === "z:" ? "zones" : "tables";
+        const id = value.slice(2);
+        if (!Array.isArray(tier[key])) tier[key] = [];
+        if (!tier[key].includes(id)) tier[key].push(id);
+        update();
+      }, { id: "rule-" + index + "-tier-" + rank + "-add-location" }));
+      area.append(row);
+    });
+    area.append(action("Add tier", () => {
+      tiers.push({ zones: [], tables: [] }); rule.parameters.tiers = tiers; update();
+    }, "secondary small", "rule-" + index + "-add-tier"));
+    return area;
   }
 
   function renderCompanionshipExclusions(rule, index) {
@@ -817,6 +895,7 @@ export function createApp(root, api = createGateway()) {
           rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
           spec.modes.map(m => [m,
             m === "mark" ? "Grade marker (no score)" :
+            m === "staged" ? "STAGED (whole-party tier order)" :
             rule.shape === "table_property_need"
               ? (m === "hard" ? "Require (hard)" : "Prefer (soft, weighted per affected guest)")
               : (m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)")]),
@@ -828,7 +907,7 @@ export function createApp(root, api = createGateway()) {
         rule.mode === "soft"
           ? textField("Points weight", rule.weight, value => { rule.weight = Number(value); invalidate(); },
               { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
-          : element("p", "muted", rule.mode === "mark" ? "Order only — no score" : "HARD — no weight")
+          : element("p", "muted", rule.mode === "mark" ? "Order only — no score" : rule.mode === "staged" ? "STAGED — tier order, no points" : "HARD — no weight")
       ));
       const fields = element("div", "grid three");
       if (rule.shape === "global_pattern") {
@@ -863,6 +942,7 @@ export function createApp(root, api = createGateway()) {
           if (field.name === "selector" && rule.shape === "low_priority") render();
         };
         if (field.kind === "pattern") fields.append(renderPatternEditor(rule, i));
+        else if (field.kind === "tiers") fields.append(renderTierEditor(rule, i));
         else if (field.kind === "group_exclusions")
           fields.append(renderCompanionshipExclusions(rule, i));
         else if (field.kind === "select") fields.append(selectField(field.label,
