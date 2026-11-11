@@ -288,6 +288,15 @@ def _core(problem):
         ].id for g in problem.guests
     }
     score, by_rule = score_fixed_plan(problem.guests, builder.tables, mapping, problem.rules)
+    # A together-linked cluster that cannot fit one table may satisfy a
+    # named pair using the legacy connected-adjacent-table exception. The
+    # optimized Boolean is the authoritative B1 evaluator for that case.
+    if builder.fallback_by_rule:
+        by_id = {r.id: r for r in problem.rules if r.enabled and r.mode == "soft"}
+        for rule_id, flag in builder.fallback_by_rule.items():
+            if rule_id in by_id:
+                by_rule[rule_id] = by_id[rule_id].weight * optimizer.Value(flag)
+        score = sum(by_rule.values())
     if score != round(optimizer.ObjectiveValue()):
         raise RuntimeError(
             f"v2 objective/report mismatch: reported {score}; optimized "
