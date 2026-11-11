@@ -322,6 +322,6 @@ def split_dominance_warnings(rules: Sequence[GenericRule], *,
                  else table_count if rule.mechanism in ("table_pattern", "companionship")
                  else guest_count)
         ordinary += count * rule.weight
-    return ([f"Split weight {split.weight} does not exceed conservative ordinary pool "
-             f"{ordinary}; operator must review split dominance"]
-            if ordinary >= split.weight else [])
+    return ([f"Split weight {split.weight} is too close to conservative ordinary pool "
+             f"{ordinary} (90% threshold); operator must review split dominance"]
+            if ordinary * 10 >= split.weight * 9 else [])
