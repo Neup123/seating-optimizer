@@ -440,7 +440,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, tiered_placement]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, tiered_placement]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard, staged]}}
@@ -482,9 +482,12 @@ components:
       required: [id, shape, mode]
       properties:
         id: {type: string}
+        name: {type: string, default: '', description: Optional rule-instance label; falls back to id in displays.}
+        description: {type: string, default: '', description: Optional operator-authored instance note, separate from catalog type description.}
+        enabled: {type: boolean, default: true, description: An absent value means enabled. False removes this instance from solver constraints, scores, and explanations without deleting its configuration.}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, tiered_placement]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, tiered_placement]
         mode: {type: string, enum: [soft, hard, staged]}
         parameters:
           type: object
