@@ -73,7 +73,8 @@ def test_hard_named_pair_without_geometry_conflicts_by_instance_name():
                                  [linked("alpha", "beta", hard=True)],
                                  draw=False))
     assert result.status == "infeasible", result.message
-    assert "Together alpha beta" in result.conflicting_constraints
+    assert any("Together alpha beta" in item for item in result.conflicting_constraints)
+    assert any("rule:alpha-beta" in item for item in result.conflicting_constraints)
 
 
 def test_single_oversized_family_uses_connected_tables_without_automatic_permission():
