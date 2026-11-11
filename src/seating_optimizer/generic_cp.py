@@ -78,7 +78,10 @@ class Build:
         self._linked_together_clusters()
 
     def guard(self, rule):
-        key = rule.display_name
+        # A conflict names both stable instance ID and operator-visible name.
+        # Manual instruction guards retain their existing instruction labels.
+        key = (f"rule:{rule.id} ({rule.display_name})"
+               if isinstance(rule, GenericRule) else rule.display_name)
         if key not in self.assumptions:
             bit = self.model.NewBoolVar(f"v2:hard:{rule.id}")
             self.model.AddAssumption(bit)
@@ -295,7 +298,10 @@ def _pair_term(rule, b, *, within):
             candidates = list(combinations(members, 2))
         lit = b.guard(rule)
         for a, other in candidates:
-            if (group_id(a) == group_id(other)) != within:
+            # "across" classifies this as the inter-family engine; for
+            # historical criterion-pair parity its score still includes
+            # within-family guest pairs (scoring-principles §13.1).
+            if within and group_id(a) != group_id(other):
                 continue
             same_value = guest_value(a, field) == guest_value(other, field)
             if rule.polarity == "reward" and same_value:
@@ -320,7 +326,9 @@ def _pair_term(rule, b, *, within):
                 b.choose([g.id for g in members if group_id(g) == gid], j, rule.id)
                 for gid in per_family
             )
-            return within_pairs if within else all_pairs - within_pairs
+            # B2 counts all same-value guest pairs at the table, including
+            # members of one family. A3 is the within-family-only subset.
+            return within_pairs if within else all_pairs
 
         if rule.polarity == "reward":
             contribution = sum(
@@ -337,7 +345,7 @@ def _pair_term(rule, b, *, within):
                 [g.id for g in selected if group_id(g) == gid],
                 [g.id for g in others if group_id(g) == gid], j, rule.id)
                 for gid in per_family)
-            b.terms.append(-rule.weight * (inner if within else all_pairs - inner))
+            b.terms.append(-rule.weight * (inner if within else all_pairs))
         else:
             all_pairs = pair_count(known)
             same_pairs = sum(pair_count(
