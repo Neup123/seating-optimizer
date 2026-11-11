@@ -267,6 +267,30 @@
           "required": true
         }
       ]
+    },
+    {
+      "shape": "tiered_placement",
+      "title": "Tiered placement preference",
+      "description": "Choose a group and rank sets of floors/zones or tables. The solver proves whether the whole group fits at each tier before considering the next. Tiers are stages, never point weights. Unlisted places are a last fallback.",
+      "modes": [
+        "staged"
+      ],
+      "default_mode": "staged",
+      "default_weight": null,
+      "fields": [
+        {
+          "name": "target",
+          "label": "Guest or registered group",
+          "kind": "target",
+          "required": true
+        },
+        {
+          "name": "tiers",
+          "label": "Placement tiers (first is most preferred)",
+          "kind": "tiers",
+          "required": true
+        }
+      ]
     }
   ]
 }

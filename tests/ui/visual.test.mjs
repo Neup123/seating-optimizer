@@ -1540,3 +1540,68 @@ test("an over-capacity alarm can print previously operator-selected people witho
   assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 0);
   assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
 });
+
+test("tiered rule editor builds ordered floor/table sets and persists instances as event data", async () => {
+  const tierSpec = {
+    shape: "tiered_placement", title: "Tiered placement preference",
+    description: "Stage whole-party placement in preferred floors/tables",
+    modes: ["staged"], default_mode: "staged", default_weight: null,
+    fields: [
+      { name: "target", label: "Guest or group", kind: "target", required: true, choices: [] },
+      { name: "tiers", label: "Ordered tiers", kind: "tiers", required: true, choices: [] }
+    ]
+  };
+  catalog.shapes.push(tierSpec);
+  try {
+    const { app, $, dom, storage } = await setup();
+    app.state.zones = [{ id: "upper", name: "Floor 2" },
+      { id: "lower", name: "Floor 1" }];
+    app.state.tables = [{ id: "U", zone_id: "upper", capacity: 8 },
+      { id: "U2", zone_id: "upper", capacity: 4 },
+      { id: "L", zone_id: "lower", capacity: 8 }];
+    app.state.guests = [{ id: "g1", name: "First member", group_id: "family-one",
+      group_name: "Registered family" }];
+    app.show("rules");
+
+    setValue($("#new-rule-shape"), "tiered_placement", dom.window);
+    click($("#add-rule"));
+    const rule = app.state.rules[0];
+    assert.equal(rule.shape, "tiered_placement");
+    assert.equal(rule.mode, "staged");
+    assert.equal(rule.weight, null);
+    assert.equal($("#rule-weight-0"), null);
+    assert.deepEqual(rule.parameters.tiers, [{ zones: ["upper"], tables: [] }],
+      "First configured zone is editable data, not a hardcoded solver preference");
+
+    setValue($("#rule-0-target"), "family-one", dom.window);
+    setValue($("#rule-0-tier-0-add-location"), "t:U2", dom.window);
+    assert.deepEqual(rule.parameters.tiers[0], { zones: ["upper"], tables: ["U2"] });
+    click($("#rule-0-add-tier"));
+    assert.equal(rule.parameters.tiers.length, 2);
+    setValue($("#rule-0-tier-1-add-location"), "z:lower", dom.window);
+    assert.deepEqual(rule.parameters.tiers[1], { zones: ["lower"], tables: [] });
+    click($("#rule-0-tier-1-up"));
+    assert.deepEqual(rule.parameters.tiers, [
+      { zones: ["lower"], tables: [] },
+      { zones: ["upper"], tables: ["U2"] }
+    ]);
+    click($("#rule-0-tier-0-remove-zones-lower"));
+    setValue($("#rule-0-tier-0-add-location"), "t:L", dom.window);
+    assert.deepEqual(rule.parameters.tiers[0], { zones: [], tables: ["L"] });
+    assert.equal($("#rule-0-tier-0-up").disabled, true);
+    assert.ok($("#rule-0-tier-0-add-location").closest(".tier-rank"));
+    assert.ok($("#rule-0-tier-0-remove-tables-L").title.includes("Remove table"));
+
+    const saved = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
+    assert.deepEqual(saved.data.rules[0].parameters, {
+      target: "family-one", tiers: [
+        { zones: [], tables: ["L"] },
+        { zones: ["upper"], tables: ["U2"] }
+      ]
+    });
+    assert.equal(saved.data.rules[0].mode, "staged");
+    assert.equal(saved.data.rules[0].weight, null);
+  } finally {
+    catalog.shapes.pop();
+  }
+});
