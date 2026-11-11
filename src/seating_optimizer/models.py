@@ -158,13 +158,13 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "zone_companionship"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "zone_companionship"]
 
 
 class Rule(Model):
     id: str
     shape: Shape
-    mode: Literal["soft", "hard"]
+    mode: Literal["soft", "hard", "mark"]
     parameters: dict[str, Any] = Field(default_factory=dict)
     weight: int | None = None
     # Rule-instance metadata, independent of the catalog's type description.
@@ -185,8 +185,28 @@ class Rule(Model):
             return self
         if self.mode == "soft" and (self.weight is None or self.weight < 1):
             raise ValueError("Soft rules must carry a positive integer weight")
-        if self.mode == "hard" and self.weight is not None:
-            raise ValueError("Hard rules must not carry a weight")
+        if self.mode in {"hard", "mark"} and self.weight is not None:
+            raise ValueError("Hard and marking rules must not carry a weight")
+        if self.shape == "low_priority":
+            if self.mode != "mark":
+                raise ValueError("Low-priority marks use mode=mark and have no objective weight")
+            p = self.parameters
+            if p.get("selector") not in {"group", "size_below"}:
+                raise ValueError("Low-priority selector must be group or size_below")
+            if type(p.get("grade")) is not int or p["grade"] < 1:
+                raise ValueError("Low-priority grade must be a positive integer")
+            if p["selector"] == "group":
+                if not isinstance(p.get("group_id"), str) or not p["group_id"].strip():
+                    raise ValueError("Low-priority group selector needs group_id")
+                if set(p) != {"selector", "grade", "group_id"}:
+                    raise ValueError("Group priority marking takes selector, grade and group_id")
+            else:
+                if type(p.get("threshold")) is not int or p["threshold"] < 1:
+                    raise ValueError("Size-below priority threshold must be a positive integer")
+                if set(p) != {"selector", "grade", "threshold"}:
+                    raise ValueError("Size-below marking takes selector, grade and threshold")
+        elif self.mode == "mark":
+            raise ValueError("Mark mode is reserved for non-scoring low_priority rules")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
         if self.shape in {"fill_efficiency", "global_pattern", "split_penalty", "small_group_priority", "zone_companionship"} and self.mode != "soft":
@@ -215,10 +235,25 @@ class ManualInstruction(Model):
     """Persistent human direction; precedence below infinite-weight rules."""
     id: str = Field(min_length=1)
     group_id: str = Field(min_length=1)
-    action: Literal["not_here", "move_to"]
-    place_type: Literal["table", "floor", "zone"]
-    place_id: str = Field(min_length=1)
+    action: Literal["not_here", "move_to", "unseat", "seat_pending", "pin_placement"]
+    place_type: Literal["table", "floor", "zone"] | None = None
+    place_id: str | None = None
     allow_split: bool = False
+    guest_tables: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_action(self) -> "ManualInstruction":
+        if self.action in {"move_to", "not_here"}:
+            if self.place_type is None or not self.place_id:
+                raise ValueError("A placement direction needs place_type and place_id")
+            if self.guest_tables:
+                raise ValueError("A placement direction does not accept guest_tables")
+        elif self.action == "pin_placement":
+            if not self.guest_tables or self.place_type is not None or self.place_id is not None:
+                raise ValueError("A confirmed placement requires guest_tables, not a place")
+        elif self.place_type is not None or self.place_id is not None or self.guest_tables or self.allow_split:
+            raise ValueError("An unseated or pending decision must not include placement details")
+        return self
 
 
 class SolverConfig(Model):
@@ -266,10 +301,21 @@ class Problem(Model):
         for instruction in self.manual_instructions:
             if instruction.group_id not in groups:
                 raise ValueError(f"Unknown manual-instruction party {instruction.group_id}")
+            if instruction.action == "seat_pending":
+                raise ValueError("A pending option search is not a persisted manual instruction")
             if instruction.place_type == "table" and instruction.place_id not in table_ids:
                 raise ValueError(f"Unknown instruction table {instruction.place_id}")
             if instruction.place_type in {"floor", "zone"} and instruction.place_id not in zones:
                 raise ValueError(f"Unknown instruction floor/zone {instruction.place_id}")
+            if set(instruction.guest_tables) - {g.id for g in self.guests}:
+                raise ValueError("Confirmed placement names an unknown guest")
+            if set(instruction.guest_tables.values()) - table_ids:
+                raise ValueError("Confirmed placement names an unknown table")
+            if instruction.action == "pin_placement" and not any(
+                (g.group_id or "guest:" + g.id) == instruction.group_id and g.id in instruction.guest_tables
+                for g in self.guests
+            ):
+                raise ValueError("Confirmed placement must include its selected party")
         if set(self.splittable_groups) - groups:
             raise ValueError("A splittable party is not registered")
         if set(self.locked_guest_tables) - {g.id for g in self.guests}:
@@ -324,10 +370,29 @@ class TableUsage(Model):
     empty_seats: int
 
 
+class PriorityMark(Model):
+    group_id: str
+    group_name: str
+    grade: int = Field(ge=1)
+    guest_count: int = Field(ge=1)
+    source_rule_ids: list[str] = Field(default_factory=list)
+
+
+class NotSeatedGroup(Model):
+    group_id: str
+    group_name: str
+    guest_ids: list[str]
+    guest_names: list[str]
+    grade: int | None = None
+
+
 class Plan(Model):
     session_id: str
     manual_instructions: list[ManualInstruction] = Field(default_factory=list)
-    status: Literal["optimal", "feasible", "infeasible", "unknown"]
+    status: Literal["optimal", "feasible", "infeasible", "unknown", "needs_review"]
+    priority_marks: list[PriorityMark] = Field(default_factory=list)
+    pending_groups: list[PriorityMark] = Field(default_factory=list)
+    not_seated: list[NotSeatedGroup] = Field(default_factory=list)
     total_score: int | None = None
     assignments: list[Assignment] = Field(default_factory=list)
     tables: list[TableUsage] = Field(default_factory=list)

@@ -229,6 +229,46 @@
       ]
     },
     {
+      "shape": "low_priority",
+      "title": "Low-priority family",
+      "description": "Non-scoring grade marker. Seat ordinary families first, then lower grades before higher grades. Direct group or family-size criterion; removal clears the mark. Never chooses who is unseated.",
+      "modes": [
+        "mark"
+      ],
+      "default_mode": "mark",
+      "default_weight": null,
+      "fields": [
+        {
+          "name": "selector",
+          "label": "Apply mark to",
+          "kind": "select",
+          "required": true,
+          "choices": [
+            "group",
+            "size_below"
+          ]
+        },
+        {
+          "name": "group_id",
+          "label": "Family",
+          "kind": "target",
+          "required": false
+        },
+        {
+          "name": "threshold",
+          "label": "Family size below",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "grade",
+          "label": "Low-priority grade",
+          "kind": "text",
+          "required": true
+        }
+      ]
+    },
+    {
       "shape": "zone_companionship",
       "title": "Zone companionship — avoid lonely floors",
       "description": "Penalty for each non-excluded party sitting alone in its floor/zone while another zone is in use. A single occupied zone pays no penalty. All weight comes from this rule instance; deliberately solitary parties may be excluded.",

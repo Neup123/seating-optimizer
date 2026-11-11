@@ -41,7 +41,7 @@ function memberNames(assignment, partyMembers) {
 }
 
 export function renderPlanWorkspace(state, {
-  partyName, partyMembers, refresh, proposeReassignment, applyReassignment, removeInstruction,
+  partyName, partyMembers, refresh, proposeReassignment, applyReassignment, removeInstruction, unseatParty,
   explainRuleRefs = value => value
 }) {
   const plan = state.plan;
@@ -53,6 +53,7 @@ export function renderPlanWorkspace(state, {
     state.selectedPlanItem = togglePlanSelection(state.selectedPlanItem, kind, id);
     state.reassignMode = null;
     state.reassignResponse = null;
+    state.pendingUnseatGroupId = null;
     refresh();
   };
   const chooseIntent = (assignment, action) => {
@@ -60,6 +61,7 @@ export function renderPlanWorkspace(state, {
     const current = assignment?.table_id ||
       selectedPlanAssignments(plan, state.selectedPlanItem)[0]?.table_id;
     state.reassignMode = action;
+    state.pendingUnseatGroupId = null;
     state.reassignPlaceType = "table";
     state.reassignPlaceId = action === "not_here" ? current :
       ((plan.tables || []).find(t => t.table_id !== current)?.table_id || current);
@@ -114,11 +116,34 @@ export function renderPlanWorkspace(state, {
         "secondary small", "intent-not-here"));
       bar.append(clicker("Move to", () => chooseIntent(chosen[0], "move_to"),
         "secondary small", "intent-move-to"));
+      // A person selection does not silently remove their entire registration.
+      // Select the whole party first, then explicitly confirm the removal.
+      if (!isPerson) bar.append(clicker("Not seated", () => {
+        state.pendingUnseatGroupId = chosen[0].group_id;
+        state.reassignMode = null;
+        state.reassignResponse = null;
+        refresh();
+      }, "secondary small", "intent-unseat-party"));
       bar.append(clicker("Clear selection", () => {
         state.selectedPlanItem = null; state.reassignMode = null;
-        state.reassignResponse = null; refresh();
+        state.reassignResponse = null;
+        state.pendingUnseatGroupId = null;
+        refresh();
       }, "quiet small", "clear-plan-selection"));
       selection.append(bar);
+
+      if (!isPerson && state.pendingUnseatGroupId === chosen[0].group_id) {
+        const confirm = el("div", "reassign-editor");
+        confirm.append(el("p", "muted", "Move the whole party " + partyName(chosen[0]) +
+          " to the not-seated list? Only your confirmation changes the plan."));
+        confirm.append(clicker("Confirm removal", () => unseatParty(chosen[0].group_id),
+          "secondary small", "confirm-unseat-party"));
+        confirm.append(clicker("Cancel", () => {
+          state.pendingUnseatGroupId = null;
+          refresh();
+        }, "quiet small", "cancel-unseat-party"));
+        selection.append(confirm);
+      }
 
       if (state.reassignMode) {
         const editor = el("div", "reassign-editor");
@@ -220,8 +245,10 @@ export function renderPlanWorkspace(state, {
       const line = el("div", "row");
       const name = assignments.find(a => a.group_id === item.group_id);
       line.append(el("span", "", (name ? partyName(name) : item.group_id) + " · " +
-        (item.action === "not_here" ? "Not here: " : "Move to: ") +
-        item.place_type + " " + item.place_id +
+        (item.action === "unseat" ? "Not seated" :
+          item.action === "pin_placement" ? "Confirmed placement" :
+          (item.action === "not_here" ? "Not here: " : "Move to: ") +
+          item.place_type + " " + item.place_id) +
         (item.allow_split ? " · splitting permitted" : "")));
       line.append(clicker("Remove direction", () => removeInstruction(item.id),
         "quiet small", "remove-instruction-" + item.id));

@@ -12,7 +12,7 @@ from collections import defaultdict
 from pydantic import Field
 
 from .models import ManualInstruction, Model, Plan, Problem
-from .solver import solve, _group_id
+from .solver import solve, _group_id, _prepare, _active_problem, _solve_core
 
 
 class ReassignRequest(Model):
@@ -110,6 +110,8 @@ def _describe_split(problem: Problem, placements: dict[str, str], gid: str) -> s
 
 def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
     problem, plan, instruction = request.problem, request.plan, request.instruction
+    if instruction.action == "seat_pending":
+        return _propose_pending(request)
     previous = _placements(problem, plan)
     if plan.manual_instructions != problem.manual_instructions:
         raise ValueError("Stored instructions changed since this plan; re-solve first")
@@ -324,3 +326,270 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
                     for rule in problem.rules if rule.enabled and rule.mode == "hard")
     return ReassignResponse(status="unknown" if unknown else "blocked",
                             blockers=sorted(blockers))
+
+
+
+def _propose_pending(request: ReassignRequest) -> ReassignResponse:
+    """Present explicit, solver-checked choices for an unplaced graded family.
+
+    The candidate is NOT unseated. Until the human chooses an option, it remains
+    pending in the plan. Confirmed placements are saved as manual instructions
+    with exact guest/table mappings, making moved guests and split portions
+    durable across re-solves. A selected overflow move uses its own instruction.
+    """
+    problem, plan, intent = request.problem, request.plan, request.instruction
+    if plan.status != "needs_review" or plan.session_id != problem.session_id:
+        raise ValueError("A low-priority plan awaiting operator review is required")
+    if intent.group_id not in {mark.group_id for mark in plan.pending_groups}:
+        raise ValueError("The selected family is not pending operator review")
+    if plan.manual_instructions != problem.manual_instructions:
+        raise ValueError("Stored instructions changed since this plan; re-solve first")
+    if intent.id in {i.id for i in problem.manual_instructions}:
+        raise ValueError(f"Instruction ID {intent.id} already exists")
+    if plan.not_seated and {p.group_id for p in plan.not_seated} != {
+            i.group_id for i in problem.manual_instructions if i.action == "unseat"}:
+        raise ValueError("The not-seated selection has changed; re-solve first")
+
+    groups, lookup = _prepare(problem)
+    selected = intent.group_id
+    ids = [g.id for g in groups[selected]]
+    previous = {}
+    for assignment in plan.assignments:
+        for guest_id in assignment.guest_ids:
+            if guest_id in previous:
+                raise ValueError("Duplicate guest in pending-plan placements")
+            previous[guest_id] = assignment.table_id
+    if any(guest_id in previous for guest_id in ids):
+        raise ValueError("The pending family is already placed")
+    # The baseline must be complete for all accepted stages; only pending
+    # and human-unseated families can be missing.
+    excluded = ({m.group_id for m in plan.pending_groups} |
+                {m.group_id for m in plan.not_seated})
+    expected = {g.id for gid, members in groups.items() if gid not in excluded
+                for g in members}
+    if set(previous) != expected:
+        raise ValueError("The review plan has stale or incomplete placements")
+
+    tables = {table.id: table for table in problem.tables}
+    occupied = defaultdict(int)
+    at_table = defaultdict(list)
+    for guest_id, table_id in previous.items():
+        if table_id not in tables:
+            raise ValueError("Review plan references a missing table")
+        occupied[table_id] += 1
+    for gid, members in groups.items():
+        seats = {previous[g.id] for g in members if g.id in previous}
+        if len(seats) == 1 and all(g.id in previous for g in members):
+            at_table[next(iter(seats))].append(gid)
+    free = {t: tables[t].capacity - occupied[t] for t in tables}
+    if any(value < 0 for value in free.values()):
+        raise ValueError("Review plan exceeds a table capacity")
+    options: list[ReassignOption] = []
+    signatures: set[tuple] = set()
+    blockers: set[str] = set()
+    unknown = False
+    attempts = 0
+    checked_candidates = 0
+    max_attempts = 32
+    max_candidates = 256
+    max_options = 8
+
+    def check(layout: dict[str, str], kind: str, title: str, *, split: bool = False):
+        nonlocal attempts, unknown, checked_candidates
+        if (len(options) >= max_options - 1 or attempts >= max_attempts or
+                checked_candidates >= max_candidates):
+            return
+        checked_candidates += 1
+        if set(layout) != set(previous) | set(ids):
+            return
+        signature = tuple(sorted(layout.items()))
+        if signature in signatures:
+            return
+        signatures.add(signature)
+        capacity = defaultdict(int)
+        for table_id in layout.values():
+            if table_id not in tables:
+                return
+            capacity[table_id] += 1
+        if any(value > tables[t].capacity for t, value in capacity.items()):
+            return
+        attempts += 1
+        direction = ManualInstruction(
+            id=intent.id, group_id=selected, action="pin_placement",
+            guest_tables=dict(layout), allow_split=split)
+        # Solve through the actual staged public path, with the approved
+        # arrangement treated as mandatory data rather than a heuristic.
+        candidate = problem.model_copy(deep=True)
+        candidate.manual_instructions.append(direction)
+        candidate.config.time_limit_seconds = min(candidate.config.time_limit_seconds, 4.0)
+        outcome = solve(candidate)
+        if outcome.status == "unknown":
+            unknown = True
+        if outcome.status not in {"optimal", "feasible", "needs_review"}:
+            blockers.update(outcome.conflicting_constraints[:5])
+            return
+        actual = {g: a.table_id for a in outcome.assignments for g in a.guest_ids}
+        if not all(actual.get(g) == t for g, t in layout.items()):
+            return
+        movements = []
+        for gid, members in groups.items():
+            new_tables = sorted({layout[g.id] for g in members if g.id in layout})
+            old_tables = sorted({previous[g.id] for g in members if g.id in previous})
+            if new_tables != old_tables:
+                movements.append(Movement(
+                    group_id=gid, party_name=next(
+                        (mark.group_name for mark in plan.priority_marks if mark.group_id == gid),
+                        _name(plan, gid)),
+                    before=old_tables, after=new_tables, people=len(members)))
+        options.append(ReassignOption(
+            id=f"option-{len(options)+1}", kind=kind, title=title,
+            movements=movements, score_delta=(outcome.total_score or 0) - (plan.total_score or 0),
+            soft_rule_warnings=_warning_rules(plan, outcome, problem), plan=outcome))
+
+    # Free seats: the main staged solve normally would have used these,
+    # but full verification is still required (hard restrictions may block).
+    for target in tables:
+        if checked_candidates >= max_candidates:
+            break
+        if free[target] >= len(ids):
+            check({**previous, **{g: target for g in ids}},
+                  "free-space", f"Seat at table {target} without moving others")
+
+    # Move an occupant elsewhere so that the deferred party can occupy its
+    # former seats. All displaced parties remain whole.
+    for target in tables:
+        if checked_candidates >= max_candidates:
+            break
+        for other in at_table[target]:
+            other_ids = [g.id for g in groups[other]]
+            for destination in tables:
+                if destination == target or free[destination] < len(other_ids):
+                    continue
+                layout = {**previous, **{g: target for g in ids},
+                          **{g: destination for g in other_ids}}
+                check(layout, "one-to-one",
+                      f"Move {_name(plan, other)} to {destination}; seat at {target}")
+
+    # Many-for-one: displace two or three smaller parties from one target
+    # into distinct available blocks, without splitting them.
+    for target in tables:
+        if checked_candidates >= max_candidates:
+            break
+        others = at_table[target]
+        for count in range(2, min(3, len(others)) + 1):
+            for displaced in combinations(others, count):
+                relocating = [(other, [g.id for g in groups[other]]) for other in displaced]
+                blocks = {t: free[t] for t in tables if t != target}
+                assignments = []
+                branch_steps = 0
+                def pack(i: int):
+                    nonlocal branch_steps
+                    branch_steps += 1
+                    if (branch_steps > max_candidates or
+                            checked_candidates >= max_candidates or
+                            attempts >= max_attempts or
+                            len(options) >= max_options - 1):
+                        return
+                    if i == len(relocating):
+                        layout = {**previous, **{g: target for g in ids}}
+                        for (_, members), destination in zip(relocating, assignments):
+                            layout.update({g: destination for g in members})
+                        check(layout, "many-for-one",
+                              f"Move {count} parties; seat at {target}")
+                        return
+                    _, members = relocating[i]
+                    for destination in blocks:
+                        if blocks[destination] < len(members):
+                            continue
+                        blocks[destination] -= len(members)
+                        assignments.append(destination)
+                        pack(i + 1)
+                        assignments.pop()
+                        blocks[destination] += len(members)
+                        if len(options) >= max_options - 1:
+                            return
+                pack(0)
+
+    # Chain: A pending -> target, one incumbent -> middle, middle -> free
+    # destination. It is never permitted to weaken an infinite-weight rule.
+    for target in tables:
+        if checked_candidates >= max_candidates:
+            break
+        for other in at_table[target]:
+            other_ids = [g.id for g in groups[other]]
+            for middle in tables:
+                if middle == target:
+                    continue
+                for third in at_table[middle]:
+                    if third == other:
+                        continue
+                    third_ids = [g.id for g in groups[third]]
+                    for destination in tables:
+                        if destination in {target, middle}:
+                            continue
+                        if free[destination] < len(third_ids) or (
+                                free[middle] + len(third_ids) < len(other_ids)):
+                            continue
+                        layout = {
+                            **previous, **{g: target for g in ids},
+                            **{g: middle for g in other_ids},
+                            **{g: destination for g in third_ids},
+                        }
+                        check(layout, "chain",
+                              f"Chain through {target}, {middle} and {destination}")
+
+    # Split placement is an offered *choice*, not an automatic solve action.
+    # Different orders favour different remaining free blocks.
+    if len(ids) > 1 and sum(free.values()) >= len(ids):
+        for ordering in (list(tables), list(reversed(tables))):
+            layout = dict(previous)
+            remaining = list(ids)
+            for t in ordering:
+                portion = remaining[:free[t]]
+                remaining = remaining[len(portion):]
+                layout.update({g: t for g in portion})
+                if not remaining:
+                    break
+            if not remaining and len({layout[g] for g in ids}) >= 2:
+                counts = defaultdict(int)
+                for g in ids:
+                    counts[layout[g]] += 1
+                title = "Split: " + ", ".join(f"{t} ({count})" for t, count in counts.items())
+                check(layout, "split", title, split=True)
+
+    # A final broader solve can find a multi-party arrangement that the
+    # concrete enumerator did not cover. It is still pinned and checked by
+    # the same candidate verifier before appearing as an option.
+    if len(options) < max_options - 1 and attempts < max_attempts:
+        active = {gid for gid in groups
+                  if gid not in {m.group_id for m in plan.not_seated} and
+                  (gid == selected or all(g.id in previous for g in groups[gid]))}
+        partial = _active_problem(problem, active, lookup)
+        full = _solve_core(partial)
+        if full.status in {"optimal", "feasible"}:
+            layout = {g: a.table_id for a in full.assignments for g in a.guest_ids}
+            check(layout, "re-optimize",
+                  "Re-optimize current parties with all hard rules")
+        elif full.status == "unknown":
+            unknown = True
+        else:
+            blockers.update(full.conflicting_constraints[:5])
+
+    # No unseated list entry is manufactured automatically. This is only
+    # an explicit option, and applying it persists the human instruction.
+    unseat = ManualInstruction(id=intent.id, group_id=selected, action="unseat")
+    with_unseat = problem.model_copy(deep=True)
+    with_unseat.manual_instructions.append(unseat)
+    unseated_plan = solve(with_unseat)
+    options.append(ReassignOption(
+        id=f"option-{len(options)+1}", kind="leave_unseated",
+        title=f"Leave {_name(plan, selected)} unseated (operator decision)",
+        movements=[Movement(
+            group_id=selected, party_name=next(
+                (m.group_name for m in plan.pending_groups if m.group_id == selected), selected),
+            before=[], after=[], people=len(ids))],
+        score_delta=(unseated_plan.total_score or 0) - (plan.total_score or 0),
+        soft_rule_warnings=[], plan=unseated_plan))
+    return ReassignResponse(
+        status="available", options=options,
+        blockers=sorted(blockers) if len(options) == 1 else [])

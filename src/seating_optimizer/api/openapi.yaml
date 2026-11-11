@@ -237,6 +237,24 @@ paths:
               schema: {type: string}
         '422':
           description: Nonfeasible plan or contradictory assignment data
+  /v1/exports/not-seated-list/html:
+    post:
+      operationId: exportNotSeatedListHtml
+      summary: Print the operator-selected people not seated in the main room
+      description: Reads only Plan.not_seated without selecting, removing, or assigning anyone. Valid for feasible, needs_review, and infeasible plans, including capacity alarms. An empty list produces a titled page with an explicit empty message and no people rows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Plan'}
+      responses:
+        '200':
+          description: Print-ready HTML for the other room, containing exactly the recorded not-seated groups and their people
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Inconsistent not-seated group or guest identity data
   /v1/exports/floor-map/svg:
     post:
       operationId: exportFloorMapSvg
@@ -440,11 +458,11 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, zone_companionship]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, zone_companionship]}
         title: {type: string}
         description: {type: string}
-        modes: {type: array, items: {type: string, enum: [soft, hard]}}
-        default_mode: {type: string, enum: [soft, hard]}
+        modes: {type: array, items: {type: string, enum: [soft, hard, mark]}}
+        default_mode: {type: string, enum: [soft, hard, mark]}
         default_weight: {type: [integer, 'null']}
         fields: {type: array, items: {$ref: '#/components/schemas/RuleField'}}
     RuleCatalog:
@@ -487,7 +505,7 @@ components:
         enabled: {type: boolean, default: true, description: An absent value means enabled. False removes this instance from solver constraints, scores, and explanations without deleting its configuration.}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, zone_companionship]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, zone_companionship]
         mode: {type: string, enum: [soft, hard]}
         parameters:
           type: object
@@ -497,14 +515,15 @@ components:
     ManualInstruction:
       type: object
       additionalProperties: false
-      required: [id, group_id, action, place_type, place_id]
+      required: [id, group_id, action]
       properties:
         id: {type: string, minLength: 1}
         group_id: {type: string, minLength: 1}
-        action: {type: string, enum: [not_here, move_to]}
-        place_type: {type: string, enum: [table, floor, zone]}
-        place_id: {type: string, minLength: 1}
+        action: {type: string, enum: [not_here, move_to, unseat, seat_pending, pin_placement]}
+        place_type: {type: [string, 'null'], enum: [table, floor, zone, null]}
+        place_id: {type: [string, 'null']}
         allow_split: {type: boolean, default: false}
+        guest_tables: {type: object, additionalProperties: {type: string}}
     SolverConfig:
       type: object
       additionalProperties: false
@@ -614,13 +633,36 @@ components:
         capacity: {type: integer}
         occupied: {type: integer}
         empty_seats: {type: integer}
+    PriorityMark:
+      type: object
+      additionalProperties: false
+      required: [group_id, group_name, grade, guest_count, source_rule_ids]
+      properties:
+        group_id: {type: string}
+        group_name: {type: string}
+        grade: {type: integer, minimum: 1}
+        guest_count: {type: integer, minimum: 1}
+        source_rule_ids: {type: array, items: {type: string}}
+    NotSeatedGroup:
+      type: object
+      additionalProperties: false
+      required: [group_id, group_name, guest_ids, guest_names, grade]
+      properties:
+        group_id: {type: string}
+        group_name: {type: string}
+        guest_ids: {type: array, items: {type: string}}
+        guest_names: {type: array, items: {type: string}}
+        grade: {type: [integer, 'null']}
     Plan:
       type: object
       additionalProperties: false
       required: [session_id, status, total_score, assignments, tables, score_breakdown, compromises, conflicting_constraints, solve_seconds, message]
       properties:
         session_id: {type: string}
-        status: {type: string, enum: [optimal, feasible, infeasible, unknown]}
+        status: {type: string, enum: [optimal, feasible, infeasible, unknown, needs_review]}
+        priority_marks: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        pending_groups: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        not_seated: {type: array, items: {$ref: '#/components/schemas/NotSeatedGroup'}}
         manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
         total_score: {type: [integer, 'null']}
         assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
@@ -663,7 +705,7 @@ components:
       required: [id, kind, title, movements, score_delta, soft_rule_warnings, plan]
       properties:
         id: {type: string}
-        kind: {type: string, enum: [free-space, one-to-one, many-for-one, reverse-many-for-one, split, chain, re-optimize]}
+        kind: {type: string, enum: [free-space, one-to-one, many-for-one, reverse-many-for-one, split, chain, re-optimize, leave_unseated]}
         title: {type: string}
         movements: {type: array, items: {$ref: '#/components/schemas/Movement'}}
         score_delta: {type: integer}

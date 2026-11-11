@@ -9,7 +9,8 @@ from ortools.sat.python import cp_model
 
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
-from .models import Assignment, Compromise, PatternMatch, Plan, Problem, Reason, ScoreItem, TableUsage
+from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
+                     PriorityMark, Problem, Reason, ScoreItem, TableUsage)
 from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
 
@@ -203,8 +204,8 @@ def _conflicting_rules(model, assumptions, problem):
             if int(index) in names]
 
 
-def solve(problem: Problem) -> Plan:
-    """Solve one session. A separate Problem is used for each meal sitting."""
+def _solve_core(problem: Problem) -> Plan:
+    """Solve one seating stage with the existing CP-SAT engine and rule objective."""
     start = perf_counter()
     # An off rule is absent from *all* solver phases: parameter validation,
     # linked-family and split preprocessing, hard constraints, score terms,
@@ -420,6 +421,13 @@ def solve(problem: Problem) -> Plan:
     for direction in problem.manual_instructions:
         gid = direction.group_id
         guard = hard(f"instruction:{direction.id}")
+        if direction.action == "pin_placement":
+            # One operator-confirmed arrangement, including any explicit split
+            # and displaced parties, persists as hard guest-table directions.
+            for guest_id, table_id in direction.guest_tables.items():
+                target = next(j for j, table in enumerate(tables) if table.id == table_id)
+                model.Add(guest_at[guest_id, target] == 1).OnlyEnforceIf(guard)
+            continue
         eligible = [
             j for j, table in enumerate(tables)
             if (table.id == direction.place_id if direction.place_type == "table"
@@ -1083,3 +1091,201 @@ def solve(problem: Problem) -> Plan:
                 compromises=compromises, solve_seconds=elapsed,
                 layout=problem.layout, manual_instructions=problem.manual_instructions,
                 message="All hard constraints satisfied.")
+
+
+def _priority_marks(problem: Problem, groups: dict, lookup: dict) -> list[PriorityMark]:
+    """Derive grade data from the operator's current marker rule instances.
+
+    Larger grade means later seating. Where rules overlap, the most-low grade
+    wins; source IDs are retained so the UI can explain the derived mark.
+    No rule instance means no marking and no phase change.
+    """
+    graded: dict[str, tuple[int, set[str]]] = {}
+    for rule in problem.rules:
+        if rule.shape != "low_priority":
+            continue
+        p = rule.parameters
+        if p["selector"] == "group":
+            if p["group_id"] not in lookup:
+                raise ValueError(f"Rule {rule.id}: unknown low-priority family {p['group_id']}")
+            matched = [lookup[p["group_id"]]]
+        else:
+            matched = [gid for gid, members in groups.items()
+                       if len(members) < p["threshold"]]
+        for gid in matched:
+            previous_grade, sources = graded.get(gid, (0, set()))
+            graded[gid] = (max(previous_grade, p["grade"]), sources | {rule.id})
+    result = []
+    for gid, (grade, source_ids) in graded.items():
+        members = groups[gid]
+        names = [guest.name for guest in members]
+        registered = distinct_party_name(
+            gid, [guest.group_name for guest in members], names)
+        if not registered and len(members) == 1:
+            registered = names[0].strip()
+        result.append(PriorityMark(
+            group_id=gid, group_name=party_name_for(gid, registered, names),
+            grade=grade, guest_count=len(members),
+            source_rule_ids=sorted(source_ids)))
+    return sorted(result, key=lambda mark: (mark.grade, mark.group_name, mark.group_id))
+
+
+def _active_problem(problem: Problem, active_ids: set[str], lookup: dict) -> Problem:
+    """Use the same validated rules, but never evaluate targets not in a stage."""
+    def usable(rule):
+        p = rule.parameters
+        if rule.shape == "pair":
+            return lookup[p["left"]] in active_ids and lookup[p["right"]] in active_ids
+        if rule.shape == "pin":
+            return lookup[p["target"]] in active_ids
+        return rule.shape != "low_priority"
+
+    # An absent party cannot be exempted from a stage where it has no seats.
+    # Keep the original operator setting on the full Problem unchanged.
+    def stage_rule(rule):
+        if rule.shape != "zone_companionship":
+            return rule
+        return rule.model_copy(update={"parameters": {
+            **rule.parameters,
+            "exclude_groups": [gid for gid in rule.parameters.get("exclude_groups", [])
+                               if gid in active_ids],
+        }})
+
+    active_guests = [g for g in problem.guests if _group_id(g) in active_ids]
+    guest_ids = {g.id for g in active_guests}
+    directions = []
+    for direction in problem.manual_instructions:
+        if direction.group_id not in active_ids or direction.action == "unseat":
+            continue
+        if direction.action == "pin_placement":
+            pins = {g: t for g, t in direction.guest_tables.items() if g in guest_ids}
+            if not pins:
+                continue
+            directions.append(direction.model_copy(update={"guest_tables": pins}))
+        else:
+            directions.append(direction)
+    return problem.model_copy(update={
+        "guests": active_guests,
+        "rules": [stage_rule(r) for r in problem.rules if usable(r)],
+        "manual_instructions": directions,
+        "splittable_groups": [gid for gid in problem.splittable_groups if gid in active_ids],
+        "locked_guest_tables": {g: t for g, t in problem.locked_guest_tables.items()
+                                if g in guest_ids},
+    })
+
+
+def _empty_stage(problem: Problem) -> Plan:
+    """A legitimate stage when every family has been deferred."""
+    return Plan(
+        session_id=problem.session_id, status="optimal", total_score=0,
+        tables=[TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+                           occupied=0, empty_seats=t.capacity)
+                for t in problem.tables],
+        manual_instructions=[], layout=problem.layout,
+        message="No ordinary families in the first phase.")
+
+
+def solve(problem: Problem) -> Plan:
+    """Seat ordinary families first; defer graded marks and never auto-unseat.
+
+    A stopped stage returns a reviewable *partial* plan with explicit pending
+    parties, not a false successful plan or an automatically selected overflow.
+    The operator alone can persist an 'unseat' or confirmed placement action.
+    """
+    start = perf_counter()
+    # Match main: disabled instances are absent before priority-stage resolution.
+    if any(not rule.enabled for rule in problem.rules):
+        problem = problem.model_copy(update={
+            "rules": [rule for rule in problem.rules if rule.enabled]
+        })
+    groups, lookup = _prepare(problem)
+    marks = _priority_marks(problem, groups, lookup)
+    by_grade = {mark.group_id: mark for mark in marks}
+    unseated_ids = {i.group_id for i in problem.manual_instructions if i.action == "unseat"}
+    not_seated = [
+        NotSeatedGroup(
+            group_id=gid,
+            group_name=(next((m.group_name for m in marks if m.group_id == gid), None)
+                        or party_name_for(gid, distinct_party_name(
+                            gid, [g.group_name for g in members],
+                            [g.name for g in members]), [g.name for g in members])),
+            guest_ids=[g.id for g in members], guest_names=[g.name for g in members],
+            grade=by_grade[gid].grade if gid in by_grade else None)
+        for gid, members in groups.items() if gid in unseated_ids
+    ]
+    active_ids = set(groups) - unseated_ids
+    active_count = sum(len(groups[gid]) for gid in active_ids)
+    chairs = sum(table.capacity for table in problem.tables)
+    if active_count > chairs:
+        short = active_count - chairs
+        return Plan(
+            session_id=problem.session_id, status="infeasible",
+            message=f"Too many people — short by {short}. The operator must select whom to leave unseated.",
+            conflicting_constraints=[
+                f"Too many people — short by {short}: {active_count} guests, {chairs} chairs."
+            ],
+            priority_marks=marks, not_seated=not_seated,
+            manual_instructions=problem.manual_instructions,
+            layout=problem.layout, solve_seconds=perf_counter() - start)
+
+    def result_with_metadata(plan, pending=None):
+        plan.manual_instructions = problem.manual_instructions
+        plan.priority_marks = marks
+        plan.pending_groups = pending or []
+        plan.not_seated = not_seated
+        plan.solve_seconds = perf_counter() - start
+        return plan
+
+    if not active_ids:
+        return result_with_metadata(_empty_stage(problem))
+
+    filtered = _active_problem(problem, active_ids, lookup)
+    active_marks = [mark for mark in marks if mark.group_id in active_ids]
+    if not active_marks:
+        # Exact original, unphased engine behavior with no active marks.
+        return result_with_metadata(_solve_core(filtered))
+
+    # An accepted operator placement takes precedence over deferral:
+    # its pin is mandatory already in the ordinary-family stage.
+    approved = {
+        i.group_id for i in problem.manual_instructions
+        if i.action == "pin_placement"
+    }
+    deferred = {m.group_id for m in active_marks if m.group_id not in approved}
+    included = active_ids - deferred
+    if included:
+        baseline = _solve_core(_active_problem(filtered, included, lookup))
+        if baseline.status not in {"optimal", "feasible"}:
+            return result_with_metadata(baseline)
+    else:
+        baseline = _empty_stage(problem)
+
+    locked = {guest_id: a.table_id for a in baseline.assignments
+              for guest_id in a.guest_ids}
+    ordered_grades = sorted({by_grade[gid].grade for gid in deferred})
+    for grade in ordered_grades:
+        current = {gid for gid in deferred if by_grade[gid].grade == grade}
+        candidate = _active_problem(filtered, included | current, lookup)
+        candidate.locked_guest_tables = {
+            **candidate.locked_guest_tables, **locked
+        }
+        stage = _solve_core(candidate)
+        if stage.status not in {"optimal", "feasible"}:
+            unresolved = [m for m in active_marks
+                          if m.group_id in deferred - included]
+            baseline.status = "needs_review"
+            baseline.message = (
+                f"Low-priority grade {grade} cannot be fitted into the remaining "
+                "space without changing an earlier placement. Choose a solver-checked "
+                "move, split or an explicit unseated decision."
+                if stage.status == "infeasible" else
+                f"Low-priority grade {grade} could not be confirmed before the time limit. "
+                "Review options or increase the time limit."
+            )
+            baseline.conflicting_constraints = stage.conflicting_constraints
+            return result_with_metadata(baseline, unresolved)
+        baseline = stage
+        included |= current
+        locked = {guest_id: a.table_id for a in baseline.assignments
+                  for guest_id in a.guest_ids}
+    return result_with_metadata(baseline)
