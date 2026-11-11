@@ -58,6 +58,12 @@ td input,td select{min-width:125px}
 .rule{border:1px solid #d4e4e8;border-radius:12px;padding:17px;margin:12px 0;background:#fcfefe}
 .rule-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .rule-heading strong{font-size:15px}
+.rule-instance-header{margin:0 0 12px;gap:10px}
+.rule-instance-actions{display:inline-flex;align-items:center;gap:9px;flex-wrap:wrap}
+.rule-instance-toggle{display:inline-flex;align-items:center;gap:6px;width:fit-content;max-width:100%;font-weight:700;font-size:12px;cursor:pointer;color:#365c69}
+.rule-instance-toggle input{width:17px;height:17px;min-width:17px;flex:none;margin:0;accent-color:#177588}
+.rule-instance-off{border-color:#d3dcdf;background:#f8f9f9}
+.rule-instance-off>.muted{color:#64757f}
 .rules-empty{color:#677d86;font-size:13px}
 .divider{border:0;border-top:1px solid #e1e9ec;margin:20px 0}
 .view-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 19px;border-bottom:1px solid #d6e2e6;padding-bottom:10px}

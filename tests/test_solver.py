@@ -242,7 +242,8 @@ def test_small_group_priority_is_soft_one_point_per_group():
     for size in (1, 2):
         people = [Guest(id=f"small-{i}", name=f"Small {i}", group_id="together")
                   for i in range(size)]
-        plan = solve(make_problem(people, tables=tables))
+        plan = solve(make_problem(people, [rule("venue:small-group-priority",
+                  "small_group_priority", "soft", 1)], tables=tables))
         good(plan)
         assert plan.assignments[0].table_id == "preferred"
         assert plan.total_score == 1
@@ -267,6 +268,12 @@ def test_small_group_priority_off_by_default_and_other_groups_not_excluded():
     good(result)
     assert result.total_score == 0
     assert not any(x.rule_id == "venue:small-group-priority" for x in result.score_breakdown)
+    # A flagged table contributes no hidden +1: the operator must add a rule.
+    marked_without_rule = solve(make_problem([Guest(id="single", name="Single")],
+         tables=[Table(id="G", zone_id="ground", capacity=4, small_group_priority=True)]))
+    good(marked_without_rule)
+    assert marked_without_rule.total_score == 0
+    assert marked_without_rule.score_breakdown == []
     pinned = solve(make_problem(guests,
         [rule("pin_big", "pin", "hard", target="big", table="G")],
         tables=[Table(id="G", zone_id="ground", capacity=4, small_group_priority=True),

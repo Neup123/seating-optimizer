@@ -158,7 +158,7 @@ class Guest(Model):
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "zone_companionship"]
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "zone_companionship"]
 
 
 class Rule(Model):
@@ -167,17 +167,34 @@ class Rule(Model):
     mode: Literal["soft", "hard"]
     parameters: dict[str, Any] = Field(default_factory=dict)
     weight: int | None = None
+    # Rule-instance metadata, independent of the catalog's type description.
+    # Legacy rule records omit these fields and remain enabled by default.
+    name: str = ""
+    description: str = ""
+    enabled: bool = Field(default=True, strict=True)
+
+    @property
+    def display_name(self) -> str:
+        return self.name.strip() or self.id
 
     @model_validator(mode="after")
     def check_weight(self) -> "Rule":
+        if not self.enabled:
+            # Inactive instances are preserved for later re-enabling but have
+            # no rule-specific validation or interpretation while switched off.
+            return self
         if self.mode == "soft" and (self.weight is None or self.weight < 1):
             raise ValueError("Soft rules must carry a positive integer weight")
         if self.mode == "hard" and self.weight is not None:
             raise ValueError("Hard rules must not carry a weight")
         if self.shape in {"capacity", "pin"} and self.mode != "hard":
             raise ValueError("Capacity and pin rules must be hard")
-        if self.shape in {"fill_efficiency", "global_pattern", "zone_companionship"} and self.mode != "soft":
-            raise ValueError("Fill efficiency and global patterns must be soft")
+        if self.shape in {"fill_efficiency", "global_pattern", "split_penalty", "small_group_priority", "zone_companionship"} and self.mode != "soft":
+            raise ValueError("Fill efficiency, global patterns, split penalties, small-group preferences and zone companionship must be soft")
+        if self.shape == "attribute_grouping" and self.parameters.get("effect", "reward") not in {"reward", "penalty"}:
+            raise ValueError("Attribute grouping effect must be reward or penalty")
+        if self.shape in {"split_penalty", "small_group_priority"} and self.parameters:
+            raise ValueError(f"{self.shape} is structural and takes no parameters")
         if self.shape == "zone_companionship":
             # Exclusions are explicit group IDs, never inferred from another
             # rule, attributes, or an apparent single-family zone.

@@ -1,7 +1,7 @@
 name: Seating core API and browser tests
 on:
   push:
-    branches: [main, feature/phase-1-headless-optimizer, feat/70-zone-companionship]
+    branches: [main, feature/phase-1-headless-optimizer, feat/67-rule-instance-fields, feat/70-zone-companionship]
   pull_request:
     branches: [main, feat/53-interactive-views]
 permissions:
