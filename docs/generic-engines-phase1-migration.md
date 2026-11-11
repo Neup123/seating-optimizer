@@ -44,25 +44,21 @@ in the report's retirement ledger for reversible audit. Of the 18 supplied
 instances, 17 become v2 rules and one is a documented retirement. IDs and
 instance metadata are preserved by the converter without branching on IDs.
 
-## Critical semantic checks before declaring equivalence
+## Scoring parity and remaining contract differences
 
-1. **Legacy attribute grouping counted within-family pairs.** The requested
-   generic inter-family mechanism uses \`scope=across\`. The existing
-   \`tests/test_solver_objective_terms.py\` verifies 21 same-language pairs
-   from a single seven-person family. This is an explicit compatibility
-   question: a pure across-family migration can change the score. The v2
-   migration retains the entire source payload for comparison and does not
-   silently reinterpret it.
-2. **Legacy soft table-property needs rewarded a satisfied guest.** The phase-1
-   specification requires a penalty per affected guest whose need is unmet.
-   These objectives can differ by a fixed offset and need a deliberate
-   score-equivalence strategy rather than a falsely claimed equality.
-3. **No automatic split-weight calibration.** The new validation warns when
-   the ordinary objective pool threatens split dominance. The authored
-   weight is never modified.
-4. **No automatic unseating.** A failure to fit low-priority families remains
-   reviewable, and an \`unseat\` manual instruction must come from the operator.
-
+1. **B2 corrected:** generic inter/criterion_pairs now counts every relevant
+   same-value guest pair at a table, including pairs within one registered
+   family. The criterion's scope=across classifies the engine relationship;
+   it does not subtract within-family pairs from the legacy objective.
+   Section 13.1's seven-member family therefore earns C(7,2)*weight.
+   The same rule applies to cross-value mixing penalties. CP-SAT and
+   fixed-plan evaluators use exactly the same accounting.
+2. **Soft table-property need:** legacy rewards a satisfied need while
+   v2 penalizes an unmet need. This is a deliberate specification
+   difference, but the regression inventory uses a HARD property need.
+3. **Q3:** split-weight dominance only warns; authored weights never change.
+4. **D1/D2:** low-priority families stage individually and only an explicit
+   operator instruction can confirm an unseated family.
 ## Completed implementation surfaces
 
 - \`generic_rules.py\`: typed criterion operators, 13 v2 mechanism identities,
@@ -98,10 +94,15 @@ section-8 scenarios using the supplied files. The optional
 when necessary. The harness refuses missing inputs; the 29 historical
 records are NOT counted as 29 executable checks without their evidence.
 
-The coordinator still owns verification of 29 historical verdicts, score
-2260, split score -1997596, hard-conflict naming, and plan-shape parity.
-The scope and property-need semantic differences above may affect strict
-score equivalence; neither the solver nor the harness silently alters
-weights, changes operator decisions, or masks discrepancies.
+The coordinator still owns full verification of the 29 historical verdicts.
+The 5-second score 2260 and split score -1997596 are reference snapshots,
+not deterministic time-limited pass/fail thresholds. Same-limit scores
+are compared old-vs-new; when timed feasible incumbents differ, the
+coordinator may pass an explicit --score-tolerance with the chosen bound.
+The split demo defaults to 15 seconds; --time-limit 60 --workers 8
+provides the longer comparison requested by the owner.
+Run3 and all demos use guests-216-split.csv with clan-upper-floor ON;
+the control CSV is used only for the earlier infeasibility scenario.
+B2 family-pair scoring is fixed. No operator weights or decisions change.
 
 Do not merge this branch without coordinator acceptance.
