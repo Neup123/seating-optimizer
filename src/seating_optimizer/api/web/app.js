@@ -3,7 +3,6 @@ import { renderPlanWorkspace } from "./plan-workspace.js";
 import { renderGenericRules, tablePropertyVocabulary } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
-const VIEWS = [["table","Tables"],["people","People"],["floor","Map"],["print","Print"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
 const SESSION_KEY = "seating-optimizer:session:v2";
 const LEGACY_SESSION_KEY = "seating-optimizer:session:v1";
@@ -11,7 +10,7 @@ const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
+  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
   try {
@@ -75,6 +74,33 @@ function action(label, callback, className = "secondary", id) {
   b.type = "button";
   if (id) b.id = id;
   b.addEventListener("click", callback);
+  return b;
+}
+function iconAction(title, kind, callback, className = "secondary icon-button", id, showText = false) {
+  const b = action("", callback, className, id);
+  b.title=title;b.setAttribute("aria-label", title);
+  const svg=document.createElementNS(SVG_NS,"svg");
+  svg.setAttribute("width","19");svg.setAttribute("height","19");
+  svg.setAttribute("viewBox","0 0 24 24");
+  svg.setAttribute("fill","none");svg.setAttribute("stroke","currentColor");
+  svg.setAttribute("stroke-width","2");svg.setAttribute("stroke-linejoin","round");
+  svg.setAttribute("stroke-linecap","round");svg.setAttribute("aria-hidden","true");
+  const shapes={
+    download:["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","m7 10 5 5 5-5","M12 15V3"],
+    printer:["M6 9V2h12v7","M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2","M6 14h12v8H6z"],
+    list:["M8 6h13","M8 12h13","M8 18h13","M3 6h.01","M3 12h.01","M3 18h.01"],
+    map:["M3 6 9 3l6 3 6-3v15l-6 3-6-3-6 3z","M9 3v15","M15 6v15"],
+    tables:["M3 3h18v18H3z","M3 10h18","M10 3v18"],
+    people:["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M22 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"],
+    check:["M20 6 9 17l-5-5"],
+    plus:["M12 5v14","M5 12h14"]
+  };
+  for (const path of shapes[kind] || shapes.list) {
+    const item=document.createElementNS(SVG_NS,"path");
+    item.setAttribute("d",path);svg.append(item);
+  }
+  b.append(svg);
+  if (showText) b.append(element("span","",title));
   return b;
 }
 function textField(label, value, onChange, options = {}) {
@@ -197,7 +223,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, advancedSolver: false, solving: false, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -1345,23 +1371,39 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
-    const views = card("Review and export");
+    const views = card("Review seating");
     const toolbar = element("div","plan-view-toolbar");
-    const tabs = element("div", "view-tabs segmented"); tabs.setAttribute("role", "tablist");
-    VIEWS.forEach(([name,title]) => {
-      const icons = {table:"▦",people:"☷",floor:"▧",print:"⎙"};
-      const b = action(icons[name]+" "+title, () => { void loadView(name); }, "");
-      b.id = "view-" + name;
-      b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", state.view === name ? "true" : "false");
-      tabs.append(b);
-    });
-    const exportButton = action("↓",()=>attempt(async()=>{
+    const review = element("div","review-cluster");
+    const tabs = element("div", "view-tabs segmented");tabs.setAttribute("role","tablist");
+    const listSelected=["table","people"].includes(state.view);
+    const listMode = iconAction("List","list",()=>loadView(state.reviewListMode || "table"),
+      "secondary small", "view-list",true);
+    listMode.setAttribute("role","tab");
+    listMode.setAttribute("aria-selected",String(listSelected));
+    const mapMode = iconAction("Map","map",()=>loadView("floor"),
+      "secondary small","view-floor",true);
+    mapMode.setAttribute("role","tab");
+    mapMode.setAttribute("aria-selected",String(state.view==="floor"));
+    tabs.append(listMode,mapMode);review.append(tabs);
+    if (listSelected) {
+      const format = element("div","list-modes");format.setAttribute("role","group");
+      format.setAttribute("aria-label","List grouping");
+      for (const [mode,title,icon] of [["table","Tables","tables"],["people","People","people"]]) {
+        const b=iconAction(title,icon,()=>loadView(mode),"quiet small","view-"+mode,true);
+        b.setAttribute("aria-selected",String(state.view===mode));format.append(b);
+      }
+      review.append(format);
+    }
+    const exports = element("fieldset","export-cluster");
+    exports.append(element("legend","","Exports"));
+    const printButton=iconAction("Print and PDF","printer",()=>loadView("print"),
+      "quiet small icon-button","view-print");
+    const exportButton=iconAction("Download plan JSON","download",()=>attempt(async()=>{
       const result = await api.post("/v1/exports/json",state.plan);
       downloadBlob(JSON.stringify(result,null,2),"seating-plan.json","application/json");
     }),"quiet small icon-button","download-json");
-    exportButton.title="Download plan JSON";exportButton.setAttribute("aria-label",exportButton.title);
-    toolbar.append(tabs,exportButton);
+    exports.append(printButton,exportButton);
+    toolbar.append(review,exports);
     views.append(toolbar);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
     if (state.view === "print") {
@@ -1511,6 +1553,7 @@ export function createApp(root, api = createGateway()) {
     if (view === "floor" && state.view !== "floor" &&
         state.plan?.layout?.floors?.length)
       state.focusedFloor = state.plan.layout.floors[0].zone_id;
+    if (view === "table" || view === "people") state.reviewListMode=view;
     state.view = view;
     state.viewContent = null;
     state.viewError = "";
