@@ -224,11 +224,14 @@ test("single-floor venue template retains rules and capacities before guest impo
   await floor(page,"H1",4);
   await choose(page,"venue","holes_term");
   await page.locator("#nav-map").click();
+  await page.locator("#template-toggle").click();
   await page.locator("#template-name").fill("Hall dinner");
   await page.locator("#save-template").click();
   await expect(page.locator("#notice")).toContainText("Saved configuration template");
   await page.locator("#new-session").click();
   await page.locator("#nav-map").click();
+  if (!(await page.locator(".template-drawer").evaluate(node=>node.open)))
+    await page.locator("#template-toggle").click();
   await page.locator("#template-select").selectOption("Hall dinner");
   await page.locator("#load-template").click();
   await expect(page.locator("#notice")).toContainText("Loaded template");
