@@ -425,8 +425,7 @@ export function createApp(root, api = createGateway()) {
       if (state.screen === screen) b.setAttribute("aria-current", "page");
       nav.append(b);
     });
-    sidebar.append(nav, element("p", "side-note",
-      "All assignments and printable exports are produced by the REST API. No seating rules execute in the browser."));
+    sidebar.append(nav);
     return sidebar;
   }
   function render() {
@@ -436,7 +435,7 @@ export function createApp(root, api = createGateway()) {
       void loadView("print");
       return;
     }
-    saveSession();
+    if (!state.needsMigration) saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -444,19 +443,29 @@ export function createApp(root, api = createGateway()) {
     const header = element("div", "topline");
     const text = element("div");
     const title = SCREENS.find(([screen]) => screen === state.screen)?.[1] || "Seating Plan";
-    text.append(element("h1", "", title), element("p", "", "Build, optimize and review a seating session"));
+    const subtitles = {
+      import: "Map registration fields for use in rules",
+      rules: "Define who, what, where and priority",
+      map: "Place tables and set chair counts",
+      plan: "Solve and review the operator's choices"
+    };
+    text.append(element("h1", "", title), element("p", "", subtitles[state.screen]));
     const stats = element("div", "stats");
     stats.append(element("span", "pill", state.guests.length + " guests"),
       element("span", "pill", state.tables.length + " tables"),
       element("span", "pill", state.rules.length + " rules"));
     header.append(text, stats);
     main.append(header);
-    main.append(row(action("New empty session", newSession, "danger small", "new-session")));
+    const newButton = action("＋", newSession, "quiet small icon-button", "new-session");
+    newButton.title = "Start a new empty session";
+    newButton.setAttribute("aria-label", newButton.title);
+    main.append(row(newButton, element("span", "save-state", state.storageWarning
+      ? "Changes could not be saved" : "✓ Saved locally")));
     if (state.storageWarning) main.append(element("p", "problem", state.storageWarning));
     const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
     notice.setAttribute("role", "status");
     notice.id = "notice";
-    main.append(notice);
+    if (state.notice) main.append(notice);
     if (state.error && state.retryAction) {
       main.append(row(action("Retry failed action", () => attempt(state.retryAction),
         "primary", "retry-action")));
@@ -471,7 +480,7 @@ export function createApp(root, api = createGateway()) {
 
   function renderImport() {
     const area = element("div", "form-measure import-flow");
-    const form = card("Upload guest registrations", "CSV or XLSX. The server detects headers; you can override every column before importing.");
+    const form = card("Guest registrations");
     const fileLabel = element("label", "");
     fileLabel.append(element("span", "", "Guest list spreadsheet"));
     const file = document.createElement("input");
@@ -496,7 +505,8 @@ export function createApp(root, api = createGateway()) {
     area.append(form);
     if (!state.preview) return area;
 
-    const mappingCard = card("Map columns", "Automatic matches are preselected. Choose a target or enter any custom attribute key. Unmapped columns are preserved under their original header.");
+    const mappingCard = card("Map columns");
+    mappingCard.append(element("span", "draft-status", "Draft mapping · Saved locally"));
     const choices = [["", "Unmapped (preserve as attribute)"],
       ["name", "Guest / registration name"], ["size", "Party size"],
       ["group_id", "Group ID"], ["group_name", "Group name"],
@@ -507,12 +517,16 @@ export function createApp(root, api = createGateway()) {
     const table = document.createElement("table");
     const head = element("thead");
     const tr = element("tr");
-    ["Source column", "Target field", "Preview value"].forEach(t => tr.append(element("th", "", t)));
+    ["Source column", "Criterion", "Target field", "Preview value"].forEach(t => tr.append(element("th", "", t)));
     head.append(tr); table.append(head);
     const body = element("tbody");
     state.preview.headers.forEach(header => {
       const rowEl = element("tr");
       rowEl.append(element("td", "", header));
+      const targetIsCriterion = (state.mapping[header] || "").startsWith("attribute.") ||
+        !["name","size","group_id","group_name"].includes(state.mapping[header]);
+      rowEl.append(element("td", targetIsCriterion ? "criterion-ready" : "muted",
+        targetIsCriterion ? "◇ Rule field" : "—"));
       const cell = element("td");
       const value = state.mapping[header] || "";
       const selected = choices.some(choice => choice[0] === value) ? value :
@@ -646,8 +660,7 @@ export function createApp(root, api = createGateway()) {
 
   function renderMap() {
     const area = element("div");
-    const templatesCard = card("Reusable venue + rules configurations",
-      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable. Saving an existing name updates that template.");
+    const templatesCard = card("Venue templates");
     templatesCard.classList.add("form-measure");
     templatesCard.append(textField("Configuration name", state.templateName, value => {
       state.templateName = value;
@@ -727,7 +740,7 @@ export function createApp(root, api = createGateway()) {
     }));
     templatesCard.append(append(importLabel, configFile));
     area.append(templatesCard);
-    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Add passive table tags (accessible, aisle-edge, quiet) to match guest needs — tags carry no score by themselves.");
+    const intro = card("Floor layout");
     intro.classList.add("form-measure");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
@@ -745,12 +758,12 @@ export function createApp(root, api = createGateway()) {
       }), "secondary", "export-layout")
     ));
     area.append(intro);
-    const floorForm = card("Add floor", "Zones identify the floor for solver restrictions and printable pages.");
+    const floorForm = card("Create a floor");
     floorForm.classList.add("form-measure");
     const addFloor = element("form", "grid three");
     addFloor.id = "floor-form";
     const inputs = {};
-    [["id", "Floor ID", "ground"], ["name", "Floor name", "Ground floor"],
+    [["name", "Floor name", "Ground floor"],
      ["width", "Canvas width", "700"], ["height", "Canvas height", "450"]].forEach(([key,label,placeholder]) => {
       const input = document.createElement("input");
       input.name = key; input.placeholder = placeholder; input.required = true;
@@ -759,13 +772,15 @@ export function createApp(root, api = createGateway()) {
       inputs[key] = input;
       addFloor.append(append(element("label"), element("span", "", label), input));
     });
-    const submit = element("button", "primary", "Create floor");
+    const submit = element("button", "primary", "＋");
+    submit.title = "Create floor"; submit.setAttribute("aria-label", "Create floor");
     submit.type = "submit"; submit.id = "add-floor";
     addFloor.append(submit);
     addFloor.addEventListener("submit", event => {
       event.preventDefault();
-      const id = inputs.id.value.trim();
-      if (!id || state.zones.some(z => z.id === id)) return announce("Floor ID must be unique and nonempty.", true);
+      let sequence = state.zones.length + 1;
+      while (state.zones.some(zone => zone.id === "floor-" + sequence)) sequence++;
+      const id = "floor-" + sequence;
       const width = safeNumber(inputs.width.value), height = safeNumber(inputs.height.value);
       if (!(width > 0 && height > 0)) return announce("Floor dimensions must be positive.", true);
       state.zones.push({ id, name: inputs.name.value.trim() || id });
@@ -781,8 +796,7 @@ export function createApp(root, api = createGateway()) {
     }
     if (!currentFloor()) state.focusedFloor = state.layout.floors[0].zone_id;
     const layout = currentFloor();
-    const panel = card("Edit tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id),
-      "Drag a numbered shape to reposition it, or edit exact geometry and table chair count below.");
+    const panel = card("Tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id));
     panel.append(selectField("Floor", state.layout.floors.map(f => [f.zone_id,
       state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
       state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
@@ -1190,7 +1204,7 @@ export function createApp(root, api = createGateway()) {
           "secondary small", "confirm-unseat")));
       return panel;
     }
-    const status = card("Solution report", "Status: " + plan.status.toUpperCase() +
+    const status = card("Solution · " + plan.status.toUpperCase(), "Score: " + (plan.total_score ?? "—") +
       " · Score: " + (plan.total_score ?? "—") +
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
     if (plan.status === "infeasible" || plan.status === "unknown") {
@@ -1212,7 +1226,7 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
-    status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
+    for (const warning of plan.validation_warnings || []) status.append(element("p", "problem warning", warning));
     area.append(status);
     const unseated = renderNotSeated();
     if (unseated) area.append(unseated);
@@ -1342,8 +1356,7 @@ export function createApp(root, api = createGateway()) {
     area.append(views);
     const ruleDisplay = id => ruleLabel(state.rules.find(rule => rule.id === id), id);
     if ((plan.pattern_matches || []).length) {
-      const matches = card("Global pattern matches",
-        "Every matched table is listed, including empty tables with no guest-level explanation cards.");
+      const matches = card("Table patterns");
       (plan.pattern_matches || []).forEach(match => {
         matches.append(element("p", "reason", ruleDisplay(match.rule_id) + ": " + match.description +
           " (" + (match.points > 0 ? "+" : "") + match.points +
@@ -1351,8 +1364,7 @@ export function createApp(root, api = createGateway()) {
       });
       area.append(matches);
     }
-    const compromises = card("Compromises and empty chairs",
-      "Unmet soft considerations are listed with lost points. Hard rules cannot be traded away.");
+    const compromises = card("Compromises and empty chairs");
     if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));
     else compromises.append(issuesList(plan.compromises.map(c => ({
       row: null, column: ruleDisplay(c.rule_id), severity: "warning",
@@ -1370,7 +1382,7 @@ export function createApp(root, api = createGateway()) {
       body.append(r);
     });
     table.append(body); tableWrap.append(table); compromises.append(tableWrap); area.append(compromises);
-    const reasons = card("Per-assignment explanations", "Plain-language reasons and point contributions reported by the engine.");
+    const reasons = card("Reasons by assignment");
     const list = element("div", "reasons");
     const partyTotals = new Map();
     (plan.assignments || []).forEach(a =>
