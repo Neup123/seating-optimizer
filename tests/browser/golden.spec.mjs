@@ -206,7 +206,9 @@ test("operator owns overflow choices; shortage produces alarm without automatic 
   await page.locator("#solve-plan").click();
   const plan=await (await response).json();
   expect(["infeasible","needs_review"]).toContain(plan.status);
-  expect(plan.unseated_reasons.some(group=>group.reason==="lack_of_space")).toBe(true);
+  // Shortage is an alarm, NOT an automatic decision about any specific family.
+  expect(plan.message).toMatch(/short by 1/i);
+  expect(plan.unseated_reasons).toEqual([]);
   expect(plan.not_seated).toEqual([]);
   await expect(page.locator("#overflow-choice")).toBeVisible();
   await shot(page,info,"19-shortage-infeasible");
