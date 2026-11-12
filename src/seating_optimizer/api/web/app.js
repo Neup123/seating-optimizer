@@ -1,6 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
-import { renderGenericRules } from "./v2-rules.js";
+import { renderGenericRules, tablePropertyVocabulary } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const VIEWS = [["table","Tables"],["people","People"],["floor","Map"],["print","Print"]];
@@ -658,6 +658,49 @@ export function createApp(root, api = createGateway()) {
     announce("Layout imported. Set chair capacities and validate the venue before solving.");
   }
 
+  function propertyControl(label, selected, id) {
+    const block = element("fieldset", "property-picker");
+    block.append(element("legend", "", label));
+    const hidden = document.createElement("input");
+    hidden.type="hidden"; hidden.id=id; hidden.value=selected.join(", ");
+    const list = element("div", "property-options");
+    const choices = [...new Set([...tablePropertyVocabulary(state.tables),...selected])].sort();
+    const valueSet = new Set(selected);
+    const changed = () => {
+      hidden.value=[...valueSet].join(", ");
+      hidden.dispatchEvent(new Event("change", {bubbles:true}));
+    };
+    for (const property of choices) {
+      const tag = element("label", "check-inline");
+      const check=document.createElement("input");check.type="checkbox";
+      check.checked=valueSet.has(property);
+      check.addEventListener("change",()=>{
+        if(check.checked)valueSet.add(property);else valueSet.delete(property);
+        changed();
+      });
+      tag.append(check,element("span","",property));list.append(tag);
+    }
+    const newTag=document.createElement("input");
+    newTag.type="text";newTag.placeholder="New table property";
+    newTag.setAttribute("aria-label","New table property");
+    const add=action("+",()=>{
+      const next=newTag.value.trim();
+      if(!next||next.includes(","))return;
+      if(!valueSet.has(next)) {valueSet.add(next);changed();}
+      newTag.value="";
+      if (!choices.includes(next)) {
+        const option=element("label","check-inline");
+        const check=document.createElement("input");check.type="checkbox";check.checked=true;
+        check.addEventListener("change",()=>{if(check.checked)valueSet.add(next);else valueSet.delete(next);changed();});
+        option.append(check,element("span","",next));list.append(option);
+      }
+    },"quiet small icon-button");
+    add.title="Add table property";add.setAttribute("aria-label",add.title);
+    newTag.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();add.click();}});
+    block.append(hidden,list,row(newTag,add));
+    return block;
+  }
+
   function renderMap() {
     const area = element("div");
     const templatesCard = card("Venue templates");
@@ -812,8 +855,7 @@ export function createApp(root, api = createGateway()) {
     const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
-    const propertyInput = textField("Table tags (comma-separated)", "", () => {},
-      { id: "new-table-properties", placeholder: "accessible, aisle-edge" });
+    const propertyInput = propertyControl("Table properties", [], "new-table-properties");
     const priorityLabel = element("label", "field");
     const priorityInput = document.createElement("input");
     priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
@@ -865,9 +907,8 @@ export function createApp(root, api = createGateway()) {
       }
       fields.append(selectField("Shape", ["rectangle", "ellipse", "circle"], drawing.shape,
         () => {}, { id: "table-" + drawing.table_id + "-shape" }));
-      editor.append(fields, textField("Table tags (comma-separated)",
-        (table?.properties || drawing.properties || []).join(", "), () => {},
-        { id: "table-" + drawing.table_id + "-properties" }));
+      editor.append(fields, propertyControl("Table properties",
+        table?.properties || drawing.properties || [], "table-" + drawing.table_id + "-properties"));
       const priorityLabel = element("label", "field");
       const priorityInput = document.createElement("input");
       priorityInput.type = "checkbox";
@@ -876,14 +917,23 @@ export function createApp(root, api = createGateway()) {
       priorityLabel.append(priorityInput, element("span", "",
         "Priority for couples and singles (soft)"));
       editor.append(priorityLabel);
-      const save = element("button", "secondary small", "Apply dimensions");
-      save.type = "submit";
+      const save = element("button", "secondary small icon-button", "✓");
+      save.type = "submit"; save.title="Save table";save.setAttribute("aria-label",save.title);
+      save.hidden=true;
+      const indicator=element("span","save-state","✓ Saved locally");
+      editor.addEventListener("input",e=>{
+        if(e.target.type==="hidden")return;
+        indicator.textContent="Editing draft";indicator.classList.add("unsaved");
+      });
+      editor.addEventListener("change",e=>{
+        if(e.target.matches('input,select'))editor.requestSubmit();
+      });
       const remove = action("Remove table", () => {
         layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
         state.tables = state.tables.filter(t => t.id !== drawing.table_id);
         invalidate(); announce("Removed table " + drawing.table_id + ".");
       }, "danger small");
-      editor.append(row(save, remove));
+      editor.append(row(save, indicator, remove));
       editor.addEventListener("submit", event => {
         event.preventDefault();
         const next = {};
@@ -907,7 +957,7 @@ export function createApp(root, api = createGateway()) {
         drawing.small_group_priority = priorityInput.checked;
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");
+        invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");
       });
       list.append(editor);
     }
