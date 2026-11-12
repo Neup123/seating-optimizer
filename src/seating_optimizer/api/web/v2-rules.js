@@ -388,10 +388,10 @@ export function renderGenericRules(state, actions) {
       const body=node("div","rule-accordion-body");
       if (!state.guests.length && NEEDS_CRITERION.has(rule.mechanism))
         body.append(node("span","draft-status","Draft · Import guests to choose this criterion"));
-      body.append(line(edit("Name",rule.name,value=>commitName(value)),
-        edit("Note",rule.description || "",value=>{rule.description=value;changed();})));
+      const settings=line(edit("Name",rule.name,value=>commitName(value)),
+        edit("Note",rule.description || "",value=>{rule.description=value;changed();}));
       function commitName(value){rule.name=value.trim()||LABELS[rule.mechanism];changed();}
-      body.append(line(pick("Mode",(spec?.modes || [rule.mode]).map(m=>[m,m]),
+      settings.append(pick("Mode",(spec?.modes || [rule.mode]).map(m=>[m,m]),
         rule.mode,value=>{
           rule.mode=value;
           rule.weight=value==="soft"?(rule.weight||5):null;
@@ -405,7 +405,8 @@ export function renderGenericRules(state, actions) {
           pick("Weight",[[1,"Light · 1"],[5,"Normal · 5"],[25,"Strong · 25"],
               ...( [1,5,25].includes(rule.weight)?[]:[[rule.weight,"Custom · "+rule.weight]])],
             rule.weight,value=>{rule.weight=Number(value);changed();},"rule-weight-"+index)
-        ]:[])));
+        ]:[]));
+      body.append(settings);
       if(rule.mode==="soft"){
         const advanced=node("details","advanced-value");
         advanced.append(node("summary","","Advanced weight"),edit("Points",rule.weight,value=>{
