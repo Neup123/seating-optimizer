@@ -3,6 +3,7 @@ import {test, expect} from "@playwright/test";
 test.use({viewport:{width:1600,height:900},deviceScaleFactor:2});
 const shot = (page,info,label) => page.screenshot({path:info.outputPath(label+".png"),fullPage:true});
 async function upload(page,filename,contents) {
+  await page.locator("#nav-import").click();
   await page.locator("#guest-file").setInputFiles({
     name:filename,mimeType:"text/csv",buffer:Buffer.from(contents)
   });
@@ -294,8 +295,18 @@ test("desktop and mobile shells avoid horizontal overflow with focused task view
   await page.setViewportSize({width:390,height:844});
   for(const screen of ["import","rules","map","plan"]) {
     await page.locator("#nav-"+screen).click();
-    const fits=await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1);
-    expect(fits,screen+" overflow").toBe(true);
+    const width=await page.evaluate(()=>({
+      viewport:window.innerWidth,
+      page:document.documentElement.scrollWidth,
+      widest:[...document.querySelectorAll("body *")]
+        .filter(node=>node.getBoundingClientRect().right>window.innerWidth+1)
+        .sort((a,b)=>b.getBoundingClientRect().right-a.getBoundingClientRect().right)
+        .slice(0,5).map(node=>node.tagName.toLowerCase()+"."+
+          node.className.toString().replaceAll(" ",".")+
+          " right="+Math.round(node.getBoundingClientRect().right))
+    }));
+    expect(width.page,screen+" horizontal overflow: "+JSON.stringify(width))
+      .toBeLessThanOrEqual(width.viewport+1);
     await shot(page,info,"24-mobile-"+screen);
   }
 });
