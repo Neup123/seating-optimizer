@@ -10,7 +10,7 @@ const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
+  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
   try {
@@ -231,7 +231,7 @@ export function createApp(root, api = createGateway()) {
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "", error: false, retryAction: null,
-      templateName: "", templateSelected: "", storageWarning: ""
+      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: ""
     };
   }
   const state = emptySession();
@@ -809,7 +809,31 @@ export function createApp(root, api = createGateway()) {
       announce("Imported complete configuration " + validated.name + ".");
     }));
     templatesCard.append(append(importLabel, configFile));
-    area.append(templatesCard);
+    const templateActions = [
+      ["save-template","Save or update venue template","✓"],
+      ["export-configuration","Download full configuration JSON","⤓"],
+      ["load-template","Load selected venue template","↥"],
+      ["duplicate-template","Duplicate selected venue template","⧉"],
+      ["delete-template","Delete selected venue template","🗑"]
+    ];
+    for (const [id,title,glyph] of templateActions) {
+      const b=templatesCard.querySelector("#"+id);
+      b.textContent=glyph;b.classList.add("icon-button");
+      b.title=title;b.setAttribute("aria-label",title);
+    }
+    const templateDrawer=element("details","card form-measure template-drawer");
+    templateDrawer.open=Boolean(state.templateDrawerOpen);
+    const templateToggle=element("summary","","Venue templates");
+    templateToggle.id="template-toggle";
+    templateDrawer.append(templateToggle);
+    templatesCard.querySelector("h2")?.remove();
+    templatesCard.classList.remove("card","form-measure");
+    templatesCard.classList.add("template-content");
+    templateDrawer.append(templatesCard);
+    templateDrawer.addEventListener("toggle",()=>{
+      state.templateDrawerOpen=templateDrawer.open;saveSession();
+    });
+    area.append(templateDrawer);
     const intro = card("Floor layout");
     intro.classList.add("form-measure");
     const file = document.createElement("input");
@@ -845,7 +869,7 @@ export function createApp(root, api = createGateway()) {
       inputs[key] = input;
       addFloor.append(append(element("label"), element("span", "", label), input));
     });
-    const submit = element("button", "primary", "＋");
+    const submit = element("button", "primary icon-button", "＋");
     submit.title = "Create floor"; submit.setAttribute("aria-label", "Create floor");
     submit.type = "submit"; submit.id = "add-floor";
     addFloor.append(submit);
@@ -1128,7 +1152,9 @@ export function createApp(root, api = createGateway()) {
         state.manualInstructions = deepCopy(updated.manual_instructions || state.manualInstructions);
         state.selectedPlanItem = null;
         resetPlanPreview();
-        announce("Operator moved " + groupId + " to the not-seated list.");
+        const label=state.guests.find(g=>(g.group_id || "guest:"+g.id)===groupId);
+        announce("Operator moved " + (label?.group_name || label?.name || "the selected family") +
+          " to the not-seated list.");
       } catch (error) {
         state.manualInstructions = previous;
         throw error;
