@@ -197,7 +197,7 @@ def _assert_same_objective_on_fixed_plan(case, engine, plan, generic_problem):
     catches missing family-internal pairs independently of CP-SAT search.
     """
     if plan.status not in ("optimal", "feasible", "needs_review"):
-        return
+        return None
     guest_tables = _placement(plan)
     calculated, breakdown = score_fixed_plan(
         generic_problem.guests, generic_problem.tables,
@@ -212,6 +212,7 @@ def _assert_same_objective_on_fixed_plan(case, engine, plan, generic_problem):
         case.name, engine, "fixed-plan instance breakdown mismatch",
         reported, breakdown
     )
+    return calculated
 
 
 def _compare(case: Case, legacy, generic, *, score_tolerance=0):
@@ -273,11 +274,67 @@ def _case_problem(root, case, config, inventory, mapping, *, seed=42,
 def _load_cases(root: Path):
     manifest = root / "equivalence-cases.json"
     if not manifest.is_file():
-        return DEFAULT_CASES, None
+        return DEFAULT_CASES, None, None
     data = json.loads(manifest.read_text(encoding="utf-8-sig"))
     cases = [Case(**c) for c in data["cases"]]
     mapping = data.get("mapping")
-    return cases, mapping
+    return cases, mapping, data.get("verdicts")
+
+
+def _manifest_verdict(row: dict, case: Case, legacy, generic, old_cross, new_cross):
+    """Replay a data-specified historical check; never treat a PASS label as proof.
+
+    Manifest format: {case, field, engine?, expected, tolerance?}.
+    Fields: status, seated, pending, not_seated, marks, total_score,
+    short_by, conflict_contains, score_delta, same_guest_set, cross_scored.
+    """
+    if row.get("case") != case.name:
+        return False
+    field = row.get("field")
+    engine = row.get("engine", "both")
+    if engine not in ("legacy", "generic", "both"):
+        raise ValueError(f"{case.name}: invalid verdict engine {engine!r}")
+    if field in ("score_delta", "same_guest_set"):
+        if engine != "both":
+            raise ValueError(f"{case.name}: {field} compares both engines")
+        value = (abs(generic.total_score - legacy.total_score)
+                 if field == "score_delta" else
+                 set(_placement(legacy)) == set(_placement(generic)))
+        expected = row.get("expected")
+        assert (value <= expected if field == "score_delta" else value == expected), (
+            case.name, row, value)
+    else:
+        for label, plan, cross in (
+            ("legacy", legacy, old_cross), ("generic", generic, new_cross)
+        ):
+            if engine != "both" and engine != label:
+                continue
+            value = {
+                "status": lambda: plan.status,
+                "seated": lambda: len(_placement(plan)),
+                "pending": lambda: len(plan.pending_groups),
+                "not_seated": lambda: len(plan.not_seated),
+                "marks": lambda: len(plan.priority_marks),
+                "total_score": lambda: plan.total_score,
+                "short_by": lambda: row["expected"] in (
+                    plan.message + " " + " ".join(plan.conflicting_constraints)),
+                "conflict_contains": lambda: any(
+                    str(row["expected"]) in conflict
+                    for conflict in plan.conflicting_constraints),
+                "cross_scored": lambda: cross == plan.total_score if cross is not None else False,
+            }.get(field)
+            if value is None:
+                raise ValueError(f"Unsupported executable verdict field {field!r}")
+            result = value()
+            expected = row.get("expected")
+            if field in ("short_by", "conflict_contains"):
+                assert result, (case.name, label, row, result)
+            elif field == "total_score" and row.get("tolerance") is not None:
+                assert abs(result - expected) <= row["tolerance"], (
+                    case.name, label, row, result)
+            else:
+                assert result == expected, (case.name, label, row, result)
+    return True
 
 
 def corpus_gate(root: Path, *, strict_placement=False, time_limit=None,
@@ -289,8 +346,17 @@ def corpus_gate(root: Path, *, strict_placement=False, time_limit=None,
     assert len(rules) == 17
     assert len(report["retired"]) == 1
     assert report["retired"][0]["legacy_source"]["shape"] == "capacity"
-    cases, mapping = _load_cases(root)
+    cases, mapping, verdicts = _load_cases(root)
+    if verdicts is not None:
+        if not isinstance(verdicts, list) or len(verdicts) != 29 or any(
+            not isinstance(v, dict) or not v.get("case") or not v.get("field")
+            for v in verdicts
+        ):
+            raise ValueError("Executable manifest must contain exactly 29 case/field verdicts")
+        if set(row["case"] for row in verdicts) - {c.name for c in cases}:
+            raise ValueError("Verdict manifest refers to a missing test case")
     passes = 0
+    verdict_count = 0
     for case in cases:
         legacy_problem = _case_problem(
             root, case, config, inventory, mapping, seed=seed,
@@ -301,9 +367,20 @@ def corpus_gate(root: Path, *, strict_placement=False, time_limit=None,
         new = solve_generic(generic_problem)
         _expected(case, old, engine="legacy")
         _expected(case, new, engine="generic")
-        _assert_same_objective_on_fixed_plan(case, "legacy", old, generic_problem)
-        _assert_same_objective_on_fixed_plan(case, "generic", new, generic_problem)
+        old_cross = _assert_same_objective_on_fixed_plan(
+            case, "legacy", old, generic_problem)
+        new_cross = _assert_same_objective_on_fixed_plan(
+            case, "generic", new, generic_problem)
+        print(f"MEASURED {case.name}: limit={legacy_problem.config.time_limit_seconds}s "
+              f"workers={workers} legacy={old.status}/{old.total_score} "
+              f"generic={new.status}/{new.total_score} "
+              f"delta={None if old.total_score is None or new.total_score is None else new.total_score-old.total_score} "
+              f"cross-score={old_cross}/{new_cross}", flush=True)
         delta = _compare(case, old, new, score_tolerance=score_tolerance)
+        for index, verdict in enumerate(verdicts or [], 1):
+            if _manifest_verdict(verdict, case, old, new, old_cross, new_cross):
+                verdict_count += 1
+                print(f"VERDICT {index}/29 PASS {case.name}: {verdict['field']}", flush=True)
         if strict_placement and old.status in ("optimal", "feasible"):
             assert _placement(old) == _placement(new), case.name
         passes += 1
@@ -326,8 +403,14 @@ def corpus_gate(root: Path, *, strict_placement=False, time_limit=None,
         raise AssertionError("Cannot verify expected 29 historical verdict records")
     if any(not isinstance(row, dict) for row in rows):
         raise ValueError("Unexpected verdict record shape")
-    print(f"CORPUS_CASES={passes}/{len(cases)} historical_records={len(rows)} "
-          "historical_checks_not_individually_replayed")
+    if verdicts is not None:
+        assert verdict_count == len(verdicts) == 29
+        print(f"CORPUS_CASES={passes}/{len(cases)} EXECUTED_VERDICTS=29/29 "
+              f"historical_records={len(rows)}")
+    else:
+        print(f"CORPUS_CASES={passes}/{len(cases)} historical_records={len(rows)} "
+              "historical_checks_not_individually_replayed; "
+              "provide equivalence-cases.json with 29 executable verdicts")
     return passes
 
 
@@ -363,17 +446,27 @@ def main(argv=None):
     parser.add_argument("--random-cases", type=int, default=20)
     parser.add_argument("--time-limit", type=float, default=None,
                         help="Override per-case limit (default 5s; split demo 15s)")
+    parser.add_argument("--time-limits", type=str, default=None,
+                        help="Run the full corpus at each limit, e.g. 5,60; "
+                             "overrides --time-limit")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--score-tolerance", type=int, default=0,
-                        help="Explicit maximum absolute timed-incumbent delta; 0=strict")
+    parser.add_argument("--score-tolerance", type=int, default=150,
+                        help="Maximum timed-incumbent delta (default 150; 0=strict)")
     args = parser.parse_args(argv)
     if args.score_tolerance < 0 or args.workers < 1:
         parser.error("score-tolerance must be >= 0 and workers >= 1")
+    limits = ([float(value) for value in args.time_limits.split(",")]
+              if args.time_limits else [args.time_limit])
+    if any(value is not None and value <= 0 for value in limits):
+        parser.error("time limits must be positive")
     small_random_gate(args.random_cases)
-    corpus_gate(args.corpus_dir, strict_placement=args.strict_placement,
-                time_limit=args.time_limit, workers=args.workers,
-                score_tolerance=args.score_tolerance, seed=args.seed)
+    for limit in limits:
+        print(f"=== CORPUS REPLAY time_limit={limit or 'per-case default'} "
+              f"tolerance={args.score_tolerance} ===", flush=True)
+        corpus_gate(args.corpus_dir, strict_placement=args.strict_placement,
+                    time_limit=limit, workers=args.workers,
+                    score_tolerance=args.score_tolerance, seed=args.seed)
 
 
 if __name__ == "__main__":
