@@ -228,9 +228,8 @@ def test_split_pool_guard_warns_and_never_changes_entered_weight_or_seats():
     assert split.weight == 20
     assert not split_dominance_warnings([split.model_copy(update={"weight": 10**7}),
                                          points], guest_count=6, table_count=2)
-    guests = [person("a", "A", language="Hebrew"),
-              person("b", "B", language="Hebrew")]
-    tables = [Table(id="T", zone_id="z", capacity=2)]
+    guests = [person(f"g{i}", f"family{i}", language="Hebrew") for i in range(6)]
+    tables = [Table(id="T", zone_id="z", capacity=6)]
     result = solve_generic(scene(guests, tables, [split, points]))
     assert result.status == "optimal"
     assert any("Split weight 20" in text for text in result.validation_warnings)
