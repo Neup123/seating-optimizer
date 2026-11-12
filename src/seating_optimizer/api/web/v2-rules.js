@@ -223,7 +223,11 @@ function criterionEditor(criterion, state, changed, options={}) {
   if (options.scope && criterion.subject==="guest")
     row.append(pick("Pair scope",[["within","Within families"],["across","Across families"]],
       criterion.scope || "across",value=>set("scope",value),"criterion-scope"));
-  control.append(row, valuePicker(criterion,field,(key,value)=>set(key,value),"criterion-value"));
+  const valueControl=valuePicker(criterion,field,(key,value)=>set(key,value),"criterion-value");
+  // A single scalar value belongs on the same baseline as field and operator.
+  // Multi-value pickers have an independent row for their checkbox series.
+  if (criterion.op === "in") control.append(row,valueControl);
+  else { row.append(valueControl); control.append(row); }
   return control;
 }
 function multi(label,choices,values,change) {
@@ -353,7 +357,7 @@ export function renderGenericRules(state, actions) {
     },"primary icon-button","add-rule")));
   builder.append(frame);outer.append(builder);
   const list=node("section","rules-list");
-  list.append(line(node("h2","","Considerations"),node("span","pill",state.rules.length+" instances")));
+  list.append(line(node("h2","","Considerations"),node("span","pill",state.rules.length+" "+(state.rules.length===1?"instance":"instances"))));
   if(!state.rules.length)list.append(node("p","empty","No considerations yet."));
   state.rules.forEach((rule,index)=>{
     const spec=catalog.find(c=>c.engine===rule.engine&&c.mechanism===rule.mechanism);
