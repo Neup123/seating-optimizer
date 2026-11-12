@@ -393,7 +393,7 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
 .compact-status h2{font-size:16px;margin:0}
 .compact-status .muted{margin:0}
 .compact-status .problem{flex-basis:100%}
-.rule-accordion-body .control-row>.compact-field{flex:0 1 auto}
-.rule-accordion-body .control-row>.compact-field:first-child{flex:1 1 250px}
-.rule-accordion-body .control-row>.compact-field:nth-child(2){flex:1 1 190px}
+.rule-accordion-body>.control-row>.compact-field{flex:0 1 auto}
+.rule-accordion-body>.control-row>.compact-field:first-child{flex:1 1 250px}
+.rule-accordion-body>.control-row>.compact-field:nth-child(2){flex:1 1 190px}
 @media(max-width:620px){.compact-status{align-items:flex-start;flex-direction:column}}
