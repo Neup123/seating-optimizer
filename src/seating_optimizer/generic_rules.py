@@ -116,8 +116,13 @@ class Criterion(BaseModel):
             raise ValueError("Pair scope applies only to guest criteria")
         if self.subject == "family" and family_field_spec(self.field) is None:
             raise ValueError(f"Unknown family aggregate {self.field!r}")
-        if self.subject == "family" and family_field_spec(self.field)[0] == "any" and self.value is None:
-            raise ValueError("any(field) requires a comparison value")
+        if self.subject == "family":
+            if family_field_spec(self.field)[0] == "any" and self.value is None:
+                raise ValueError("any(field) requires a comparison value")
+            if self.value is not None and (self.op == "in" and
+                any(not _number(v) for v in self.value) or self.op != "in" and
+                not _number(self.value)):
+                raise ValueError("Family numeric aggregates require numeric comparison values")
         return self
 
 
@@ -136,7 +141,7 @@ def _coerce(actual: Any, expected: Any) -> tuple[Any, Any]:
         if isinstance(actual, str) and actual.strip().casefold() in ("true", "false"):
             return actual.strip().casefold() == "true", expected
         return actual, expected
-    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+    if _number(expected):
         return (float(actual), float(expected)) if _number(actual) else (actual, expected)
     return str(actual), str(expected)
 
