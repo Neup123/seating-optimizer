@@ -19,6 +19,9 @@ from seating_optimizer import (
     ImportPreview, RuleCatalog,
 )
 from seating_optimizer.importer import ImportResult
+from seating_optimizer.generic_rules import mechanism_catalog
+from seating_optimizer.generic_solver import (GenericProblem, GenericPlan, GenericVenueConfiguration, solve_generic)
+from seating_optimizer.rule_migration import migrate_configuration
 from seating_optimizer.reassignment import ReassignRequest, ReassignResponse, propose_reassignment
 
 
@@ -76,6 +79,29 @@ def create_app() -> FastAPI:
     @app.get("/v1/rules/catalog", response_model=RuleCatalog)
     def get_rule_catalog() -> RuleCatalog:
         return rule_catalog()
+
+    @app.get("/v2/rules/catalog")
+    def get_generic_rule_catalog() -> list[dict]:
+        """Derive v2 catalog from the generic mechanism registry."""
+        return mechanism_catalog()
+
+    @app.post("/v2/configurations/migrate")
+    def migrate_v1_configuration(configuration: VenueConfiguration) -> dict:
+        """Read v1 and produce the v2-only writing representation plus ledger."""
+        result, report = migrate_configuration(configuration.model_dump(mode="json"))
+        return {"configuration": result, "report": report}
+
+    @app.post("/v2/configurations/validate", response_model=GenericVenueConfiguration)
+    def validate_v2_configuration(configuration: GenericVenueConfiguration) -> GenericVenueConfiguration:
+        """Validate version-2 writing schema without touching legacy config."""
+        return configuration
+
+    @app.post("/v2/solve", response_model=GenericPlan)
+    def solve_generic_problem(problem: GenericProblem) -> GenericPlan:
+        try:
+            return solve_generic(problem)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/v1/layouts/import", response_model=VenueLayout)
     def import_venue(request: LayoutImportRequest) -> VenueLayout:

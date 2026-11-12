@@ -66,6 +66,81 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/RuleCatalog'}
+  /v2/rules/catalog:
+    get:
+      operationId: listGenericMechanisms
+      summary: Discover generic engine mechanisms derived from the registry
+      responses:
+        '200':
+          description: Engine, mechanism and supported modes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [engine, mechanism, modes]
+                  properties:
+                    engine: {type: string, enum: [intra, inter, venue, stage]}
+                    mechanism: {type: string}
+                    modes: {type: array, items: {type: string}}
+  /v2/configurations/migrate:
+    post:
+      operationId: migrateLegacyConfiguration
+      summary: Convert a v1 configuration to v2 with full retirement ledger
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/VenueConfiguration'}
+      responses:
+        '200':
+          description: Version 2 writing representation and migration report
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [configuration, report]
+                properties:
+                  configuration: {$ref: '#/components/schemas/GenericVenueConfiguration'}
+                  report: {type: object}
+        '422':
+          description: Invalid v1 configuration
+  /v2/configurations/validate:
+    post:
+      operationId: validateGenericConfiguration
+      summary: Validate a v2 venue configuration without persistence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericVenueConfiguration'}
+      responses:
+        '200':
+          description: Version 2 configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GenericVenueConfiguration'}
+        '422':
+          description: Invalid v2 configuration
+  /v2/solve:
+    post:
+      operationId: solveGenericSession
+      summary: Run CP-SAT with engine/mechanism/criterion rule instances
+      description: The v1 solver remains available on /v1/solve during the shadow comparison window.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericProblem'}
+      responses:
+        '200':
+          description: Generic plan with exact score breakdown and unseated-reason records
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GenericPlan'}
+        '422':
+          description: Invalid v2 rules, references or criteria
   /v1/layouts/import:
     post:
       operationId: importVenueLayout
@@ -324,6 +399,117 @@ paths:
               schema: {type: string}
 components:
   schemas:
+    GenericCriterion:
+      type: object
+      additionalProperties: false
+      required: [field]
+      properties:
+        subject: {type: string, enum: [guest, family, pair, table], default: guest}
+        field: {type: string, minLength: 1}
+        op: {type: string, enum: ['==', '!=', '<', '<=', '>', '>=', in], default: '=='}
+        value: {}
+        scope: {type: string, enum: [within, across]}
+    GenericRule:
+      type: object
+      additionalProperties: false
+      required: [id, engine, mechanism, mode]
+      properties:
+        id: {type: string, minLength: 1}
+        name: {type: string}
+        description: {type: string}
+        enabled: {type: boolean, default: true}
+        engine: {type: string, enum: [intra, inter, venue, stage]}
+        mechanism: {type: string, minLength: 1}
+        mode: {type: string, enum: [hard, soft, staged, mark]}
+        polarity: {type: [string, 'null'], enum: [reward, penalty, null]}
+        weight: {type: [integer, 'null'], minimum: 1}
+        criterion: {$ref: '#/components/schemas/GenericCriterion'}
+        target: {type: [string, 'null']}
+        targets: {type: array, items: {type: string}}
+        relation: {type: string, enum: [together, apart]}
+        property: {type: [string, 'null']}
+        table: {type: [string, 'null']}
+        zones: {type: array, items: {type: string}}
+        tiers: {type: array, items: {type: object}}
+        conditions: {type: array, items: {type: object}}
+        exclusions: {type: array, items: {type: string}}
+        grade: {type: [integer, 'null'], minimum: 1}
+        selector: {type: string, enum: [direct, criterion]}
+        unit: {type: [string, 'null']}
+        legacy_source: {type: [object, 'null']}
+    GenericProblem:
+      type: object
+      additionalProperties: false
+      required: [session_id, zones, tables, guests]
+      properties:
+        session_id: {type: string}
+        zones: {type: array, items: {$ref: '#/components/schemas/Zone'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/Table'}}
+        guests: {type: array, items: {$ref: '#/components/schemas/Guest'}}
+        rules: {type: array, items: {$ref: '#/components/schemas/GenericRule'}}
+        manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
+        locked_guest_tables: {type: object, additionalProperties: {type: string}}
+        splittable_groups: {type: array, items: {type: string}}
+        config: {$ref: '#/components/schemas/SolverConfig'}
+        layout:
+          anyOf:
+            - {$ref: '#/components/schemas/VenueLayout'}
+            - {type: 'null'}
+    GenericVenueConfiguration:
+      type: object
+      additionalProperties: false
+      required: [version, name, zones, tables, layout]
+      properties:
+        version: {type: integer, const: 2}
+        name: {type: string, minLength: 1}
+        zones: {type: array, items: {$ref: '#/components/schemas/Zone'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/Table'}}
+        layout: {$ref: '#/components/schemas/VenueLayout'}
+        rules: {type: array, items: {$ref: '#/components/schemas/GenericRule'}}
+    GenericPlan:
+      type: object
+      additionalProperties: false
+      required: [session_id, status, total_score, assignments, tables, score_breakdown, compromises, conflicting_constraints, solve_seconds, message]
+      properties:
+        session_id: {type: string}
+        status: {type: string, enum: [optimal, feasible, infeasible, unknown, needs_review]}
+        priority_marks: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        pending_groups: {type: array, items: {$ref: '#/components/schemas/PriorityMark'}}
+        not_seated: {type: array, items: {$ref: '#/components/schemas/NotSeatedGroup'}}
+        manual_instructions: {type: array, items: {$ref: '#/components/schemas/ManualInstruction'}}
+        total_score: {type: [integer, 'null']}
+        assignments: {type: array, items: {$ref: '#/components/schemas/Assignment'}}
+        tables: {type: array, items: {$ref: '#/components/schemas/TableUsage'}}
+        score_breakdown: {type: array, items: {$ref: '#/components/schemas/ScoreItem'}}
+        pattern_matches:
+          type: array
+          description: Per-table matches (including empty tables) of enabled global pattern rules.
+          items: {$ref: '#/components/schemas/PatternMatch'}
+        compromises: {type: array, items: {$ref: '#/components/schemas/Compromise'}}
+        conflicting_constraints: {type: array, items: {type: string}}
+        solve_seconds: {type: number}
+        message: {type: string}
+        layout:
+          anyOf:
+            - {$ref: '#/components/schemas/VenueLayout'}
+            - {type: 'null'}
+        validation_warnings: {type: array, items: {type: string}}
+        criterion_states: {type: array, items: {type: object}}
+        unseated_reasons:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [group_id, group_name, guest_ids, guest_names, reason, status, description]
+            properties:
+              group_id: {type: string}
+              group_name: {type: string}
+              guest_ids: {type: array, items: {type: string}}
+              guest_names: {type: array, items: {type: string}}
+              reason: {type: string, enum: [lack_of_space, operator_decision]}
+              status: {type: string, enum: [pending, confirmed]}
+              description: {type: string}
+
     Zone:
       type: object
       additionalProperties: false
