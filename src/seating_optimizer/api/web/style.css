@@ -342,3 +342,23 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
  .rule-accordion-head .danger-icon{font-size:14px}
  .list-modes{border:0;padding-left:0}
 }
+
+
+/* Prevent desktop inline controls from imposing minimum widths on mobile columns. */
+@media(max-width:920px){
+  .shell{grid-template-columns:minmax(0,1fr);max-width:100%}
+  .sidebar,.workspace,.nav,.topline,.card,.stack,.import-flow,.rules-flow,.map-layout{min-width:0;max-width:100%}
+  .sidebar{overflow:hidden}
+  .nav{flex:1 1 auto;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  .nav button{flex:0 0 auto;width:auto}
+  .workspace{width:100%;overflow-wrap:anywhere}
+}
+@media(max-width:620px){
+  .topline>.stats{min-width:0;max-width:100%}
+  .table-scroll{max-width:100%;overflow-x:auto}
+  .map-canvas svg{max-width:100%}
+  .form-measure .row{max-width:100%}
+  .form-measure .field{max-width:100%;min-width:0}
+  .form-measure :is(input,select,textarea){max-width:100%}
+  .nav{max-width:calc(100vw - 30px)}
+}
