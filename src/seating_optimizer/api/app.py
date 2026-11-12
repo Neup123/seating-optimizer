@@ -300,6 +300,80 @@ def create_app() -> FastAPI:
         return Response(content=pdf, media_type="application/pdf",
                         headers={"Content-Disposition": 'attachment; filename="table-cards.pdf"'})
 
+    # V2 export contract accepts the full GenericPlan without discarding
+    # criterion states or operator decision records. Rendering is server-owned.
+    @app.post("/v2/exports/table", response_class=PlainTextResponse)
+    def generic_table_export(plan: GenericPlan) -> str:
+        return render_table(plan)
+
+    @app.post("/v2/exports/json")
+    def generic_json_export(plan: GenericPlan) -> Response:
+        return Response(content=render_json(plan), media_type="application/json")
+
+    @app.post("/v2/exports/people-list/html", response_class=HTMLResponse)
+    def generic_people_list_export(
+        plan: GenericPlan, group_by: Literal["combined", "floor"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+        fields: list[str] | None = Query(default=None),
+        field_labels: list[str] | None = Query(default=None),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_people_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons,
+                fields=fields, field_labels=field_labels
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/table-list/html", response_class=HTMLResponse)
+    def generic_table_list_export(
+        plan: GenericPlan, group_by: Literal["combined", "table"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+        fields: list[str] | None = Query(default=None),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_table_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons, fields=fields
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/not-seated-list/html", response_class=HTMLResponse)
+    def generic_not_seated_list_export(plan: GenericPlan) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_not_seated_list_html(plan))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/floor-map/svg", response_model=SvgFloorBundle)
+    def generic_floor_svg_export(plan: GenericPlan) -> SvgFloorBundle:
+        try:
+            return render_floor_svg(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/floor-map/pdf")
+    def generic_floor_pdf_export(plan: GenericPlan) -> Response:
+        try:
+            pdf = render_floor_pdf(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="floor-maps.pdf"'})
+
+    @app.post("/v2/exports/table-cards/pdf")
+    def generic_table_cards_export(
+        plan: GenericPlan, cards_per_page: int = Query(default=1)
+    ) -> Response:
+        if cards_per_page not in (1, 2, 4):
+            raise HTTPException(status_code=422, detail="cards_per_page must be 1, 2 or 4")
+        try:
+            pdf = render_table_cards_pdf(plan, cards_per_page=cards_per_page)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="table-cards.pdf"'})
+
     @app.get("/openapi.yaml", response_class=PlainTextResponse)
     def openapi_yaml() -> str:
         return files("seating_optimizer.api").joinpath("openapi.yaml").read_text(encoding="utf-8")
