@@ -419,3 +419,92 @@ test("errors remain actionable and retry is kept on failed generic solve",async(
   assert.match($("#notice").textContent,/503/);
   assert.equal(app.state.guests.length,3);
 });
+
+
+test("F1/U14: 43 guests, seven tables and six migrated rules show the +6 named plan-wide score", async () => {
+  const {app,root,$}=await setup();
+  const hebrew = {id:"hebrew-upper-preference",name:"",engine:"venue",
+    mechanism:"placement_by_criterion",mode:"soft",weight:2,polarity:"reward",
+    criterion:{subject:"guest",field:"language",op:"==",value:"Hebrew"},zones:["upper"]};
+  app.state.rules=[hebrew,
+    ...["split_term","holes_term","property_need","priority_mark","companionship"]
+      .map((mechanism,index)=>({id:"migrated-"+index,name:"",engine:"venue",mechanism,
+        mode:"soft",weight:1,enabled:true}))];
+  const guests=Array.from({length:43},(_,i)=>({id:"p"+i,name:i<3?"India Family ("+(i+1)+"/3)":"Guest "+i,
+    group_id:i<3?"india":"visitor-"+i,group_name:i<3?"India Family":"Visitor "+i,
+    attributes:{language:i<3?"Hebrew":"English"}}));
+  app.state.guests=guests;
+  const tables=["B1","A1","A2","A3","A4","A5","A6"].map((id,i)=>({
+    table_id:id,zone_id:i===0?"upper":"ground",capacity:10,occupied:i===0?3:7,
+    empty_seats:i===0?7:3
+  }));
+  app.state.plan={...plan,total_score:6,
+    score_breakdown:[{rule_id:"hebrew-upper-preference",points:6}],
+    tables,assignments:[{group_id:"india",group_name:"India Family",table_id:"B1",
+      guest_ids:["p0","p1","p2"],guest_names:["India Family (1/3)","India Family (2/3)","India Family (3/3)"],
+      points:0,reasons:[{rule_id:"capacity",description:"Within chair capacity",points:0}]}]};
+  app.show("plan");
+  assert.equal(app.state.guests.length,43);
+  assert.equal(app.state.tables.length,0); // Seven tables are API plan facts, not fabricated venue state.
+  assert.equal(app.state.plan.tables.length,7);
+  assert.equal(app.state.rules.length,6);
+  assert.match($(".score-breakdown").textContent,/Place matching guests on floors: language is Hebrew: \+6 points/);
+  assert.doesNotMatch($(".score-breakdown").textContent,/hebrew-upper-preference|Unnamed consideration/);
+  assert.match(root.textContent,/No assignment-specific score — see plan breakdown/);
+  click($('.plan-entry [title="Details"]'));
+  assert.match($(".plan-details").textContent,/Plan-wide scoring \(not attributed to this family\)/);
+  assert.match($(".plan-details").textContent,/language is Hebrew: \+6 points/);
+  assert.doesNotMatch($(".plan-details").textContent,/No matching rule records/);
+});
+
+test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mobile panes", async () => {
+  const {app,$,root}=await setup();
+  app.show("import");
+  assert.ok($("#guest-file").classList.contains("visually-hidden-file"));
+  assert.equal($("#guest-file-trigger").title,"Choose guest list spreadsheet (CSV or XLSX)");
+  assert.equal($("#guest-file-trigger").getAttribute("aria-label"),$("#guest-file-trigger").title);
+  seed(app);
+  app.show("map");
+  for (const id of ["configuration-file","layout-file"]) {
+    assert.ok($("#"+id).classList.contains("visually-hidden-file"));
+    assert.ok($("#"+id+"-trigger").title.length>10);
+  }
+  for (const id of ["save-template","export-configuration","load-template","duplicate-template",
+    "delete-template","validate-layout","export-layout","add-floor","add-table"]) {
+    const action=$("#"+id);
+    assert.ok(action,id+" must exist");
+    assert.ok(action.classList.contains("icon-button"),id+" must be an icon action");
+    assert.ok(action.title.length>4,id+" requires complete tooltip");
+    assert.equal(action.getAttribute("aria-label"),action.title);
+  }
+  assert.equal($("#add-table").textContent.trim(),"＋");
+  assert.equal($("#new-table-small-priority").parentElement.className,"priority-checkbox");
+  assert.equal($("#table-G1-small-priority").parentElement.className,"priority-checkbox");
+  assert.equal($(".map-layout").dataset.mobilePane,"map");
+  click($("#venue-mobile-tables"));
+  assert.equal($(".map-layout").dataset.mobilePane,"tables");
+  assert.equal($("#venue-mobile-tables").getAttribute("aria-pressed"),"true");
+  click($("#venue-mobile-map"));
+  assert.equal($(".map-layout").dataset.mobilePane,"map");
+  assert.ok(root.querySelector("#map-editor-svg"));
+});
+
+test("F2: network failure retains the last successful plan after edited inputs invalidate it", async () => {
+  const {app,dom,$,root}=await setup(async path=>{
+    if(path==="/v2/solve")throw Error("Server returned 503");
+    return {};
+  });
+  seed(app);
+  app.state.plan=structuredClone(plan);
+  app.show("plan");
+  // Changing an input marks the old plan stale, but it can still be displayed on failure.
+  setValue($("#time-limit"),"4",dom.window);
+  assert.equal(app.state.plan,null);
+  click($("#solve-plan"));
+  await until(()=>!!$("#retry-action"));
+  assert.equal(app.state.plan.total_score,8);
+  assert.match(root.textContent,/Solution · FEASIBLE/);
+  assert.match(root.textContent,/Showing the last successful plan/);
+  assert.match($("#notice").textContent,/503/);
+  assert.ok($(".plan-entry"));
+});
