@@ -141,6 +141,26 @@ paths:
               schema: {$ref: '#/components/schemas/GenericPlan'}
         '422':
           description: Invalid v2 rules, references or criteria
+  /v2/reassign/options:
+    post:
+      operationId: previewGenericReassignment
+      summary: Solver-check an operator move using generic v2 rule records
+      description: Preview only. Uses the generic solver for the full candidate and preserves manual instruction authority. Nothing is applied until the operator confirms a returned option.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericReassignRequest'}
+      responses:
+        '200':
+          description: Feasible v2 option with movements, affected people, score and rule warnings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GenericReassignResponse'}
+        '409':
+          description: Plan is stale
+        '422':
+          description: Invalid operator instruction
   /v1/layouts/import:
     post:
       operationId: importVenueLayout
@@ -867,6 +887,34 @@ components:
             - {$ref: '#/components/schemas/VenueLayout'}
             - {type: 'null'}
 
+    GenericReassignRequest:
+      type: object
+      additionalProperties: false
+      required: [problem, plan, instruction]
+      properties:
+        problem: {$ref: '#/components/schemas/GenericProblem'}
+        plan: {$ref: '#/components/schemas/GenericPlan'}
+        instruction: {$ref: '#/components/schemas/ManualInstruction'}
+    GenericReassignOption:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, movements, score_delta, soft_rule_warnings, plan]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [solver-checked]}
+        title: {type: string}
+        movements: {type: array, items: {$ref: '#/components/schemas/Movement'}}
+        score_delta: {type: integer}
+        soft_rule_warnings: {type: array, items: {type: string}}
+        plan: {$ref: '#/components/schemas/GenericPlan'}
+    GenericReassignResponse:
+      type: object
+      additionalProperties: false
+      required: [status, options, blockers]
+      properties:
+        status: {type: string, enum: [available, blocked, unknown]}
+        options: {type: array, items: {$ref: '#/components/schemas/GenericReassignOption'}}
+        blockers: {type: array, items: {type: string}}
     ReassignRequest:
       type: object
       additionalProperties: false
