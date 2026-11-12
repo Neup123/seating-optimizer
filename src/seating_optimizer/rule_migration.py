@@ -49,7 +49,9 @@ def migrate_instance(rule: Any) -> GenericRule | None:
     }
     if shape == "attribute_grouping":
         data = dict(engine="inter", mechanism="criterion_pairs",
-                    criterion={**_criterion(p), "scope": "across"},
+                    # Unscoped B2 retains legacy all-pairs scoring, including
+                    # 21 same-family pairs in the §13.1 seven-person golden.
+                    criterion=_criterion(p),
                     polarity=p.get("effect", "reward"))
     elif shape == "zone_restriction":
         data = dict(engine="venue", mechanism="placement_by_criterion",
@@ -135,7 +137,8 @@ def migrate_rules(items: list[Any]) -> tuple[list[GenericRule], dict[str, Any]]:
         "instance_ids": [item.id for item in converted],
         "compatibility_notes": [
             "Legacy attribute_grouping includes same-family pair points; "
-            "v2 criterion_pairs preserves them even when scope=across (§13.1).",
+            "migrated v2 criterion_pairs leaves scope unset for all-pairs "
+            "parity (§13.1); explicit across excludes same-family pairs.",
             "Legacy soft table-property needs earn rewards when satisfied; "
             "v2 property_need penalizes unsatisfied affected guests.",
         ],

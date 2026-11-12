@@ -7,6 +7,8 @@ keeps its original data without validating the mechanism's content.
 from __future__ import annotations
 
 import builtins
+import math
+import re
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any, Literal, Mapping, Sequence
@@ -37,6 +39,41 @@ ENGINES = {
     "stage": {"priority_mark": ("mark",)},
 }
 OPERATORS = ("==", "!=", "<", "<=", ">", ">=", "in")
+_FAMILY_AGGREGATE = re.compile(r"^(min|max|any)\(([A-Za-z_][A-Za-z0-9_]*)\)$")
+_FAMILY_ALIASES = {
+    "youngest_age(family)": ("min", "age"),
+    "oldest_age(family)": ("max", "age"),
+}
+
+
+def family_field_spec(field: str) -> tuple[str, str | None] | None:
+    """Parse an explicitly named family aggregate, without executing input."""
+    if field == "party_size":
+        return "size", None
+    if field in _FAMILY_ALIASES:
+        return _FAMILY_ALIASES[field]
+    match = _FAMILY_AGGREGATE.fullmatch(field)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def family_value(members: Sequence[Any], field: str) -> int | float | list[float] | None:
+    """Aggregate numeric guest attributes; missing values never become zero."""
+    spec = family_field_spec(field)
+    if spec is None:
+        return None
+    aggregate, member_field = spec
+    if aggregate == "size":
+        return len(members)
+    values = [guest_value(member, member_field) for member in members]
+    numbers = [float(value) for value in values if _number(value)]
+    if not numbers:
+        return None
+    if aggregate == "min":
+        return min(numbers)
+    if aggregate == "max":
+        return max(numbers)
+    return numbers  # any(field): existential comparison over family members
+
 SCORING_POLARITY = {
     ("intra", "split_term"): "penalty",
     ("inter", "companionship"): "penalty",
@@ -57,9 +94,16 @@ class Criterion(BaseModel):
 
     @model_validator(mode="after")
     def check(self) -> "Criterion":
+        if family_field_spec(self.field) is not None and self.field != "party_size":
+            self.subject = "family"
         if self.op == "in":
             if not isinstance(self.value, list) or not self.value:
                 raise ValueError("'in' requires a nonempty value list")
+            kinds = {"bool" if isinstance(v, bool) else "number" if _number(v)
+                     else "text" if isinstance(v, str) else "invalid"
+                     for v in self.value}
+            if len(kinds) != 1 or "invalid" in kinds:
+                raise ValueError("'in' requires homogeneous scalar values")
         elif isinstance(self.value, (list, dict)):
             raise ValueError("Comparison value must be a scalar")
         elif self.value is None and self.op != "==":
@@ -68,15 +112,23 @@ class Criterion(BaseModel):
             isinstance(self.value, bool) or not _number(self.value)
         ):
             raise ValueError("Ordered comparisons require a numeric value")
-        if self.scope is not None and self.subject not in ("guest", "pair"):
-            raise ValueError("Pair scope only applies to guest/pair criteria")
+        if self.scope is not None and self.subject != "guest":
+            raise ValueError("Pair scope applies only to guest criteria")
+        if self.subject == "family" and family_field_spec(self.field) is None:
+            raise ValueError(f"Unknown family aggregate {self.field!r}")
+        if self.subject == "family":
+            if family_field_spec(self.field)[0] == "any" and self.value is None:
+                raise ValueError("any(field) requires a comparison value")
+            if self.value is not None and (self.op == "in" and
+                any(not _number(v) for v in self.value) or self.op != "in" and
+                not _number(self.value)):
+                raise ValueError("Family numeric aggregates require numeric comparison values")
         return self
 
 
 def _number(value: Any) -> bool:
     try:
-        float(value)
-        return not isinstance(value, bool)
+        return not isinstance(value, bool) and math.isfinite(float(value))
     except (TypeError, ValueError, OverflowError):
         return False
 
@@ -89,7 +141,7 @@ def _coerce(actual: Any, expected: Any) -> tuple[Any, Any]:
         if isinstance(actual, str) and actual.strip().casefold() in ("true", "false"):
             return actual.strip().casefold() == "true", expected
         return actual, expected
-    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+    if _number(expected):
         return (float(actual), float(expected)) if _number(actual) else (actual, expected)
     return str(actual), str(expected)
 
@@ -137,9 +189,12 @@ def match_family(members: Sequence[Any], criterion: Criterion | Mapping[str, Any
     c = criterion if isinstance(criterion, Criterion) else Criterion.model_validate(criterion)
     if c.subject != "family":
         raise ValueError("Family matcher requires subject=family")
-    value = len(members) if c.field == "party_size" else None
-    # Later family aggregates can be added here without changing the schema.
-    return value is not None and compare_value(value, c.op, c.value)
+    value = family_value(members, c.field)
+    if value is None:
+        return False
+    if isinstance(value, list):
+        return any(compare_value(item, c.op, c.value) for item in value)
+    return c.value is None or compare_value(value, c.op, c.value)
 
 
 @dataclass(frozen=True)
@@ -153,16 +208,24 @@ class CriterionFieldState:
 def criterion_field_state(guests: Sequence[Any], criterion: Criterion) -> CriterionFieldState:
     """Convey absent-column/inert state to the future editor, without guessing."""
     if criterion.subject == "family":
-        if criterion.field == "party_size":
+        spec = family_field_spec(criterion.field)
+        if spec is None:
+            return CriterionFieldState(criterion.field, False, False,
+                                       f"Unknown family aggregate {criterion.field!r}")
+        if spec[0] == "size":
             return CriterionFieldState(criterion.field, True, True)
-        return CriterionFieldState(criterion.field, False, True,
-                                   f"No family aggregate named {criterion.field!r}")
-    values = [guest_value(g, criterion.field) for g in guests]
+        values = [guest_value(g, spec[1]) for g in guests]
+    else:
+        values = [guest_value(g, criterion.field) for g in guests]
     found = [v for v in values if v is not None]
     if not found:
         return CriterionFieldState(criterion.field, False, True,
                                    f"Field {criterion.field!r} is absent; rule matches no guests")
-    if criterion.op in ("<", "<=", ">", ">=") and any(not _number(v) for v in found):
+    needs_number = (criterion.subject == "family" or
+                    criterion.op in ("<", "<=", ">", ">=") or
+                    _number(criterion.value) and not isinstance(criterion.value, bool) or
+                    criterion.op == "in" and all(_number(v) for v in criterion.value))
+    if needs_number and any(not _number(v) for v in found):
         return CriterionFieldState(criterion.field, True, False,
                                    f"Field {criterion.field!r} contains nonnumeric values")
     return CriterionFieldState(criterion.field, True, True)
@@ -261,14 +324,18 @@ class GenericRule(BaseModel):
             if c["fact"] == "count":
                 if "criterion" not in c:
                     raise ValueError("count() requires a criterion")
-                Criterion.model_validate(c["criterion"])
+                if Criterion.model_validate(c["criterion"]).subject != "guest":
+                    raise ValueError("count() requires a guest criterion")
+            elif "criterion" in c:
+                raise ValueError("Only count() may carry a nested criterion")
         if self.mechanism in ("criterion_pairs", "own_attribute_grouping",
                               "placement_by_criterion", "property_need", "property_fit") and self.criterion is None:
             raise ValueError(f"{self.mechanism} needs a criterion")
-        if self.mechanism == "criterion_pairs" and self.criterion.get("scope", "across") != "across":
-            raise ValueError("Inter-family criterion pairs require scope=across")
-        if self.mechanism == "own_attribute_grouping" and self.criterion.get("scope") != "within":
-            raise ValueError("Own-attribute grouping requires scope=within")
+        if self.mechanism in ("criterion_pairs", "own_attribute_grouping"):
+            if Criterion.model_validate(self.criterion).subject != "guest":
+                raise ValueError("Pair grouping requires a guest criterion")
+            # None means historical B2 all-pairs / A3 within-family behavior.
+            # Explicit within/across have their literal pair-filter meaning.
         if self.mechanism == "pair_relation" and (
             not self.targets or len(self.targets) != 2 or self.relation is None
         ):
