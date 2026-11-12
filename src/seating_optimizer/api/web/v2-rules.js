@@ -113,8 +113,8 @@ function parties(guests) {
 }
 function makeCriterion(fields, scope = false) {
   const f = fields.find(field=>!field.family && field.field!=="name") || fields[0];
-  return {subject:"guest",field:f?.field || "party_size",op:"==",
-    value:f?.values[0] ?? 1,...(scope?{scope:"across"}:{})};
+  return {subject:"guest",field:f?.field || "name",op:"==",
+    value:f?.values[0] ?? null,...(scope?{scope:"across"}:{})};
 }
 export function createGenericRule(spec, state) {
   const fields=observedFields(state.guests);
@@ -122,11 +122,12 @@ export function createGenericRule(spec, state) {
   const mechanism=spec.mechanism;
   const mode=spec.modes.includes("soft")?"soft":spec.modes[0];
   const rule={id:"rule-"+state.nextRule++,name:LABELS[mechanism] || mechanism,
-    description:"",enabled:true,engine:spec.engine,mechanism,mode,
+    description:"",enabled:state.guests.length > 0 || !NEEDS_CRITERION.has(mechanism),engine:spec.engine,mechanism,mode,
     polarity:mode==="soft"?(FIXED_POLARITY[mechanism] || "reward"):null,
     weight:mode==="soft"?5:null};
   if (NEEDS_CRITERION.has(mechanism)) rule.criterion=makeCriterion(fields,
     mechanism==="criterion_pairs");
+  if (mechanism==="own_attribute_grouping") rule.criterion.scope="within";
   if (mechanism==="pair_relation") {
     rule.targets=[people[0]?.[0] || "",people[1]?.[0] || people[0]?.[0] || ""];
     rule.relation="together";
@@ -282,15 +283,20 @@ function mechanismFields(rule,state,changed) {
     }
     case "locked_assignment":
       region.append(line(fromGroups(),pick("Table",tables,rule.table,v=>commit("table",v))));break;
-    case "priority_mark":
+    case "priority_mark": {
+      const grades=state.rules.filter(r=>r.mechanism==="priority_mark")
+        .map(r=>r.grade || 1);
+      const highest=Math.max(1,...grades,rule.grade || 1);
+      const choices=Array.from({length:highest+1},(_,i)=>[i+1,"Grade "+(i+1)]);
       region.append(line(pick("Selector",[["direct","One family"],["criterion","Matching families"]],
         rule.selector,value=>{
           rule.selector=value;
           if(value==="criterion"&&!rule.criterion)rule.criterion=makeCriterion(observedFields(state.guests));
           changed();
-        }),pick("Grade",Array.from({length:10},(_,i)=>[i+1,"Grade "+(i+1)]),
+        }),pick("Grade",choices,
         rule.grade||1,value=>commit("grade",Number(value)))));
       region.append(rule.selector==="criterion"?criterion():fromGroups());break;
+    }
     case "companionship":
       region.append(multi("Exempt families",namedParties,rule.exclusions,
         value=>commit("exclusions",value)));break;
@@ -369,13 +375,15 @@ export function renderGenericRules(state, actions) {
     checkbox.setAttribute("aria-label","Enable "+rule.name);checkbox.id="rule-enabled-"+index;
     checkbox.addEventListener("change",()=>{rule.enabled=checkbox.checked;changed();});
     switchLabel.append(checkbox);
-    const remove=button("⌫","Remove "+rule.name,()=>{
+    const remove=button("🗑","Remove "+rule.name,()=>{
       state.rules.splice(index,1);if(open)state.expandedRuleId=null;changed();
     },"icon-button danger-icon","delete-rule-"+index);
     head.append(expander,headline,badge,weight,switchLabel,remove);
     item.append(head);
     if(open){
       const body=node("div","rule-accordion-body");
+      if (!state.guests.length && NEEDS_CRITERION.has(rule.mechanism))
+        body.append(node("span","draft-status","Draft · Import guests to choose this criterion"));
       body.append(line(edit("Name",rule.name,value=>commitName(value)),
         edit("Note",rule.description || "",value=>{rule.description=value;changed();})));
       function commitName(value){rule.name=value.trim()||LABELS[rule.mechanism];changed();}
