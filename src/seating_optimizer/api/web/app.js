@@ -1065,22 +1065,29 @@ export function createApp(root, api = createGateway()) {
   function explainRuleRefs(value) {
     // Keep the server's machine identifiers intact in Plan/JSON, but show
     // the operator's name next to them in human-facing diagnostics.
-    return String(value).replace(/\brule:([\w.-]+)/g, (whole, id) => {
-      const label = ruleLabel(state.rules.find(rule => rule.id === id), id);
-      return label === id ? whole : label + " [rule:" + id + "]";
-    });
+    let output = String(value);
+    for (const rule of state.rules) {
+      if (!rule?.name) continue;
+      output = output.replaceAll("rule:" + rule.id, rule.name);
+    }
+    return output.replace(/rule:[\w.-]+/g, "an unnamed consideration");
   }
   function renderPlan() {
     const area = element("div");
-    const controls = card("Solve seating", "Optimization runs only in the API. Hard constraints remain mandatory; time-limited results report feasible versus optimal.");
+    const controls = card("Solve seating");
+    const advanced = element("details", "advanced-settings");
+    if (state.advancedSolver) advanced.open = true;
+    advanced.addEventListener("toggle", () => { state.advancedSolver = advanced.open; saveSession(); });
+    advanced.append(element("summary", "", "Advanced solver settings"),
+      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
+        { id: "time-limit", type: "number", min: 0.1, step: 0.1 }));
     controls.append(row(
-      textField("Session ID", state.sessionId, v => { state.sessionId = v; invalidate(); },
-        { id: "session-id", required: true }),
-      textField("Solver time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
-        { id: "time-limit", type: "number", min: 0.1, step: 0.1 }),
       action("Optimize seating", () => attempt(async () => {
         const problem = projectProblem();
-        const plan = await api.post("/v2/solve", problem);
+        state.solving = true; render();
+        let plan;
+        try { plan = await api.post("/v2/solve", problem); }
+        finally { state.solving = false; render(); }
         state.plan = plan;
         state.manualInstructions = deepCopy(plan.manual_instructions || state.manualInstructions);
         state.reassignResponse = null;
@@ -1099,6 +1106,14 @@ export function createApp(root, api = createGateway()) {
         if (plan.status === "optimal" || plan.status === "feasible") await loadView("table");
       }), "primary", "solve-plan")
     ));
+    controls.append(advanced);
+    if (state.solving) {
+      const progress = element("div", "solve-progress");
+      progress.setAttribute("role","status");
+      progress.append(element("div","skeleton-block"),element("div","skeleton-block short"),
+        element("p","muted","Checking seating constraints in the solver…"));
+      controls.append(progress);
+    }
     area.append(controls);
     if (!state.plan) {
       area.append(element("div", "empty", "Import guests, configure the venue, add considerations, then optimize."));
@@ -1152,13 +1167,15 @@ export function createApp(root, api = createGateway()) {
       return preview;
     }
     function renderNotSeated() {
-      if (!plan.not_seated?.length) return null;
-      const panel = card("Operator-selected not seated", "Only explicitly recorded choices appear here.");
-      for (const group of plan.not_seated) {
+      const recorded = plan.unseated_reasons || [];
+      if (!recorded.length && !plan.not_seated?.length) return null;
+      const panel = card("Not seated");
+      for (const group of (recorded.length ? recorded : plan.not_seated)) {
         const instruction = state.manualInstructions.find(i =>
           i.group_id === group.group_id && i.action === "unseat");
         panel.append(row(
-          element("span", "", group.group_name + " · " + group.guest_ids.length + " people"),
+          element("span", "", group.group_name + " · " + group.guest_ids.length + " people" +
+            (group.reason ? " · " + (group.reason === "lack_of_space" ? "Shortage" : "Operator decision") : "")),
           instruction ? action("Restore", () => removeInstruction(instruction.id),
             "quiet small", "restore-" + group.group_id) : element("span", "", "")));
       }
@@ -1205,7 +1222,6 @@ export function createApp(root, api = createGateway()) {
       return panel;
     }
     const status = card("Solution · " + plan.status.toUpperCase(), "Score: " + (plan.total_score ?? "—") +
-      " · Score: " + (plan.total_score ?? "—") +
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
     if (plan.status === "infeasible" || plan.status === "unknown") {
       status.append(element("p", "problem", plan.message));
@@ -1213,7 +1229,17 @@ export function createApp(root, api = createGateway()) {
         status.append(element("h3", "", "Why no seating plan fits"));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
-          explanations.append(element("div", "problem", explainRuleRefs(explanation)));
+          const line = element("div","problem conflict-row");
+          line.append(element("span","",explainRuleRefs(explanation)));
+          const match = state.rules.find(rule => explanation.includes(rule.id) ||
+            (rule.name && explanation.includes(rule.name)));
+          if (match) {
+            const fix = action("Edit rule",()=>{
+              state.screen="rules";state.expandedRuleId=match.id;render();
+            },"secondary small");
+            fix.title="Edit "+match.name;line.append(fix);
+          }
+          explanations.append(line);
         }
         status.append(explanations);
       }
@@ -1252,19 +1278,27 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
-    const views = card("Plan views");
-    const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
+    const views = card("Review and export");
+    const toolbar = element("div","plan-view-toolbar");
+    const tabs = element("div", "view-tabs segmented"); tabs.setAttribute("role", "tablist");
     VIEWS.forEach(([name,title]) => {
-      const b = action(title, () => { void loadView(name); }, "");
+      const icons = {table:"▦",people:"☷",floor:"▧",print:"⎙"};
+      const b = action(icons[name]+" "+title, () => { void loadView(name); }, "");
       b.id = "view-" + name;
       b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", state.view === name ? "true" : "false");
       tabs.append(b);
     });
-    views.append(tabs);
+    const exportButton = action("↓",()=>attempt(async()=>{
+      const result = await api.post("/v1/exports/json",state.plan);
+      downloadBlob(JSON.stringify(result,null,2),"seating-plan.json","application/json");
+    }),"quiet small icon-button","download-json");
+    exportButton.title="Download plan JSON";exportButton.setAttribute("aria-label",exportButton.title);
+    toolbar.append(tabs,exportButton);
+    views.append(toolbar);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
     if (state.view === "print") {
-      views.append(element("p", "muted", "Print preview is separate from the interactive workspace. The server produces the exact printable pages below."));
+
       views.append(selectField("Document", [
         ["people", "People list"], ["people-floor", "People by floor"],
         ["groups", "Table list"], ["groups-table", "Per-table pages"],
@@ -1344,9 +1378,6 @@ export function createApp(root, api = createGateway()) {
           ));
         } else views.append(element("p", "muted", "Loading PDF preview…"));
       }
-    } else if (state.view === "json") {
-      views.append(element("h3", "", "Machine-readable plan"));
-      views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
     } else {
       views.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
