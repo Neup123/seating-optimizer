@@ -94,6 +94,7 @@ function iconAction(title, kind, callback, className = "secondary icon-button", 
     tables:["M3 3h18v18H3z","M3 10h18","M10 3v18"],
     people:["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M22 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"],
     check:["M20 6 9 17l-5-5"],
+    upload:["M12 16V3","m5 10 7-7 7 7","M3 16v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4"],
     plus:["M12 5v14","M5 12h14"]
   };
   for (const path of shapes[kind] || shapes.list) {
@@ -103,6 +104,14 @@ function iconAction(title, kind, callback, className = "secondary icon-button", 
   b.append(svg);
   if (showText) b.append(element("span","",title));
   return b;
+}
+function fileControl(title, input) {
+  // Keep the file input programmable and accessible without native chooser chrome.
+  input.classList.add("visually-hidden-file");
+  input.setAttribute("aria-label", title);
+  const chooser = iconAction(title, "upload", () => input.click(),
+    "secondary icon-button", input.id + "-trigger");
+  return append(element("div", "file-picker"), chooser, input);
 }
 function textField(label, value, onChange, options = {}) {
   const holder = element("label", "field");
@@ -511,8 +520,6 @@ export function createApp(root, api = createGateway()) {
   function renderImport() {
     const area = element("div", "form-measure import-flow");
     const form = card("Guest registrations");
-    const fileLabel = element("label", "");
-    fileLabel.append(element("span", "", "Guest list spreadsheet"));
     const file = document.createElement("input");
     file.type = "file"; file.id = "guest-file"; file.accept = ".csv,.xlsx";
     file.addEventListener("change", async () => attempt(async () => {
@@ -529,8 +536,7 @@ export function createApp(root, api = createGateway()) {
       invalidate();
       announce("Header preview loaded. Review the mapping and import the guests.");
     }));
-    fileLabel.append(file);
-    form.append(fileLabel);
+    form.append(fileControl("Choose guest list spreadsheet (CSV or XLSX)", file));
     if (state.importFile) form.append(element("p", "muted", "Selected: " + state.importFile.filename));
     area.append(form);
     if (!state.preview) return area;
@@ -593,11 +599,11 @@ export function createApp(root, api = createGateway()) {
         "Multiple columns mapped to " + target + ": " + sources.join(", ") +
         ". Choose a different target before importing."));
     }
-    const buttons = row(action("Review corrected mapping", () => attempt(async () => {
+    const buttons = row(iconAction("Review corrected mapping", "check", () => attempt(async () => {
       if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to review its mapping.");
       state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       announce("Mapping checked by the API. Review any row-level issues below.");
-    }), "secondary", "preview-mapping"), action("Import guests", () => attempt(async () => {
+    }), "secondary icon-button", "preview-mapping"), iconAction("Import guests", "upload", () => attempt(async () => {
       if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to import guests again.");
       const result = await api.post("/v1/import", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       state.importResult = result;
@@ -610,7 +616,7 @@ export function createApp(root, api = createGateway()) {
         invalidate();
         announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
       }
-    }), "primary", "import-guests"));
+    }), "primary icon-button", "import-guests"));
     buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;
     mappingCard.append(buttons);
     area.append(mappingCard);
@@ -795,8 +801,6 @@ export function createApp(root, api = createGateway()) {
         announce("Deleted saved template " + removed.name + ".");
       }), "danger small", "delete-template")
     ));
-    const importLabel = element("label", "field");
-    importLabel.append(element("span", "", "Import full configuration JSON"));
     const configFile = document.createElement("input");
     configFile.id = "configuration-file";
     configFile.type = "file";
@@ -811,7 +815,7 @@ export function createApp(root, api = createGateway()) {
       applyConfiguration(validated);
       announce("Imported complete configuration " + validated.name + ".");
     }));
-    templatesCard.append(append(importLabel, configFile));
+    templatesCard.append(fileControl("Import full configuration JSON", configFile));
     const templateActions = [
       ["save-template","Save or update venue template","✓"],
       ["export-configuration","Download full configuration JSON","⤓"],
@@ -828,6 +832,8 @@ export function createApp(root, api = createGateway()) {
     templateDrawer.open=Boolean(state.templateDrawerOpen);
     const templateToggle=element("summary","","Venue templates");
     templateToggle.id="template-toggle";
+    templateToggle.title="Expand or collapse saved venue templates";
+    templateToggle.setAttribute("aria-label", templateToggle.title);
     templateDrawer.append(templateToggle);
     templatesCard.querySelector("h2")?.remove();
     templatesCard.classList.remove("card","form-measure");
@@ -844,7 +850,7 @@ export function createApp(root, api = createGateway()) {
     file.addEventListener("change", () => attempt(async () => {
       if (file.files?.length) await loadLayoutFiles(Array.from(file.files));
     }));
-    intro.append(append(element("label", "", ""), element("span", "", "Import venue layout files"), file));
+    intro.append(fileControl("Import venue layout files (JSON or SVG)", file));
     intro.append(row(
       action("✓", () => attempt(validateLayout), "primary icon-button", "validate-layout"),
       action("↓", () => attempt(async () => {
@@ -901,11 +907,23 @@ export function createApp(root, api = createGateway()) {
       state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
       state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
 
+    const mobileTabs = element("div", "venue-mobile-tabs segmented");
+    mobileTabs.setAttribute("role", "group");
+    mobileTabs.setAttribute("aria-label", "Venue editor section");
+    for (const [mode, title] of [["map", "Map"], ["tables", "Table settings"]]) {
+      const tab = action(title, () => { state.mobileVenuePane = mode; render(); },
+        "secondary small", "venue-mobile-" + mode);
+      tab.setAttribute("aria-pressed", String((state.mobileVenuePane || "map") === mode));
+      tab.title = "Show venue " + (mode === "map" ? "map" : "table settings");
+      mobileTabs.append(tab);
+    }
+    panel.append(mobileTabs);
     const split = element("div", "map-layout");
+    split.dataset.mobilePane = state.mobileVenuePane || "map";
     const canvas = element("div", "map-canvas");
     canvas.append(makeEditorSvg(layout));
     split.append(canvas);
-    const controls = element("div");
+    const controls = element("div", "venue-table-settings");
     const tableForm = element("form", "stack");
     tableForm.id = "table-form";
     tableForm.append(element("h3", "", "Add numbered table"));
@@ -913,12 +931,14 @@ export function createApp(root, api = createGateway()) {
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
     const propertyInput = propertyControl("Table properties", [], "new-table-properties");
-    const priorityLabel = element("label", "field");
+    const priorityLabel = element("label", "priority-checkbox");
     const priorityInput = document.createElement("input");
     priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
     priorityLabel.append(priorityInput, element("span", "", "Priority for couples and singles (soft)"));
     tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput, priorityLabel);
-    const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
+    const create = element("button", "secondary icon-button", "＋");
+    create.type = "submit"; create.id = "add-table";
+    create.title = "Add table to floor"; create.setAttribute("aria-label", create.title);
     tableForm.append(create);
     tableForm.addEventListener("submit", event => {
       event.preventDefault();
@@ -966,7 +986,7 @@ export function createApp(root, api = createGateway()) {
         () => {}, { id: "table-" + drawing.table_id + "-shape" }));
       editor.append(fields, propertyControl("Table properties",
         table?.properties || drawing.properties || [], "table-" + drawing.table_id + "-properties"));
-      const priorityLabel = element("label", "field");
+      const priorityLabel = element("label", "priority-checkbox");
       const priorityInput = document.createElement("input");
       priorityInput.type = "checkbox";
       priorityInput.id = "table-" + drawing.table_id + "-small-priority";
