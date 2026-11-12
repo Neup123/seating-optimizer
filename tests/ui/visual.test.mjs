@@ -352,14 +352,14 @@ test("selection is a checkbox state, clear has a back action, and summary counts
 });
 test("print format switches use server HTML/PDF and plan JSON has a separate export button",async()=>{
   const {app,$,calls}=await setup(async (path,payload,type)=>{
-    if(path.includes("people-list/html"))return '<html><body><table><tr><td>Family One</td></tr></table></body></html>';
+    if(path.includes("/html"))return '<html><body><table><tr><td>Family One</td></tr></table></body></html>';
     if(path.includes("floor-map/pdf"))return new Blob(["%PDF"],{type:"application/pdf"});
     if(path==="/v1/exports/json")return plan;
     return {};
   });
   seed(app);app.state.plan=plan;app.show("plan");click($("#view-print"));
   await until(()=>!!$("#list-preview"));
-  assert.ok(calls.some(([p])=>p.includes("/v1/exports/people-list/html")));
+  assert.ok(calls.some(([p])=>p.includes("/v1/exports/table-list/html")));
   assert.equal($("#view-json"),null);
   assert.ok($("#download-json"));
 });
