@@ -1372,6 +1372,7 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
+    status.classList.add("compact-status");
     for (const warning of plan.validation_warnings || []) status.append(element("p", "problem warning", warning));
     area.append(status);
     const unseated = renderNotSeated();
