@@ -41,7 +41,9 @@ function partyName(assignment) {
 }
 function ruleLabel(rule, fallback) {
   // Never surface an internal rule ID as an operator-facing label.
-  return displayRuleName(rule);
+  if (rule) return displayRuleName(rule);
+  if (["capacity", "table_capacity"].includes(fallback)) return "Chair capacity";
+  return "Solver constraint";
 }
 function importedPartyName(guest) {
   if (guest.group_name?.trim()) return guest.group_name.trim();
@@ -261,6 +263,9 @@ export function createApp(root, api = createGateway()) {
     state.needsMigration = previous.version === 1 || state.rules.some(rule => rule.shape);
     state.error = false;
   }
+  if (!state.needsMigration) for (const rule of state.rules) {
+    if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
+  }
   if (["optimal", "feasible"].includes(state.plan?.status)) state.lastGoodPlan = deepCopy(state.plan);
   let viewObjectUrl = null;
   let listContentEndpoint = null;
@@ -338,6 +343,9 @@ export function createApp(root, api = createGateway()) {
         drawing.small_group_priority = Boolean(table.small_group_priority);
     }
     state.rules = copy.rules;
+    for (const rule of state.rules) {
+      if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
+    }
     state.nextRule = Math.max(1, ...state.rules.map(r => {
       const match = /^rule-(\d+)$/.exec(r.id);
       return match ? Number(match[1]) + 1 : 1;
@@ -1232,10 +1240,8 @@ export function createApp(root, api = createGateway()) {
         try { plan = await api.post("/v2/solve", problem); }
         catch (error) {
           // An unsuccessful request is not an instruction to discard the last solved seating.
-          if (!state.plan && state.lastGoodPlan) {
-            state.plan = deepCopy(state.lastGoodPlan);
-            state.restoredAfterFailure = true;
-          }
+          if (!state.plan && state.lastGoodPlan) state.plan = deepCopy(state.lastGoodPlan);
+          state.restoredAfterFailure = Boolean(state.plan);
           throw error;
         }
         finally { state.solving = false; render(); }
