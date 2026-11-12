@@ -40,7 +40,8 @@ function partyName(assignment) {
   return neutral;
 }
 function ruleLabel(rule, fallback) {
-  return (typeof rule?.name === "string" && rule.name.trim()) || fallback;
+  // Never surface an internal rule ID as an operator-facing label.
+  return (typeof rule?.name === "string" && rule.name.trim()) || "Unnamed consideration";
 }
 function importedPartyName(guest) {
   if (guest.group_name?.trim()) return guest.group_name.trim();
