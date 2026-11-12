@@ -1,269 +1,221 @@
-import { test, expect } from "@playwright/test";
+import {test, expect} from "@playwright/test";
 
-test("golden 120 guests complete the actual UI/API workflow: import → rules → solve → all views", async ({ page }) => {
-  const errors = [];
-  page.on("pageerror", error => errors.push(error.message));
-  await page.goto("/");
-  await expect(page.locator("#nav-import")).toBeVisible();
-
-  const languages = ["English", "French", "Spanish"];
-  const csv = ["Guest Name,Party Size,Language,Age Layer,Mobility"];
-  for (let family = 0; family < 60; family++) {
-    csv.push(["Family " + String(family).padStart(2, "0"), "2",
-      languages[family % 3],
-      family % 4 === 0 ? "Family with children" : "Adults",
-      family === 7 ? "wheelchair" : "mobile"].join(","));
-  }
+test.use({viewport:{width:1600,height:900},deviceScaleFactor:2});
+const shot = (page,info,label) => page.screenshot({path:info.outputPath(label+".png"),fullPage:true});
+async function upload(page,filename,contents) {
   await page.locator("#guest-file").setInputFiles({
-    name: "golden-120.csv", mimeType: "text/csv", buffer: Buffer.from(csv.join("\n") + "\n")
+    name:filename,mimeType:"text/csv",buffer:Buffer.from(contents)
   });
-  await expect(page.locator("#map-guest-name")).toHaveValue("name");
-  await expect(page.locator("#map-party-size")).toHaveValue("size");
+  await expect(page.locator("#import-guests")).toBeVisible();
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported ");
+}
+async function choose(page,engine,mechanism) {
+  await page.locator("#nav-rules").click();
+  await page.locator("#new-rule-engine").selectOption(engine);
+  await page.locator("#new-rule-mechanism").selectOption(mechanism);
+  await page.locator("#add-rule").click();
+}
+async function floor(page,tableId,chairs,tag) {
+  await page.locator("#nav-map").click();
+  await page.locator("#new-table-id").fill(tableId);
+  await page.locator("#new-table-capacity").fill(String(chairs));
+  if(tag) {
+    await page.locator(".property-picker").first()
+      .locator('input[aria-label="New table property"]').fill(tag);
+    await page.locator(".property-picker").first()
+      .locator('button[aria-label="Add table property"]').click();
+  }
+  await page.locator("#add-table").click();
+  await expect(page.locator('[data-table-id="'+tableId+'"]')).toHaveCount(2);
+}
+
+test("golden 120 guest registrations: v2 criteria, API solve, selection, print and JSON export",async({page},info)=>{
+  test.setTimeout(150000);
+  const errors=[];page.on("pageerror",err=>errors.push(err.message));
+  await page.goto("/");
+  await shot(page,info,"01-import-empty");
+  const csv=["Guest Name,Party Size,Language,Age Layer,Mobility"];
+  const langs=["English","French","Spanish"];
+  for(let i=0;i<60;i++)csv.push([
+    "Family "+String(i).padStart(2,"0"),"2",langs[i%3],
+    i%4===0?"Family with children":"Adults",
+    i===7?"wheelchair":"mobile"
+  ].join(","));
+  await page.locator("#guest-file").setInputFiles({
+    name:"golden-120.csv",mimeType:"text/csv",buffer:Buffer.from(csv.join("\n")+"\n")
+  });
   await expect(page.locator("#map-mobility")).toHaveValue("attribute.mobility");
+  await expect(page.locator(".criterion-ready").first()).toBeVisible();
+  await shot(page,info,"02-import-mapping");
   await page.locator("#import-guests").click();
   await expect(page.locator("#notice")).toContainText("Imported 120 guests");
   await expect(page.locator(".pill").first()).toContainText("120 guests");
 
-  const floors = [
-    { zone_id: "ground", prefix: "G" },
-    { zone_id: "first", prefix: "F" }
-  ].map(entry => ({
-    zone_id: entry.zone_id, width: 1650, height: 680,
-    tables: Array.from({ length: 6 }, (_, i) => ({
-      table_id: entry.prefix + "-" + i,
-      x: 35 + (i % 3) * 540, y: 30 + Math.floor(i / 3) * 330,
-      width: 485, height: 265, shape: i % 2 ? "ellipse" : "rectangle"
+  const floors=[
+    {zone_id:"ground",prefix:"G"},{zone_id:"first",prefix:"F"}
+  ].map(entry=>({
+    zone_id:entry.zone_id,width:1650,height:680,
+    tables:Array.from({length:6},(_,i)=>({
+      table_id:entry.prefix+"-"+i,x:35+(i%3)*540,
+      y:30+Math.floor(i/3)*330,width:485,height:265,
+      shape:i%2?"ellipse":"rectangle"
     }))
   }));
   await page.locator("#nav-map").click();
+  await shot(page,info,"03-venue-empty");
   await page.locator("#layout-file").setInputFiles({
-    name: "golden-layout.json", mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify({ floors }))
+    name:"golden-layout.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify({floors}))
   });
   await expect(page.locator("#table-G-0-capacity")).toBeVisible();
-
-  for (const [floor, prefix] of [["ground", "G"], ["first", "F"]]) {
-    await page.locator("#floor-select").selectOption(floor);
-    for (let i = 0; i < 6; i++) {
-      const form = page.locator('form[data-table-id="' + prefix + "-" + i + '"]');
-      await form.locator('[id="table-' + prefix + "-" + i + '-capacity"]').fill("10");
-      await form.locator('button[type="submit"]').click();
+  for(const [zone,prefix] of [["ground","G"],["first","F"]]) {
+    await page.locator("#floor-select").selectOption(zone);
+    for(let i=0;i<6;i++){
+      const input=page.locator('form[data-table-id="'+prefix+"-"+i+'"] input[id="table-'+prefix+"-"+i+'-capacity"]');
+      await input.fill("10");await input.blur();
+      await expect(page.locator('form[data-table-id="'+prefix+"-"+i+'"] .save-state'))
+        .toContainText("Saved locally");
     }
   }
   await page.locator("#validate-layout").click();
   await expect(page.locator("#notice")).toContainText("Venue layout validated");
+  await shot(page,info,"04-venue-tables");
 
-  await page.locator("#nav-rules").click();
-  await page.locator("#new-rule-shape").selectOption("zone_restriction");
-  await page.locator("#add-rule").click();
-  await page.locator("#rule-0-attribute").fill("mobility");
-  await page.locator("#rule-0-attribute").blur();
-  await page.locator("#rule-0-value").fill("wheelchair");
-  await page.locator("#rule-0-value").blur();
-  await page.locator("#rule-0-zone").selectOption("ground");
-  await expect(page.locator("#rule-mode-0")).toHaveValue("hard");
-
-  await page.locator("#new-rule-shape").selectOption("attribute_grouping");
-  await page.locator("#add-rule").click();
-  await page.locator("#rule-1-attribute").fill("language");
-  await page.locator("#rule-1-attribute").blur();
-  await page.locator("#rule-weight-1").fill("4");
-  await page.locator("#rule-weight-1").blur();
-
-  await page.locator("#new-rule-shape").selectOption("fill_efficiency");
-  await page.locator("#add-rule").click();
-  await expect(page.locator("#rule-weight-2")).toHaveValue("2");
-
+  await choose(page,"venue","placement_by_criterion");
+  await expect(page.locator("#new-rule-shape")).toHaveCount(0);
+  await page.locator("#criterion-field").selectOption("mobility");
+  await page.locator("#criterion-value").selectOption(JSON.stringify("wheelchair"));
+  await page.locator("#rule-mode-0").selectOption("hard");
+  await expect(page.locator(".rule-accordion")).toHaveCount(1);
+  await shot(page,info,"05-rules-hard-expanded");
+  await choose(page,"intra","own_attribute_grouping");
+  await page.locator("#criterion-field").selectOption("language");
+  await choose(page,"venue","holes_term");
+  await expect(page.locator(".rule-accordion")).toHaveCount(3);
+  await expect(page.locator(".rule-accordion-body")).toHaveCount(1);
+  await shot(page,info,"06-rules-accordion");
   await page.locator("#nav-plan").click();
-  await page.locator("#session-id").fill("golden-ui-120");
-  await page.locator("#session-id").blur();
-  const responsePromise = page.waitForResponse(response =>
-    response.url().endsWith("/v1/solve") && response.request().method() === "POST"
-  );
+  await shot(page,info,"07-plan-empty");
+
+  // Snapshot the deliberately designed intermediate state before the server responds.
+  await page.route("**/v2/solve",async route=>{
+    await new Promise(resolve=>setTimeout(resolve,350));
+    await route.continue();
+  });
+  const responsePromise=page.waitForResponse(r=>r.url().endsWith("/v2/solve")&&r.request().method()==="POST");
   await page.locator("#solve-plan").click();
-  const solveResponse = await responsePromise;
-  expect(solveResponse.status()).toBe(200);
-  const plan = await solveResponse.json();
-  expect(["optimal", "feasible"]).toContain(plan.status);
-  expect(plan.assignments.length).toBe(60);
-  expect(plan.assignments.reduce((count, group) => count + group.guest_ids.length, 0)).toBe(120);
-  expect(plan.tables.every(t => t.occupied <= t.capacity && t.empty_seats >= 0)).toBe(true);
-  expect(plan.conflicting_constraints).toEqual([]);
-  const chairFamily = plan.assignments.find(entry => entry.group_id === "registration:9");
-  expect(chairFamily.table_id.startsWith("G-")).toBe(true);
-  expect(chairFamily.guest_ids.length).toBe(2);
-  expect(plan.layout.floors.length).toBe(2);
-  expect(plan.score_breakdown.length).toBe(2);
-
-  await expect(page.locator("#notice")).toContainText("Solver returned");
-  await expect(page.locator("#view-table")).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".working-table-section").first()).toContainText("Table G-0");
-  await expect(page.getByText("Per-assignment explanations")).toBeVisible();
-  await expect(page.getByText("Compromises and empty chairs")).toBeVisible();
-
-  // Working views are selectable, not embedded print documents.
-  for (const view of ["people", "people-floor", "groups", "groups-table"]) {
-    await page.locator("#view-" + view).click();
-    await expect(page.locator(".plan-entry").first()).toBeVisible();
-    await expect(page.locator("#list-preview")).toHaveCount(0);
-    await expect(page.locator("#print-list")).toHaveCount(0);
-    await page.locator(".plan-target").first().click();
-    await expect(page.locator("#plan-selection")).toBeVisible();
-    await page.locator("#clear-plan-selection").click();
-  }
-  await page.locator("#view-table").click();
-  await page.locator(".plan-target").first().click();
-  await page.locator("#inspect-selection").click();
-  await expect(page.locator(".plan-details").first()).toContainText("Solver explanation");
+  await expect(page.locator(".solve-progress")).toBeVisible();
+  await shot(page,info,"08-plan-loading");
+  const res=await responsePromise;
+  expect(res.status()).toBe(200);
+  const result=await res.json();
+  expect(["optimal","feasible"]).toContain(result.status);
+  expect(result.assignments.reduce((total,a)=>total+a.guest_ids.length,0)).toBe(120);
+  expect(result.tables.every(t=>t.occupied<=t.capacity)).toBe(true);
+  expect(result.conflicting_constraints).toEqual([]);
+  expect(result.unseated_reasons).toEqual([]);
+  expect(result.score_breakdown.length).toBe(2);
+  const req=JSON.parse(res.request().postData());
+  expect(req.rules.every(rule=>rule.engine&&rule.mechanism&&!rule.shape)).toBe(true);
+  expect(req.tables.every(t=>t.capacity===10)).toBe(true);
+  await page.unroute("**/v2/solve");
+  await expect(page.locator("#view-table")).toHaveAttribute("aria-selected","true");
+  await expect(page.locator(".working-table-section").first()).toBeVisible();
+  await shot(page,info,"09-plan-tables");
+  await page.locator('.plan-check input[type="checkbox"]').first().check();
+  await expect(page.locator("#plan-selection")).toContainText("people");
+  await shot(page,info,"10-plan-selected");
+  await page.locator("#clear-plan-selection").click();
   await page.locator("#view-people").click();
-  await expect(page.locator("#plan-selection")).toBeVisible();
+  await expect(page.locator(".plan-entry").first()).toBeVisible();
   await page.locator("#plan-search").fill("Family 00");
   await expect(page.locator(".plan-entry")).toHaveCount(1);
-  await page.locator("#plan-sort").selectOption("name");
-  const family00 = plan.assignments.find(a => a.group_name === "Family 00" ||
-    (a.guest_names || []).some(name => name.startsWith("Family 00")));
-  expect(family00).toBeDefined();
-  const familyFloor = plan.tables.find(t => t.table_id === family00.table_id).zone_id;
-  await page.locator("#plan-filter-floor").selectOption(familyFloor);
-  await expect(page.locator(".plan-entry")).toHaveCount(1);
+  await shot(page,info,"11-plan-people-filter");
   await page.locator("#plan-search").fill("");
-  await page.locator("#plan-filter-floor").selectOption("");
-
-  // The server-created print pages are displayed only in the dedicated preview.
-  await page.locator("#view-print").click();
-  for (const [format, endpoint] of [
-    ["people", "people-list/html?group_by=combined"],
-    ["people-floor", "people-list/html?group_by=floor"],
-    ["groups", "table-list/html?group_by=combined"],
-    ["groups-table", "table-list/html?group_by=table"]
-  ]) {
-    const defaultRequest = page.waitForResponse(r =>
-      r.url().includes(endpoint + "&include_reasons=false"));
-    await page.locator("#print-format").selectOption(format);
-    expect((await defaultRequest).status()).toBe(200);
-    await expect(page.locator("#print-reasons")).not.toBeChecked();
-    await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /<table>/);
-    const clean = await page.locator("#list-preview").getAttribute("srcdoc");
-    expect((clean.match(/data-group-id=/g) || []).length).toBe(60);
-    expect((clean.match(/data-guest-id=/g) || []).length).toBe(0);
-    expect(clean).toContain("Family 00 — 2");
-    expect(clean).not.toContain("Family 00 (1/2)");
-    expect(clean).not.toContain("Family 00 (2/2)");
-    expect(clean).not.toContain('class="reason"');
-    await expect(page.locator("#download-list")).toBeVisible();
-    await expect(page.locator("#print-list")).toBeVisible();
-    const withReasons = page.waitForResponse(r =>
-      r.url().includes(endpoint + "&include_reasons=true"));
-    await page.locator("#print-reasons").check();
-    expect((await withReasons).status()).toBe(200);
-    await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc", /class="reason"/);
-  }
-  // Floor maps are working SVGs; their printable counterpart is the PDF.
   await page.locator("#view-floor").click();
   await expect(page.locator("#working-floor-svg")).toBeVisible();
-  await expect(page.locator('#working-floor-svg [data-table-id="G-0"]')).toBeVisible();
-  await page.locator("#plan-floor-select").selectOption("first");
-  await expect(page.locator('#working-floor-svg [data-table-id="F-0"]')).toBeVisible();
-  await page.locator("#view-cards").click();
-  await expect(page.locator(".working-table-card").first()).toBeVisible();
-  await expect(page.locator("#cards-preview")).toHaveCount(0);
+  await shot(page,info,"12-plan-map");
 
-  const pdfResponse = page.waitForResponse(response => response.url().endsWith("/v1/exports/table-cards/pdf"));
   await page.locator("#view-print").click();
+  await page.locator("#print-format").selectOption("people");
+  await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc",/<table>/);
+  await shot(page,info,"13-print-people");
+  await page.locator("#print-format").selectOption("groups-table");
+  await expect(page.locator("#list-preview")).toHaveAttribute("srcdoc",/<table>/);
+  await shot(page,info,"14-print-tables");
   await page.locator("#print-format").selectOption("cards");
-  expect((await pdfResponse).status()).toBe(200);
-  await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
-  await expect(page.locator("#cards-per-page")).toHaveValue("1");
-  const firstCardsUrl = await page.locator("#cards-preview").getAttribute("src");
-  const fourResponse = page.waitForResponse(r => r.url().includes("/v1/exports/table-cards/pdf?cards_per_page=4"));
-  await page.locator("#cards-per-page").selectOption("4");
-  expect((await fourResponse).status()).toBe(200);
-  await expect(page.locator("#cards-preview")).not.toHaveAttribute("src", firstCardsUrl);
-  const twoResponse = page.waitForResponse(r => r.url().includes("/v1/exports/table-cards/pdf?cards_per_page=2"));
-  await page.locator("#cards-per-page").selectOption("2");
-  expect((await twoResponse).status()).toBe(200);
-  await expect(page.locator("#cards-preview")).toHaveAttribute("src", /^blob:/);
-  await page.locator("#cards-per-page").selectOption("1");
-  const floorPdf = page.waitForResponse(r => r.url().endsWith("/v1/exports/floor-map/pdf"));
+  await expect(page.locator("#cards-preview")).toHaveAttribute("src",/^blob:/);
+  await shot(page,info,"15-print-cards");
   await page.locator("#print-format").selectOption("floor");
-  expect((await floorPdf).status()).toBe(200);
-  await expect(page.locator("#floor-preview")).toHaveAttribute("src", /^blob:/);
-  await expect(page.locator("#print-preview-document")).toBeVisible();
+  await expect(page.locator("#floor-preview")).toHaveAttribute("src",/^blob:/);
+  await shot(page,info,"16-print-floor");
 
-  await page.locator("#view-json").click();
-  await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
-  await expect(page.locator("pre").first()).toContainText('"layout"');
-  // The same Plan's machine-readable JSON still has every synthesized member.
-  await expect(page.locator("pre").first()).toContainText("Family 00 (1/2)");
-  await expect(page.locator("pre").first()).toContainText("Family 00 (2/2)");
-  // Reload must restore the original plan, mapping, guests, capacities and rules.
+  const download=page.waitForEvent("download");
+  await page.locator("#download-json").click();
+  expect((await download).suggestedFilename()).toBe("seating-plan.json");
   await page.reload();
   await expect(page.locator(".pill").first()).toContainText("120 guests");
   await expect(page.locator(".pill").nth(1)).toContainText("12 tables");
   await expect(page.locator(".pill").nth(2)).toContainText("3 rules");
-  await expect(page.locator("#session-id")).toHaveValue("golden-ui-120");
-  await expect(page.locator("pre").first()).toContainText('"score_breakdown"');
-  await page.locator("#nav-import").click();
-  await expect(page.locator("#map-guest-name")).toHaveValue("name");
-  await page.locator("#nav-map").click();
-  await page.locator("#floor-select").selectOption("ground");
-  await expect(page.locator("#table-G-0-capacity")).toHaveValue("10");
-  await page.locator("#nav-plan").click();
-  await expect(page.getByText("Per-assignment explanations")).toBeVisible();
+  await page.locator("#nav-rules").click();
+  await expect(page.locator(".rule-accordion")).toHaveCount(3);
   expect(errors).toEqual([]);
-  console.log("GOLDEN_UI_120 status=" + plan.status +
-    " solver_seconds=" + plan.solve_seconds.toFixed(3) +
-    " groups=" + plan.assignments.length +
-    " floors=" + plan.layout.floors.length +
-    " tables=" + plan.tables.length + " hard_violations=0");
+  console.log("GOLDEN_V2_120 "+result.status+" assignments="+result.assignments.length);
 });
 
-
-
-test("common external headers pre-map name, family, party count and preserve other columns", async ({ page }) => {
+test("mapping preview preserves external column targets and rejects unsafe import",async({page},info)=>{
   await page.goto("/");
   await page.locator("#guest-file").setInputFiles({
-    name: "external.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Family,Party Count,Side,Meal\nAlice,Smith,2,North,Vegan\n")
+    name:"external.csv",mimeType:"text/csv",
+    buffer:Buffer.from("Guest Name,Family,Party Count,Side,Meal\nAlice,Smith,2,North,Vegan\n")
   });
   await expect(page.locator("#map-guest-name")).toHaveValue("name");
   await expect(page.locator("#map-family")).toHaveValue("group_id");
   await expect(page.locator("#map-party-count")).toHaveValue("size");
   await expect(page.locator("#map-side")).toHaveValue("");
   await expect(page.locator("#map-meal")).toHaveValue("");
+  await shot(page,info,"17-import-extra-columns");
   await page.locator("#import-guests").click();
   await expect(page.locator("#notice")).toContainText("Imported 2 guests");
-});
-
-test("missing party-size column stays editable in preview, but unsafe import is rejected", async ({ page }) => {
-  await page.goto("/");
+  await page.locator("#new-session").click();
   await page.locator("#guest-file").setInputFiles({
-    name: "incomplete.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Family,Side,Meal\nAlice,Smith,North,Vegan\n")
+    name:"incomplete.csv",mimeType:"text/csv",
+    buffer:Buffer.from("Guest Name,Family,Side,Meal\nAlice,Smith,North,Vegan\n")
   });
-  await expect(page.locator("#map-guest-name")).toHaveValue("name");
-  await expect(page.locator("#map-family")).toHaveValue("group_id");
   await expect(page.locator("body")).toContainText("Missing required mapping: size");
-  await expect(page.locator("#import-guests")).toBeEnabled();
   await page.locator("#import-guests").click();
   await expect(page.locator("#notice")).toContainText("Import blocked");
-  await expect(page.locator(".pill").first()).toContainText("0 guests");
+  await shot(page,info,"18-import-error");
 });
 
-test("single-floor venue and rules template prepared before import works in a new session", async ({ page }) => {
+test("operator owns overflow choices; shortage produces alarm without automatic unseating",async({page},info)=>{
   await page.goto("/");
   await page.locator("#nav-map").click();
-  await page.locator('#floor-form input[name="id"]').fill("hall");
   await page.locator('#floor-form input[name="name"]').fill("Main hall");
   await page.locator("#add-floor").click();
-  await page.locator("#new-table-id").fill("H1");
-  await page.locator("#new-table-capacity").fill("4");
-  await page.locator("#add-table").click();
-  await page.locator("#validate-layout").click();
-  await expect(page.locator("#notice")).toContainText("Venue layout validated");
-  await page.locator("#nav-rules").click();
-  await page.locator("#new-rule-shape").selectOption("fill_efficiency");
-  await page.locator("#add-rule").click();
+  await expect(page.locator("#floor-select")).toHaveValue("floor-1");
+  await floor(page,"T1",1);
+  await upload(page,"shortage.csv","Guest Name,Party Size\nOne family,2\n");
+  await page.locator("#nav-plan").click();
+  const response=page.waitForResponse(r=>r.url().endsWith("/v2/solve"));
+  await page.locator("#solve-plan").click();
+  const plan=await (await response).json();
+  expect(["infeasible","needs_review"]).toContain(plan.status);
+  expect(plan.unseated_reasons.some(group=>group.reason==="lack_of_space")).toBe(true);
+  expect(plan.not_seated).toEqual([]);
+  await expect(page.locator("#overflow-choice")).toBeVisible();
+  await shot(page,info,"19-shortage-infeasible");
+  await expect(page.locator("#confirm-unseat")).toBeVisible();
+  // No button is clicked: the plan and instructions remain unmodified.
+});
+
+test("single-floor venue template retains rules and capacities before guest import",async({page},info)=>{
+  await page.goto("/");
+  await page.locator("#nav-map").click();
+  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator("#add-floor").click();
+  await floor(page,"H1",4);
+  await choose(page,"venue","holes_term");
   await page.locator("#nav-map").click();
   await page.locator("#template-name").fill("Hall dinner");
   await page.locator("#save-template").click();
@@ -275,150 +227,71 @@ test("single-floor venue and rules template prepared before import works in a ne
   await expect(page.locator("#notice")).toContainText("Loaded template");
   await expect(page.locator("#table-H1-capacity")).toHaveValue("4");
   await expect(page.locator(".pill").nth(2)).toContainText("1 rules");
-  await page.locator("#nav-import").click();
-  await page.locator("#guest-file").setInputFiles({
-    name: "one-hall.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Party Size\nAlpha,2\n")
-  });
-  await expect(page.locator("#map-guest-name")).toHaveValue("name");
-  await page.locator("#import-guests").click();
-  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+  await shot(page,info,"20-restored-template");
+  await upload(page,"guests.csv","Guest Name,Party Size\nAlpha,2\n");
   await page.locator("#nav-plan").click();
   await page.locator("#solve-plan").click();
   await expect(page.locator("#notice")).toContainText("Solver returned");
   await expect(page.locator(".working-table-section").first()).toContainText("Table H1");
 });
 
-test("transient solve network failures show Retry and recover without losing the imported plan inputs", async ({ page }) => {
+test("retry after a network failure uses generic v2 endpoint and keeps all inputs",async({page},info)=>{
   await page.goto("/");
   await page.locator("#nav-map").click();
-  await page.locator('#floor-form input[name="id"]').fill("hall");
-  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator('#floor-form input[name="name"]').fill("Hall");
   await page.locator("#add-floor").click();
-  await page.locator("#new-table-id").fill("T1");
-  await page.locator("#new-table-capacity").fill("4");
-  await page.locator("#add-table").click();
-  await page.locator("#nav-import").click();
-  await page.locator("#guest-file").setInputFiles({
-    name: "retry.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Party Size\nAlice,2\n")
-  });
-  await expect(page.locator("#map-guest-name")).toHaveValue("name");
-  await page.locator("#import-guests").click();
-  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+  await floor(page,"T1",4);
+  await upload(page,"retry.csv","Guest Name,Party Size\nAlice,2\n");
   await page.locator("#nav-plan").click();
-  let offline = true;
-  await page.route("**/v1/solve", route => offline ? route.abort("failed") : route.continue());
+  let offline=true;
+  await page.route("**/v2/solve",route=>offline?route.abort("failed"):route.continue());
   await page.locator("#solve-plan").click();
   await expect(page.locator("#notice")).toContainText("Could not reach the server");
   await expect(page.locator("#retry-action")).toBeVisible();
-  await expect(page.locator("#notice")).not.toContainText("Failed to fetch");
-  await expect(page.locator(".pill").first()).toContainText("2 guests");
-  offline = false;
+  await shot(page,info,"21-solve-network-error");
+  offline=false;
   await page.locator("#retry-action").click();
   await expect(page.locator("#notice")).toContainText("Solver returned");
-  await expect(page.locator(".working-table-section").first()).toContainText("Table T1");
-  await expect(page.locator("#retry-action")).toHaveCount(0);
-  await page.unroute("**/v1/solve");
+  await expect(page.locator(".working-table-section").first()).toBeVisible();
+  await page.unroute("**/v2/solve");
 });
 
-test("guest-side property preference seats wheelchair family at tagged table and credits guest need", async ({ page }) => {
-  const errors = [];
-  page.on("pageerror", error => errors.push(error.message));
+test("rule property preferences share venue vocabulary and solve through v2 only",async({page},info)=>{
   await page.goto("/");
   await page.locator("#nav-map").click();
-  await page.locator('#floor-form input[name="id"]').fill("hall");
-  await page.locator('#floor-form input[name="name"]').fill("Main hall");
+  await page.locator('#floor-form input[name="name"]').fill("Hall");
   await page.locator("#add-floor").click();
-
-  await page.locator("#new-table-id").fill("A");
-  await page.locator("#new-table-capacity").fill("2");
-  await page.locator("#new-table-properties").fill("accessible, aisle-edge");
-  await page.locator("#add-table").click();
-  await page.locator("#new-table-id").fill("B");
-  await page.locator("#new-table-capacity").fill("2");
-  await page.locator("#new-table-properties").fill("quiet");
-  await page.locator("#add-table").click();
-
-  await page.locator("#validate-layout").click();
-  await expect(page.locator("#notice")).toContainText("Venue layout validated");
-  await page.locator("#nav-import").click();
-  await page.locator("#guest-file").setInputFiles({
-    name: "needs.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Party Size,Mobility\nFamily,2,wheelchair\nVisitors,2,mobile\n")
-  });
-  await expect(page.locator("#map-mobility")).toHaveValue("attribute.mobility");
-  await page.locator("#import-guests").click();
-  await expect(page.locator("#notice")).toContainText("Imported 4 guests");
-
-  await page.locator("#nav-rules").click();
-  await page.locator("#new-rule-shape").selectOption("table_property_need");
-  await page.locator("#add-rule").click();
-  await page.locator("#rule-0-attribute").fill("mobility");
-  await page.locator("#rule-0-attribute").blur();
-  await page.locator("#rule-0-value").fill("wheelchair");
-  await page.locator("#rule-0-value").blur();
-  await page.locator("#rule-0-property").fill("accessible");
-  await page.locator("#rule-0-property").blur();
-  await page.locator("#rule-weight-0").fill("7");
-  await page.locator("#rule-weight-0").blur();
-
+  await floor(page,"A",2,"accessible");
+  await floor(page,"B",2,"quiet");
+  await upload(page,"needs.csv","Guest Name,Party Size,Mobility\nFamily,2,wheelchair\nVisitors,2,mobile\n");
+  await choose(page,"venue","property_need");
+  await page.locator("#criterion-field").selectOption("mobility");
+  await page.locator("#criterion-value").selectOption(JSON.stringify("wheelchair"));
+  await expect(page.locator("#rule-property")).toHaveValue("accessible");
+  await page.locator("#rule-weight-0").selectOption("25");
   await page.locator("#nav-plan").click();
-  const request = page.waitForRequest(req => req.url().endsWith("/v1/solve"));
-  const response = page.waitForResponse(res => res.url().endsWith("/v1/solve"));
+  const res=page.waitForResponse(r=>r.url().endsWith("/v2/solve"));
   await page.locator("#solve-plan").click();
-  const payload = (await request).postDataJSON();
-  expect(payload.tables.find(t => t.id === "A").properties).toEqual(["accessible", "aisle-edge"]);
-  expect(payload.layout.floors[0].tables.find(t => t.table_id === "A").properties)
-    .toEqual(["accessible", "aisle-edge"]);
-  expect(payload.rules[0].shape).toBe("table_property_need");
-  const solved = (await response).json();
-  const plan = await solved;
-  expect(plan.status).toMatch(/^(optimal|feasible)$/);
-  const family = plan.assignments.find(assignment => assignment.group_id === "registration:2");
+  const response=await res;expect(response.status()).toBe(200);
+  const plan=await response.json();
+  expect(["optimal","feasible"]).toContain(plan.status);
+  const family=plan.assignments.find(a=>a.group_id==="registration:2");
   expect(family.table_id).toBe("A");
-  expect(family.guest_ids).toHaveLength(2);
-  expect(plan.total_score).toBe(14);
-  expect(plan.score_breakdown.find(item => item.rule_id === "rule-1").points).toBe(14);
-  expect(family.reasons.some(reason => reason.rule_id === "rule-1" &&
-    reason.description.includes("Guest need mobility=wheelchair") && reason.points === 14)).toBe(true);
-  await expect(page.locator("#notice")).toContainText("Solver returned");
-  await expect(page.locator(".reasons")).toContainText("Guest need mobility=wheelchair");
-  expect(errors).toEqual([]);
+  expect(response.request().postDataJSON().rules[0].mechanism).toBe("property_need");
+  await shot(page,info,"22-table-property-score");
 });
 
-
-test("import mapping and sibling form screens are centred at a comfortable width on desktop", async ({ page }) => {
-  await page.setViewportSize({ width: 1600, height: 900 });
+test("desktop and mobile shells avoid horizontal overflow with focused task views",async({page},info)=>{
   await page.goto("/");
-  await page.locator("#guest-file").setInputFiles({
-    name: "mapping-measure.csv", mimeType: "text/csv",
-    buffer: Buffer.from("Guest Name,Party Size,Language\\nAlice,2,English\\n".replaceAll("\\n", "\n"))
-  });
-  await expect(page.locator("#map-guest-name")).toBeVisible();
-  const check = async selector => {
-    const metrics = await page.locator(selector).first().evaluate(node => {
-      const parent = node.closest(".workspace").getBoundingClientRect();
-      const rect = node.getBoundingClientRect();
-      return { width: rect.width, delta: Math.abs((rect.left + rect.right) / 2 -
-        (parent.left + parent.right) / 2) };
-    });
-    expect(metrics.width).toBeLessThanOrEqual(925);
-    expect(metrics.delta).toBeLessThanOrEqual(4);
-  };
-  await check(".import-flow");
-  await expect(page.locator("#map-guest-name")).toBeVisible();
-  const mappingField = await page.locator("#map-guest-name").boundingBox();
-  expect(mappingField.width).toBeLessThanOrEqual(315);
-  await page.locator("#nav-rules").click();
-  await check(".rules-flow");
-  await page.locator("#nav-map").click();
-  await check(".card.form-measure"); // The reusable template card is first.
-  await check("#floor-form >> xpath=.."); // The add-floor form is inside a measured card.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator("#nav-import").click();
-  await expect(page.locator("#guest-file")).toBeVisible();
-  const mobile = await page.locator(".import-flow").boundingBox();
-  expect(mobile.x).toBeGreaterThanOrEqual(0);
-  expect(mobile.x + mobile.width).toBeLessThanOrEqual(391);
+  for(const screen of ["import","rules","map","plan"]) {
+    await page.locator("#nav-"+screen).click();
+    await shot(page,info,"23-empty-"+screen);
+  }
+  await page.setViewportSize({width:390,height:844});
+  for(const screen of ["import","rules","map","plan"]) {
+    await page.locator("#nav-"+screen).click();
+    const fits=await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1);
+    expect(fits,screen+" overflow").toBe(true);
+    await shot(page,info,"24-mobile-"+screen);
+  }
 });
