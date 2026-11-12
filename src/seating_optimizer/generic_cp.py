@@ -90,9 +90,12 @@ class Build:
 
     def matching(self, criterion):
         c = Criterion.model_validate(criterion)
-        if c.subject != "guest":
-            raise ValueError("This mechanism needs a guest criterion")
-        return [g for g in self.problem.guests if match_guest(g, c)]
+        if c.subject == "guest":
+            return [g for g in self.problem.guests if match_guest(g, c)]
+        if c.subject == "family":
+            return [g for members in self.groups.values() if match_family(members, c)
+                    for g in members]
+        raise ValueError("This mechanism needs a guest or family criterion")
 
     def has_property(self, table, property_name):
         if property_name == "small_group_priority":
@@ -282,6 +285,7 @@ def _pair_term(rule, b, *, within):
     """Exact pair counts without O(guests²×tables) reified booleans."""
     criterion = Criterion.model_validate(rule.criterion)
     field = criterion.field
+    scope = criterion.scope or ("within" if within else "all")
     known = [g for g in b.problem.guests if guest_value(g, field) is not None]
     selected = b.matching(rule.criterion)
     others = [g for g in known if g.id not in {p.id for p in selected}]
@@ -298,10 +302,9 @@ def _pair_term(rule, b, *, within):
             candidates = list(combinations(members, 2))
         lit = b.guard(rule)
         for a, other in candidates:
-            # "across" classifies this as the inter-family engine; for
-            # historical criterion-pair parity its score still includes
-            # within-family guest pairs (scoring-principles §13.1).
-            if within and group_id(a) != group_id(other):
+            if scope == "within" and group_id(a) != group_id(other):
+                continue
+            if scope == "across" and group_id(a) == group_id(other):
                 continue
             same_value = guest_value(a, field) == guest_value(other, field)
             if rule.polarity == "reward" and same_value:
@@ -326,9 +329,12 @@ def _pair_term(rule, b, *, within):
                 b.choose([g.id for g in members if group_id(g) == gid], j, rule.id)
                 for gid in per_family
             )
-            # B2 counts all same-value guest pairs at the table, including
-            # members of one family. A3 is the within-family-only subset.
-            return within_pairs if within else all_pairs
+            if scope == "within":
+                return within_pairs
+            if scope == "across":
+                return all_pairs - within_pairs
+            # Omitted B2 scope retains the legacy all-pairs objective (§13.1).
+            return all_pairs
 
         if rule.polarity == "reward":
             contribution = sum(
@@ -345,7 +351,9 @@ def _pair_term(rule, b, *, within):
                 [g.id for g in selected if group_id(g) == gid],
                 [g.id for g in others if group_id(g) == gid], j, rule.id)
                 for gid in per_family)
-            b.terms.append(-rule.weight * (inner if within else all_pairs))
+            count = inner if scope == "within" else (
+                all_pairs - inner if scope == "across" else all_pairs)
+            b.terms.append(-rule.weight * count)
         else:
             all_pairs = pair_count(known)
             same_pairs = sum(pair_count(
