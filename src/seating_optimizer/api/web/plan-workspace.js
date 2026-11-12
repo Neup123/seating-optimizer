@@ -1,6 +1,7 @@
 /* Interactive v2 working surfaces. All placement data comes from the solved API Plan. */
 import { assignmentMatchesSelection, selectedPlanAssignments, togglePlanSelection,
   partyTotals, portionLabel } from "./plan-selection.js";
+import { displayRuleName } from "./v2-rules.js";
 
 function el(tag, css = "", text) {
   const node = document.createElement(tag);
@@ -319,9 +320,21 @@ export function renderPlanWorkspace(state, {
     details.append(el("h4", "", "Rules for this assignment"));
     if (related.length) {
       const rules = el("ul");
-      for (const rule of related) rules.append(el("li", "", rule.name || "Unnamed consideration"));
+      for (const rule of related) rules.append(el("li", "", displayRuleName(rule)));
       details.append(rules);
-    } else details.append(el("p", "muted", "No matching rule records in the current editor."));
+    } else details.append(el("p", "muted", "No assignment-specific rule references returned."));
+    // Score breakdown is a property of the full plan, not of any single family.
+    if (plan.score_breakdown?.length) {
+      details.append(el("h4", "", "Plan-wide scoring (not attributed to this family)"));
+      const scored = el("ul");
+      for (const entry of plan.score_breakdown) {
+        const rule = (state.rules || []).find(item => item.id === entry.rule_id);
+        const points = Number(entry.points || 0);
+        scored.append(el("li", "", displayRuleName(rule) + ": " +
+          (points > 0 ? "+" : "") + points + " points"));
+      }
+      details.append(scored);
+    }
     details.append(el("h4", "", "Solver explanation"));
     if (!(a.reasons || []).length) details.append(el("p", "muted", "No individual explanation recorded."));
     else {
