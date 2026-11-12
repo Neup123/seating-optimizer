@@ -43,6 +43,12 @@ class FixedContext:
     def group_id(guest: Any) -> str:
         return guest.group_id or "guest:" + guest.id
 
+    def matching(self, criterion: Criterion) -> set[str]:
+        if criterion.subject == "family":
+            return {g.id for members in self.groups.values()
+                    if match_family(members, criterion) for g in members}
+        return {g.id for g in self.guests if match_guest(g, criterion)}
+
     def target_group(self, target: str) -> str:
         if target in self.groups:
             return target
@@ -67,15 +73,15 @@ def _pair_relation(r: GenericRule, c: FixedContext) -> int:
 
 def _pairs(r: GenericRule, c: FixedContext, *, within: bool) -> int:
     selector = Criterion.model_validate(r.criterion)
+    scope = selector.scope or ("within" if within else "all")
     points = 0
     for at_table in c.at_table.values():
         relevant = [g for g in at_table if match_guest(g, selector)]
         for a, b in combinations(relevant, 2):
             same_family = c.group_id(a) == c.group_id(b)
-            # B2 intentionally counts family-internal pairs too: the
-            # engine relation is inter-family, but legacy §13.1 awards
-            # C(7,2) points even when all seven guests form one family.
-            if within and not same_family:
+            if scope == "within" and not same_family:
+                continue
+            if scope == "across" and same_family:
                 continue
             same_value = guest_value(a, selector.field) == guest_value(b, selector.field)
             if r.polarity == "reward" and same_value:
@@ -91,7 +97,9 @@ def _pairs(r: GenericRule, c: FixedContext, *, within: bool) -> int:
             ]
             for a in relevant:
                 for b in others:
-                    if within and c.group_id(a) != c.group_id(b):
+                    if scope == "within" and c.group_id(a) != c.group_id(b):
+                        continue
+                    if scope == "across" and c.group_id(a) == c.group_id(b):
                         continue
                     points -= r.weight
     return points
@@ -136,17 +144,18 @@ def _companionship(r: GenericRule, c: FixedContext) -> int:
 def _placement_by_criterion(r: GenericRule, c: FixedContext) -> int:
     chosen = Criterion.model_validate(r.criterion)
     allowed = set(r.zones)
+    matched = c.matching(chosen)
     return r.weight * sum(
-        match_guest(g, chosen) and c.table_by_id[c.placement[g.id]].zone_id in allowed
+        g.id in matched and c.table_by_id[c.placement[g.id]].zone_id in allowed
         for g in c.guests if g.id in c.placement
     )
 
 
 def _property_need(r: GenericRule, c: FixedContext) -> int:
     chosen = Criterion.model_validate(r.criterion)
+    matched = c.matching(chosen)
     return -r.weight * sum(
-        match_guest(g, chosen)
-        and not c.has_property(c.table_by_id[c.placement[g.id]], r.property)
+        g.id in matched and not c.has_property(c.table_by_id[c.placement[g.id]], r.property)
         for g in c.guests if g.id in c.placement
     )
 
@@ -225,13 +234,15 @@ def hard_violations(guests: Sequence[Any], tables: Sequence[Any],
                 errors.append(rule.display_name)
         elif key == ("venue", "placement_by_criterion"):
             criterion = Criterion.model_validate(rule.criterion)
-            if any(match_guest(g, criterion)
+            matched = c.matching(criterion)
+            if any(g.id in matched
                    and c.table_by_id[c.placement[g.id]].zone_id not in set(rule.zones)
                    for g in guests if g.id in c.placement):
                 errors.append(rule.display_name)
         elif key == ("venue", "property_need"):
             criterion = Criterion.model_validate(rule.criterion)
-            if any(match_guest(g, criterion)
+            matched = c.matching(criterion)
+            if any(g.id in matched
                    and not c.has_property(c.table_by_id[c.placement[g.id]], rule.property)
                    for g in guests if g.id in c.placement):
                 errors.append(rule.display_name)
@@ -239,25 +250,24 @@ def hard_violations(guests: Sequence[Any], tables: Sequence[Any],
             gid = c.target_group(rule.target)
             if c.group_tables[gid] != {rule.table}:
                 errors.append(rule.display_name)
-        elif key == ("intra", "own_attribute_grouping"):
+        elif key in (("intra", "own_attribute_grouping"), ("inter", "criterion_pairs")):
             criterion = Criterion.model_validate(rule.criterion)
-            for gid, members in c.groups.items():
-                matching = [g for g in members if match_guest(g, criterion)
-                            and g.id in c.placement]
-                by_value = defaultdict(set)
-                for g in matching:
-                    by_value[guest_value(g, criterion.field)].add(c.placement[g.id])
-                if any(len(tids) > 1 for tids in by_value.values()):
-                    errors.append(rule.display_name)
-                    break
-        elif key == ("inter", "criterion_pairs"):
-            # Hard reward = selected same-value people must share; hard
-            # penalty = differing selected values must remain apart.
-            criterion = Criterion.model_validate(rule.criterion)
+            scope = criterion.scope or (
+                "within" if key[0] == "intra" else "all")
             matched = [g for g in guests if match_guest(g, criterion)
                        and g.id in c.placement]
-            for a, b in combinations(matched, 2):
-                if c.group_id(a) == c.group_id(b):
+            known = [g for g in guests if guest_value(g, criterion.field) is not None
+                     and g.id in c.placement]
+            others = [g for g in known if g.id not in {p.id for p in matched}]
+            if rule.polarity == "penalty" and criterion.value is not None:
+                candidates = ((a, b) for a in matched for b in others)
+            else:
+                candidates = combinations(matched, 2)
+            for a, b in candidates:
+                same_family = c.group_id(a) == c.group_id(b)
+                if scope == "within" and not same_family:
+                    continue
+                if scope == "across" and same_family:
                     continue
                 same_value = guest_value(a, criterion.field) == guest_value(b, criterion.field)
                 together = c.placement[a.id] == c.placement[b.id]
