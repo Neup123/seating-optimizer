@@ -124,3 +124,31 @@ def test_timed_incumbents_require_explicit_tolerance_for_search_noise():
     with pytest.raises(AssertionError, match="objective delta"):
         _compare(case, old, new)
     assert _compare(case, old, new, score_tolerance=100) == 100
+
+
+def test_executable_verdict_manifest_checks_actual_two_engine_evidence():
+    """Twenty-nine historical labels must not become twenty-nine fake passes."""
+    from seating_optimizer.equivalence import _manifest_verdict
+    from seating_optimizer.models import Assignment
+    import pytest
+
+    case = Case("run3-feasible", "external.csv", "feasible")
+    assignment = Assignment(group_id="A", table_id="T", guest_ids=["a"],
+                            guest_names=["Alice"], guest_attributes=[{}])
+    old = Plan(session_id="s", status="feasible", total_score=2240,
+               assignments=[assignment])
+    new = Plan(session_id="s", status="feasible", total_score=2340,
+               assignments=[assignment])
+    assert _manifest_verdict({"case": case.name, "field": "status",
+                              "engine": "both", "expected": "feasible"},
+                             case, old, new, 2240, 2340)
+    assert _manifest_verdict({"case": case.name, "field": "score_delta",
+                              "expected": 150}, case, old, new, 2240, 2340)
+    assert _manifest_verdict({"case": case.name, "field": "cross_scored",
+                              "expected": True}, case, old, new, 2240, 2340)
+    assert not _manifest_verdict({"case": "run1-full-overcapacity",
+                                  "field": "status", "expected": "infeasible"},
+                                 case, old, new, 2240, 2340)
+    with pytest.raises(AssertionError):
+        _manifest_verdict({"case": case.name, "field": "score_delta",
+                           "expected": 50}, case, old, new, 2240, 2340)
