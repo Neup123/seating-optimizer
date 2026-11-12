@@ -668,7 +668,7 @@ export function createApp(root, api = createGateway()) {
     const valueSet = new Set(selected);
     const changed = () => {
       hidden.value=[...valueSet].join(", ");
-      hidden.dispatchEvent(new Event("change", {bubbles:true}));
+      hidden.dispatchEvent(new window.Event("change", {bubbles:true}));
     };
     for (const property of choices) {
       const tag = element("label", "check-inline");
@@ -792,14 +792,17 @@ export function createApp(root, api = createGateway()) {
     }));
     intro.append(append(element("label", "", ""), element("span", "", "Import venue layout files"), file));
     intro.append(row(
-      action("Validate layout", () => attempt(validateLayout), "primary", "validate-layout"),
-      action("Export layout JSON", () => attempt(async () => {
+      action("✓", () => attempt(validateLayout), "primary icon-button", "validate-layout"),
+      action("↓", () => attempt(async () => {
         const validated = await api.post("/v1/layouts/import", {
           files: [{ filename: "layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }]
         });
         downloadBlob(JSON.stringify(validated, null, 2), "venue-layout.json", "application/json");
-      }), "secondary", "export-layout")
+      }), "secondary icon-button", "export-layout")
     ));
+    for (const [id,title] of [["validate-layout","Validate layout"],["export-layout","Export layout JSON"]]) {
+      const b=intro.querySelector("#"+id);b.title=title;b.setAttribute("aria-label",title);
+    }
     area.append(intro);
     const floorForm = card("Create a floor");
     floorForm.classList.add("form-measure");
@@ -928,11 +931,12 @@ export function createApp(root, api = createGateway()) {
       editor.addEventListener("change",e=>{
         if(e.target.matches('input,select'))editor.requestSubmit();
       });
-      const remove = action("Remove table", () => {
+      const remove = action("⌫", () => {
         layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
         state.tables = state.tables.filter(t => t.id !== drawing.table_id);
         invalidate(); announce("Removed table " + drawing.table_id + ".");
-      }, "danger small");
+      }, "danger small icon-button");
+      remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
       editor.addEventListener("submit", event => {
         event.preventDefault();
@@ -977,6 +981,9 @@ export function createApp(root, api = createGateway()) {
     bg.setAttribute("fill", "#f5f8fa"); svg.append(bg);
     for (const drawing of floor.tables) {
       const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
+      g.setAttribute("tabindex","0");
+      g.setAttribute("role","button");
+      g.setAttribute("aria-label","Move table "+drawing.table_id+" using arrow keys");
       g.setAttribute("data-table-id", drawing.table_id);
       const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
       if (drawing.shape === "rectangle") {
@@ -999,6 +1006,16 @@ export function createApp(root, api = createGateway()) {
       label.setAttribute("font-weight", "700");
       label.textContent = drawing.table_id;
       g.append(shape,label); svg.append(g);
+      g.addEventListener("keydown", event => {
+        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
+        if (!delta) return;
+        event.preventDefault();
+        drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
+        drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        invalidate();render();
+        const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
+        active?.focus();
+      });
       g.addEventListener("pointerdown", event => {
         event.preventDefault();
         const rect = svg.getBoundingClientRect();
