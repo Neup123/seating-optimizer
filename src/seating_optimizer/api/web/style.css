@@ -362,3 +362,28 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
   .form-measure :is(input,select,textarea){max-width:100%}
   .nav{max-width:calc(100vw - 30px)}
 }
+
+
+/* Phase 3 screenshot sweep: make setup utilities secondary to floor editing. */
+.template-drawer{padding:13px 18px;max-width:900px}
+.template-drawer>summary{cursor:pointer;list-style-position:outside;font-size:15px;font-weight:750;color:#325865}
+.template-drawer[open]>summary{padding-bottom:13px;margin-bottom:13px;border-bottom:1px solid #e1eaed}
+.template-content{display:flex;align-items:flex-start;flex-direction:column;gap:12px;min-width:0}
+.template-content>.row{gap:8px}
+.template-content .icon-button{min-width:36px;min-height:36px;padding:6px 9px}
+#floor-form>#add-floor{justify-self:start;width:38px;min-width:38px;max-width:38px;height:38px;align-self:end}
+.rule-accordion-body>.control-row .compact-field:first-child input{min-width:min(100%,300px);max-width:380px}
+.criteria-editor>.control-row>.compact-field{min-width:105px}
+.criteria-editor>.control-row .compact-field:has(#criterion-field){min-width:165px}
+.criteria-editor>.control-row .compact-field:has(#criterion-value){min-width:160px}
+@media(max-width:920px){
+ .sidebar .nav{align-items:center;align-content:center;height:auto;max-height:58px;min-height:44px;overflow-y:hidden}
+ .sidebar .nav button{display:inline-flex;align-items:center;align-self:center;flex:0 0 auto;min-height:42px;max-height:46px;line-height:1.2}
+}
+@media(max-width:620px){
+ .template-drawer{padding:15px}
+ .template-content>.row{width:auto;max-width:100%}
+ .criteria-editor>.control-row>.compact-field{flex:1 1 145px;min-width:0}
+ .criteria-editor>.control-row>.compact-field input,.criteria-editor>.control-row>.compact-field select{min-width:0}
+ #floor-form>#add-floor{width:38px;min-width:38px;max-width:38px}
+}
