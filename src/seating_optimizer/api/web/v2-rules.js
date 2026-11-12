@@ -17,6 +17,23 @@ const LABELS = {
   property_fit:"Reward a matching table property", locked_assignment:"Lock a family to a table",
   priority_mark:"Mark a family's seating priority"
 };
+export function displayRuleName(rule) {
+  if (typeof rule?.name === "string" && rule.name.trim()) return rule.name.trim();
+  if (!rule?.mechanism) return "Unnamed consideration";
+  const title = LABELS[rule.mechanism] || rule.mechanism.replaceAll("_", " ");
+  const criterion = rule.criterion;
+  if (criterion?.field) {
+    const operators = {"==":"is","!=":"is not","<":"below","<=":"at most",">":"above",">=":"at least","in":"in"};
+    const field = criterion.field.replaceAll("_", " ");
+    if (criterion.value !== null && criterion.value !== undefined && criterion.value !== "") {
+      const value = Array.isArray(criterion.value) ? criterion.value.join(", ") : String(criterion.value);
+      return title + ": " + field + " " + (operators[criterion.op] || "matches") + " " + value;
+    }
+    return title + ": " + field;
+  }
+  if (rule.property) return title + ": " + rule.property.replaceAll("_", " ");
+  return title;
+}
 const NEEDS_CRITERION = new Set(["own_attribute_grouping","criterion_pairs",
   "placement_by_criterion","property_need","property_fit"]);
 const NUMERIC = value => value !== null && value !== "" && value !== undefined &&
@@ -360,6 +377,8 @@ export function renderGenericRules(state, actions) {
   list.append(line(node("h2","","Considerations"),node("span","pill",state.rules.length+" "+(state.rules.length===1?"instance":"instances"))));
   if(!state.rules.length)list.append(node("p","empty","No considerations yet."));
   state.rules.forEach((rule,index)=>{
+    // Existing v2 sessions may already contain migrated instances with empty names.
+    if (!rule.name?.trim()) rule.name = displayRuleName(rule);
     const spec=catalog.find(c=>c.engine===rule.engine&&c.mechanism===rule.mechanism);
     const open=state.expandedRuleId===rule.id;
     const item=node("article","rule-accordion"+(rule.enabled===false?" muted-rule":""));
