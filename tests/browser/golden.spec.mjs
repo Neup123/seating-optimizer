@@ -88,6 +88,17 @@ test("golden 120 guest registrations: v2 criteria, API solve, selection, print a
   await page.locator("#criterion-value").selectOption(JSON.stringify("wheelchair"));
   await page.locator("#rule-mode-0").selectOption("hard");
   await expect(page.locator(".rule-accordion")).toHaveCount(1);
+  const criterionControls=await Promise.all(["#criterion-field","#criterion-op","#criterion-value"]
+    .map(async selector=>page.locator(selector).boundingBox()));
+  const bottoms=criterionControls.map(box=>box.y+box.height);
+  expect(Math.max(...bottoms)-Math.min(...bottoms),
+    "Criterion field, operator and value must share one baseline").toBeLessThanOrEqual(4);
+  const ruleHead=page.locator(".rule-accordion-head").first();
+  const aligned=await Promise.all([".rule-headline",".badge",".rule-weight-label",
+    ".rule-switch input",".danger-icon"].map(async selector=>ruleHead.locator(selector).boundingBox()));
+  const centers=aligned.map(box=>box.y+box.height/2);
+  expect(Math.max(...centers)-Math.min(...centers),
+    "Rule title, engine, weight, toggle and delete must align").toBeLessThanOrEqual(12);
   await shot(page,info,"05-rules-hard-expanded");
   await choose(page,"intra","own_attribute_grouping");
   await page.locator("#criterion-field").selectOption("language");
@@ -299,6 +310,9 @@ test("desktop and mobile shells avoid horizontal overflow with focused task view
   }
   await page.setViewportSize({width:390,height:844});
   for(const screen of ["import","rules","map","plan"]) {
+    const nav=await page.locator(".nav").boundingBox();
+    expect(nav.height,"Mobile task navigation must not grow vertically")
+      .toBeLessThanOrEqual(60);
     await page.locator("#nav-"+screen).click();
     const width=await page.evaluate(()=>({
       viewport:window.innerWidth,
