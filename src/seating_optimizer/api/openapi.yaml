@@ -407,6 +407,179 @@ paths:
               schema: {type: string, format: binary}
         '422':
           description: Nonfeasible or invalid plan
+  /v2/exports/table:
+    post:
+      operationId: genericExportTable
+      summary: Render the complete table-by-table list
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Plain-text seating table list
+          content:
+            text/plain:
+              schema: {type: string}
+  /v2/exports/json:
+    post:
+      operationId: genericExportJson
+      summary: Render the complete machine-readable plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Full plan including assignments, reasons and compromises
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GenericPlan'}
+  /v2/exports/people-list/html:
+    post:
+      operationId: genericExportPeopleListHtml
+      summary: Print or download a people list (combined or per floor / room)
+      description: Exact guest IDs, names, group and table assignments from the supplied solved GenericPlan. No seat numbers are invented. HTML is printable to paper or PDF. Reasons are omitted by default.
+      parameters:
+        - in: query
+          name: group_by
+          schema: {type: string, enum: [combined, floor], default: combined}
+        - in: query
+          name: include_reasons
+          schema: {type: boolean, default: false}
+        - in: query
+          name: fields
+          description: Repeat for each imported guest attribute column to display; omitted by default.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
+        - in: query
+          name: field_labels
+          description: Optional source-column titles in the same order as fields; display-only, leaving field keys and values unchanged.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Portable printable HTML (one combined table or a table per floor)
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Nonfeasible plan or contradictory assignment data
+  /v2/exports/table-list/html:
+    post:
+      operationId: genericExportTableListHtml
+      summary: Print or download a table-to-groups list (combined or per table)
+      description: Exact assigned groups and guest identities from the supplied solved Plan. Includes empty tables. Reasons are omitted by default.
+      parameters:
+        - in: query
+          name: group_by
+          schema: {type: string, enum: [combined, table], default: combined}
+        - in: query
+          name: include_reasons
+          schema: {type: boolean, default: false}
+        - in: query
+          name: fields
+          description: Repeat for each imported guest attribute column to display; omitted by default.
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Portable printable HTML (one combined table or a table per physical table)
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Nonfeasible plan or contradictory assignment data
+  /v2/exports/not-seated-list/html:
+    post:
+      operationId: genericExportNotSeatedListHtml
+      summary: Print the operator-selected people not seated in the main room
+      description: Reads only Plan.not_seated without selecting, removing, or assigning anyone. Valid for feasible, needs_review, and infeasible plans, including capacity alarms. An empty list produces a titled page with an explicit empty message and no people rows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Print-ready HTML for the other room, containing exactly the recorded not-seated groups and their people
+          content:
+            text/html:
+              schema: {type: string}
+        '422':
+          description: Inconsistent not-seated group or guest identity data
+  /v2/exports/floor-map/svg:
+    post:
+      operationId: genericExportFloorMapSvg
+      summary: Render an SVG page per floor with group labels on tables
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Ordered floor pages containing independently printable SVG
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SvgFloorBundle'}
+        '422':
+          description: Nonfeasible plan or incomplete/mismatched layout
+  /v2/exports/floor-map/pdf:
+    post:
+      operationId: genericExportFloorMapPdf
+      summary: Print a vector PDF containing one page for every floor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Vector PDF, one page per floor
+          content:
+            application/pdf:
+              schema: {type: string, format: binary}
+        '422':
+          description: Nonfeasible plan or incomplete/mismatched layout
+  /v2/exports/table-cards/pdf:
+    post:
+      operationId: genericExportTableCardsPdf
+      summary: Print cards in a one-per-page A5 layout or an A4 2/4-card cutting grid
+      parameters:
+        - name: cards_per_page
+          in: query
+          required: false
+          description: Number of complete table cards to print on a physical page.
+          schema: {type: integer, enum: [1, 2, 4], default: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GenericPlan'}
+      responses:
+        '200':
+          description: Printable PDF including empty tables; one card per A5 by default, or 2/4 on each A4 sheet
+          content:
+            application/pdf:
+              schema: {type: string, format: binary}
+        '422':
+          description: Nonfeasible or invalid plan
   /openapi.yaml:
     get:
       operationId: openapiYaml
