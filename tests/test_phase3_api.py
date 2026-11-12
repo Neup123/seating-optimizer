@@ -123,7 +123,13 @@ def test_browser_files_are_actually_served_with_correct_media_types():
     assert root.status_code == js.status_code == css.status_code == 200
     assert 'data-seat-app' in root.text and '/assets/app.js' in root.text
     assert "text/javascript" in js.headers["content-type"]
-    assert "createApp" in js.text and "/v1/solve" in js.text
+    assert "createApp" in js.text and "/v2/solve" in js.text
+    assert "/v1/solve" not in js.text
+    rule_ui = client.get("/assets/v2-rules.js")
+    assert rule_ui.status_code == 200
+    assert "text/javascript" in rule_ui.headers["content-type"]
+    assert "renderGenericRules" in rule_ui.text
+    assert "createGenericRule" in rule_ui.text
     assert "text/css" in css.headers["content-type"]
     assert "grid-template-columns" in css.text
     selection = client.get("/assets/plan-selection.js")
