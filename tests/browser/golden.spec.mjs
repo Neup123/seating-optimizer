@@ -1,6 +1,6 @@
 import {test, expect} from "@playwright/test";
 
-test.use({viewport:{width:1600,height:900},deviceScaleFactor:2});
+test.use({viewport:{width:1600,height:1000},deviceScaleFactor:2});
 const shot = (page,info,label) => page.screenshot({path:info.outputPath(label+".png"),fullPage:true});
 async function upload(page,filename,contents) {
   await page.locator("#nav-import").click();
@@ -328,4 +328,100 @@ test("desktop and mobile shells avoid horizontal overflow with focused task view
       .toBeLessThanOrEqual(width.viewport+1);
     await shot(page,info,"24-mobile-"+screen);
   }
+});
+
+
+test("U38/F3: mobile venue, rules and plan use focused panes with aligned controls",async({page},info)=>{
+  await page.setViewportSize({width:390,height:844});
+  await page.goto("/");
+  await page.locator("#guest-file").setInputFiles({
+    name:"mobile.csv",mimeType:"text/csv",buffer:Buffer.from("Guest Name,Party Size,Language\nFamily,2,Hebrew\n")
+  });
+  await expect(page.locator("#guest-file-trigger")).toBeVisible();
+  await expect(page.locator("#import-guests")).toBeVisible();
+  await page.locator("#import-guests").click();
+  await expect(page.locator("#notice")).toContainText("Imported 2 guests");
+  await page.locator("#nav-map").click();
+  await page.locator('#floor-form input[name="name"]').fill("Mobile hall");
+  await page.locator("#add-floor").click();
+  await expect(page.locator("#venue-mobile-map")).toHaveAttribute("aria-pressed","true");
+  await expect(page.locator(".map-canvas")).toBeVisible();
+  await expect(page.locator(".venue-table-settings")).toBeHidden();
+  await shot(page,info,"25-mobile-venue-map");
+  await page.locator("#venue-mobile-tables").click();
+  await expect(page.locator(".map-canvas")).toBeHidden();
+  await expect(page.locator(".venue-table-settings")).toBeVisible();
+  await page.locator("#new-table-id").fill("M1");
+  await page.locator("#new-table-capacity").fill("4");
+  const checkbox=page.locator("#new-table-small-priority");
+  const priorityText=page.locator(".priority-checkbox").first().locator("span");
+  const [checkBox,labelBox]=await Promise.all([checkbox.boundingBox(),priorityText.boundingBox()]);
+  expect(Math.abs((checkBox.y+checkBox.height/2)-(labelBox.y+labelBox.height/2)),
+    "Priority checkbox and label must share a baseline").toBeLessThanOrEqual(5);
+  await page.locator("#add-table").click();
+  await expect(page.locator("#table-M1-capacity")).toBeVisible();
+  await shot(page,info,"26-mobile-venue-tables");
+  await page.locator("#venue-mobile-map").click();
+  await expect(page.locator("#map-editor-svg")).toBeVisible();
+  await shot(page,info,"27-mobile-venue-map-with-table");
+  await page.locator("#nav-rules").click();
+  await page.locator("#new-rule-engine").selectOption("intra");
+  await page.locator("#new-rule-mechanism").selectOption("split_term");
+  await page.locator("#add-rule").click();
+  await expect(page.locator(".rule-accordion-body")).toHaveCount(1);
+  await shot(page,info,"28-mobile-rules-expanded");
+  await page.locator("#nav-plan").click();
+  await page.locator("#solve-plan").click();
+  await expect(page.locator(".working-table-section").first()).toBeVisible();
+  await expect(page.locator("#view-list")).toHaveAttribute("aria-selected","true");
+  await shot(page,info,"29-mobile-plan-list");
+  await page.locator("#view-floor").click();
+  await expect(page.locator("#working-floor-svg")).toBeVisible();
+  await shot(page,info,"30-mobile-plan-map");
+  for(const screen of ["rules","map","plan"]){
+    await page.locator("#nav-"+screen).click();
+    const widths=await page.evaluate(()=>({
+      viewport:window.innerWidth,page:document.documentElement.scrollWidth
+    }));
+    expect(widths.page,screen+" must not overflow mobile viewport")
+      .toBeLessThanOrEqual(widths.viewport+1);
+  }
+});
+
+test("F1/U14: restored 43-guest v2 session exposes named +6 plan breakdown",async({page},info)=>{
+  const guests=Array.from({length:43},(_,i)=>({
+    id:"g"+i,name:i<3?"India Family ("+(i+1)+"/3)":"Guest "+i,
+    group_id:i<3?"india":"family-"+i,group_name:i<3?"India Family":"Family "+i,
+    attributes:{language:i<3?"Hebrew":"English"}
+  }));
+  const rules=[
+    {id:"hebrew-upper-preference",name:"",engine:"venue",
+      mechanism:"placement_by_criterion",mode:"soft",weight:2,polarity:"reward",enabled:true,
+      criterion:{subject:"guest",field:"language",op:"==",value:"Hebrew"},zones:["upper"]},
+    ...["split_term","holes_term","companionship","priority_mark","property_fit"]
+      .map((mechanism,i)=>({id:"rule-other-"+i,name:"",engine:"venue",mechanism,mode:"soft",weight:1,enabled:true}))
+  ];
+  const tables=["B1","A1","A2","A3","A4","A5","A6"].map((id,i)=>({
+    id,zone_id:i?"ground":"upper",capacity:10,properties:[]
+  }));
+  const assignments=[{group_id:"india",group_name:"India Family",table_id:"B1",
+    guest_ids:["g0","g1","g2"],guest_names:["India Family (1/3)","India Family (2/3)","India Family (3/3)"],
+    reasons:[{rule_id:"capacity",description:"Three of ten chairs",points:0}],points:0}];
+  const plan={session_id:"test-43",status:"feasible",total_score:6,solve_seconds:.1,
+    score_breakdown:[{rule_id:"hebrew-upper-preference",points:6}],
+    tables:tables.map((t,i)=>({table_id:t.id,zone_id:t.zone_id,capacity:t.capacity,
+      occupied:i?0:3,empty_seats:i?10:7})),
+    assignments,layout:{floors:[]},compromises:[],conflicting_constraints:[],
+    message:"Solved",not_seated:[]};
+  const session={version:2,data:{screen:"plan",view:"table",guests,rules,tables,
+    zones:[{id:"upper",name:"Upper"},{id:"ground",name:"Ground"}],
+    layout:{floors:[]},plan,manualInstructions:[]}};
+  await page.addInitScript(value=>localStorage.setItem("seating-optimizer:session:v2",JSON.stringify(value)),session);
+  await page.goto("/");
+  await expect(page.locator(".score-breakdown")).toContainText("+6 points");
+  await expect(page.locator(".score-breakdown")).toContainText("language is Hebrew");
+  await expect(page.locator(".score-breakdown")).not.toContainText("Unnamed consideration");
+  await page.locator('.plan-entry button[title="Details"]').first().click();
+  await expect(page.locator(".plan-details")).toContainText("Plan-wide scoring");
+  await shot(page,info,"31-score-breakdown-43-guests");
 });
