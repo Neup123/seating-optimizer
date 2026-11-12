@@ -405,7 +405,7 @@ export function createApp(root, api = createGateway()) {
     return importHeaders.get(key) || key.replace(/_+/g, " ").replace(/^./, char => char.toUpperCase());
   }
   function listEndpoint(view) {
-    if (view === "not-seated") return "/v1/exports/not-seated-list/html";
+    if (view === "not-seated") return "/v2/exports/not-seated-list/html";
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
     const by = people ? (grouped ? "floor" : "combined") : (grouped ? "table" : "combined");
@@ -417,10 +417,10 @@ export function createApp(root, api = createGateway()) {
       query.append("fields", field);
       if (people) query.append("field_labels", attributeLabel(field, importHeaders));
     }
-    return "/v1/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
+    return "/v2/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
   }
   function tableCardsEndpoint() {
-    return "/v1/exports/table-cards/pdf" +
+    return "/v2/exports/table-cards/pdf" +
       (state.cardsPerPage === 1 ? "" : "?cards_per_page=" + state.cardsPerPage);
   }
   function clearObjectUrl() {
@@ -1399,7 +1399,7 @@ export function createApp(root, api = createGateway()) {
     const printButton=iconAction("Print and PDF","printer",()=>loadView("print"),
       "quiet small icon-button","view-print");
     const exportButton=iconAction("Download plan JSON","download",()=>attempt(async()=>{
-      const result = await api.post("/v1/exports/json",state.plan);
+      const result = await api.post("/v2/exports/json",state.plan);
       downloadBlob(JSON.stringify(result,null,2),"seating-plan.json","application/json");
     }),"quiet small icon-button","download-json");
     exports.append(printButton,exportButton);
@@ -1479,7 +1479,7 @@ export function createApp(root, api = createGateway()) {
             }, "primary", "print-preview-document"),
             action("Download PDF", () => attempt(async () => {
               const endpoint = state.printFormat === "floor"
-                ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+                ? "/v2/exports/floor-map/pdf" : tableCardsEndpoint();
               const blob = await api.post(endpoint, state.plan, "blob");
               downloadBlob(blob, state.printFormat === "floor" ? "floor-maps.pdf" : "table-cards.pdf",
                 "application/pdf");
@@ -1571,14 +1571,14 @@ export function createApp(root, api = createGateway()) {
           listContentEndpoint = endpoint;
         } else {
           const density = state.cardsPerPage;
-          const endpoint = format === "floor" ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+          const endpoint = format === "floor" ? "/v2/exports/floor-map/pdf" : tableCardsEndpoint();
           const blob = await api.post(endpoint, state.plan, "blob");
           if (request !== viewRequest || (format === "cards" && density !== state.cardsPerPage)) return;
           if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser.");
           viewObjectUrl = URL.createObjectURL(blob);
         }
       } else if (view === "json") {
-        const json = await api.post("/v1/exports/json", state.plan);
+        const json = await api.post("/v2/exports/json", state.plan);
         if (request !== viewRequest) return;
         state.viewContent = json;
       }
