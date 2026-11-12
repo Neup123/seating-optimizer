@@ -112,7 +112,9 @@ a flat "wholeness reward" would charge them identically.
 Splitting needs no criterion. A family spread over several tables is
 visible from the plan itself, so the split term is **structural**: it is
 computed from the assignment, not from any attribute or operator-supplied
-datum.
+datum. The authored split weight is never silently recalibrated: validation
+warns when a conservative bound for the ordinary-points pool approaches
+or exceeds it, leaving the numeric decision with the operator.
 
 ## 6. Mixing is criterion-born
 
@@ -303,6 +305,13 @@ its points and mixing is almost free at the margin. Under the negative
 face, every mixed pair is an active cost, so the solver keeps hunting for
 a cleaner arrangement. Which face applies is the operator's choice on the
 criterion instance (§4, §6) — the engine's duty is to offer both.
+
+For criterion-pair rules, an explicit `scope=within` counts pairs only
+inside a registered family; `scope=across` counts pairs only between
+different registered families. An omitted B2 scope preserves the migrated
+legacy all-pairs calculation, including the 21 Hebrew–Hebrew pairs in
+the same family above. These scopes alter *which pairs* count, not the
+operator's positive/negative scoring polarity.
 
 ### 13.3 A low-priority family that only fits by splitting
 
