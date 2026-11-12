@@ -307,3 +307,38 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
  .card{padding:15px}
 }
 @media(prefers-reduced-motion:reduce){.skeleton-block{animation:none}}
+
+
+/* Focused task groups, explicit shared property vocabulary, keyboard interactions. */
+.review-cluster{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap}
+.review-cluster .view-tabs{padding:4px;flex:none}
+.review-cluster .view-tabs button{display:inline-flex;align-items:center;gap:7px;border:0}
+.list-modes{display:inline-flex;align-items:center;border-left:1px solid #d1dee3;padding-left:10px;gap:4px}
+.list-modes button{display:inline-flex;align-items:center;gap:6px;min-height:34px;border-color:transparent;background:transparent}
+.list-modes button[aria-selected=true]{border:1px solid #bdd4da;background:#edf6f8}
+.export-cluster{display:inline-flex;align-items:center;gap:6px;max-width:max-content;padding:6px 9px 4px;margin:0;border:1px solid #dbe7ea;border-radius:10px}
+.export-cluster legend{font-size:11px;color:#537080;font-weight:700;padding:0 5px}
+.export-cluster button{background:transparent;border:0;min-width:34px;min-height:34px}
+.export-cluster button:hover{background:#dbecee}
+.property-picker{max-width:max-content;min-width:180px;border:1px solid #d6e2e6;border-radius:10px;padding:9px 11px;background:#fcfefe}
+.property-picker legend{font-size:12px;font-weight:650;color:#536f7c;padding:0 5px}
+.property-picker .property-options{display:flex;flex-wrap:wrap;gap:0 8px}
+.property-picker .row{align-items:center;margin:4px 0 0;gap:6px}
+.property-picker input[type=text]{width:180px;min-width:90px;min-height:33px}
+.property-picker .icon-button{min-width:30px;min-height:32px}
+.plan-target.plan-check{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.plan-target.plan-check input,.plan-person-check input{height:17px;width:17px;accent-color:#177588;flex:none}
+.plan-person-check{display:inline-flex;align-items:center;gap:6px;border:1px solid #d9e6ea;border-radius:8px;padding:5px 8px;background:#f9fcfd;cursor:pointer}
+.plan-entry .icon-button{min-width:31px;min-height:31px}
+.plan-selection .selection-footprint{font-size:12px;font-weight:650;color:#466f7e}
+.unsaved{color:#ad6943}
+.map-group:focus-visible,[data-table-id]:focus-visible{outline:2px solid #16879e;outline-offset:3px}
+.draft-status{font-size:12px;color:#586b75}
+@media(max-width:620px){
+ .plan-view-toolbar{align-items:stretch;justify-content:flex-start}
+ .review-cluster{width:100%}
+ .export-cluster{margin:0}
+ .plan-entry-line{flex-wrap:wrap}
+ .rule-accordion-head .danger-icon{font-size:14px}
+ .list-modes{border:0;padding-left:0}
+}
