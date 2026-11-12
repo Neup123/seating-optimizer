@@ -98,14 +98,18 @@ test("golden 120 guest registrations: v2 criteria, API solve, selection, print a
   await shot(page,info,"07-plan-empty");
 
   // Snapshot the deliberately designed intermediate state before the server responds.
+  let releaseSolve;
   await page.route("**/v2/solve",async route=>{
-    await new Promise(resolve=>setTimeout(resolve,350));
+    await new Promise(resolve=>{releaseSolve=resolve;});
     await route.continue();
   });
+  const pending=page.waitForRequest(r=>r.url().endsWith("/v2/solve")&&r.method()==="POST");
   const responsePromise=page.waitForResponse(r=>r.url().endsWith("/v2/solve")&&r.request().method()==="POST");
   await page.locator("#solve-plan").click();
+  await pending;
   await expect(page.locator(".solve-progress")).toBeVisible();
   await shot(page,info,"08-plan-loading");
+  releaseSolve();
   const res=await responsePromise;
   expect(res.status()).toBe(200);
   const result=await res.json();
