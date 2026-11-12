@@ -1,6 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
-import { renderGenericRules, tablePropertyVocabulary } from "./v2-rules.js";
+import { renderGenericRules, tablePropertyVocabulary, displayRuleName } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
@@ -41,7 +41,7 @@ function partyName(assignment) {
 }
 function ruleLabel(rule, fallback) {
   // Never surface an internal rule ID as an operator-facing label.
-  return (typeof rule?.name === "string" && rule.name.trim()) || "Unnamed consideration";
+  return displayRuleName(rule);
 }
 function importedPartyName(guest) {
   if (guest.group_name?.trim()) return guest.group_name.trim();
@@ -224,7 +224,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -252,6 +252,7 @@ export function createApp(root, api = createGateway()) {
     state.needsMigration = previous.version === 1 || state.rules.some(rule => rule.shape);
     state.error = false;
   }
+  if (["optimal", "feasible"].includes(state.plan?.status)) state.lastGoodPlan = deepCopy(state.plan);
   let viewObjectUrl = null;
   let listContentEndpoint = null;
   let viewRequest = 0;
@@ -372,6 +373,8 @@ export function createApp(root, api = createGateway()) {
     finally { working = false; }
   }
   function invalidate() {
+    if (["optimal", "feasible"].includes(state.plan?.status))
+      state.lastGoodPlan = deepCopy(state.plan);
     state.plan = null; state.viewContent = null; state.selectedPlanItem = null;
     state.reassignMode = null; state.reassignResponse = null;
     state.pendingUnseatGroupId = null;
@@ -1207,8 +1210,19 @@ export function createApp(root, api = createGateway()) {
         state.solving = true; render();
         let plan;
         try { plan = await api.post("/v2/solve", problem); }
+        catch (error) {
+          // An unsuccessful request is not an instruction to discard the last solved seating.
+          if (!state.plan && state.lastGoodPlan) {
+            state.plan = deepCopy(state.lastGoodPlan);
+            state.restoredAfterFailure = true;
+          }
+          throw error;
+        }
         finally { state.solving = false; render(); }
         state.plan = plan;
+        state.restoredAfterFailure = false;
+        if (["optimal", "feasible"].includes(plan.status))
+          state.lastGoodPlan = deepCopy(plan);
         state.manualInstructions = deepCopy(plan.manual_instructions || state.manualInstructions);
         state.reassignResponse = null;
         state.reassignMode = null;
@@ -1343,6 +1357,22 @@ export function createApp(root, api = createGateway()) {
     }
     const status = card("Solution · " + plan.status.toUpperCase(), "Score: " + (plan.total_score ?? "—") +
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
+    if (state.restoredAfterFailure) status.append(element("p", "problem warning",
+      "Showing the last successful plan; the latest solve failed and current inputs may differ."));
+    if (plan.score_breakdown?.length) {
+      // Score entries are plan-wide: do not misattribute them to individual assignments.
+      const breakdown = element("section", "score-breakdown");
+      breakdown.setAttribute("aria-label", "Plan score breakdown");
+      breakdown.append(element("h3", "", "Score breakdown"));
+      const entries = element("ul");
+      for (const entry of plan.score_breakdown) {
+        const name = ruleLabel(state.rules.find(rule => rule.id === entry.rule_id));
+        const points = Number(entry.points || 0);
+        entries.append(element("li", "", name + ": " + (points > 0 ? "+" : "") +
+          points + (Math.abs(points) === 1 ? " point" : " points")));
+      }
+      breakdown.append(entries); status.append(breakdown);
+    }
     if (plan.status === "infeasible" || plan.status === "unknown") {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
@@ -1564,7 +1594,10 @@ export function createApp(root, api = createGateway()) {
         : String(a.guest_ids.length);
       part.append(element("h4", "", partyName(a) + " — " + sizeLabel + " → " + a.table_id),
         element("p", "muted", (people.length ? people.join(", ") + " · " : "") +
-          Number(a.points).toFixed(2) + (Math.abs(Number(a.points)) === 1 ? " point" : " points")));
+          (!Number(a.points || 0) && plan.score_breakdown?.length
+            ? "No assignment-specific score — see plan breakdown"
+            : Number(a.points || 0).toFixed(2) +
+              (Math.abs(Number(a.points || 0)) === 1 ? " point" : " points"))));
       const ul = document.createElement("ul");
       (a.reasons || []).forEach(r => ul.append(element("li", "",
         ruleDisplay(r.rule_id) + ": " + r.description +
