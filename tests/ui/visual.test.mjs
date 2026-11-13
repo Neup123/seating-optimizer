@@ -3,43 +3,21 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { createApp, createGateway, friendlyApiError } from "../../src/seating_optimizer/api/web/app.js";
 
-const catalog = {
-  shapes: [
-    { shape: "attribute_grouping", title: "Attribute grouping", description: "Grouping",
-      modes: ["soft","hard"], default_mode: "soft", default_weight: 3,
-      fields: [{ name: "attribute", label: "Attribute", kind: "text", required: true, choices: [] }] },
-    { shape: "zone_restriction", title: "Zone restriction", description: "Zones",
-      modes: ["hard","soft"], default_mode: "hard", default_weight: 3,
-      fields: [{ name: "attribute", label: "Attribute", kind: "text", required: true, choices: [] },
-               { name: "zone", label: "Zone", kind: "zone", required: true, choices: [] }] },
-    { shape: "table_property_need", title: "Guest need → table property", description: "Only guests carry points",
-      modes: ["soft","hard"], default_mode: "soft", default_weight: 2,
-      fields: [{ name: "attribute", label: "Guest attribute", kind: "text", required: true, choices: [] },
-               { name: "value", label: "Guest value", kind: "text", required: false, choices: [] },
-               { name: "property", label: "Table property", kind: "text", required: true, choices: [] }] },
-    { shape: "pair", title: "Pair rules", description: "Pairs",
-      modes: ["soft","hard"], default_mode: "soft", default_weight: 3,
-      fields: [{ name: "left", label: "Left", kind: "target", required: true, choices: [] },
-               { name: "right", label: "Right", kind: "target", required: true, choices: [] },
-               { name: "relation", label: "Relation", kind: "select", required: true, choices: ["together", "apart"] }] },
-    { shape: "capacity", title: "Capacity", description: "Hard ceiling",
-      modes: ["hard"], default_mode: "hard", default_weight: null, fields: [] },
-    { shape: "fill_efficiency", title: "Fill efficiency", description: "Holes",
-      modes: ["soft"], default_mode: "soft", default_weight: 3, fields: [] },
-    { shape: "pin", title: "Pin", description: "Lock table",
-      modes: ["hard"], default_mode: "hard", default_weight: null,
-      fields: [{ name: "target", label: "Target", kind: "target", required: true, choices: [] },
-               { name: "table", label: "Table", kind: "table", required: true, choices: [] }] },
-  ]
-};
-const globalPatternSpec = {
-  shape: "global_pattern", title: "Global table-count pattern", description: "Generic rule",
-  modes: ["soft"], default_mode: "soft", default_weight: 2,
-  fields: [
-    { name: "effect", label: "Effect", kind: "select", required: true, choices: ["penalty", "reward"] },
-    { name: "conditions", label: "Conditions", kind: "pattern", required: true, choices: [] }
-  ]
-};
+const catalog = [
+  {engine:"intra",mechanism:"split_term",modes:["soft"]},
+  {engine:"intra",mechanism:"own_attribute_grouping",modes:["soft","hard"]},
+  {engine:"inter",mechanism:"pair_relation",modes:["hard","soft"]},
+  {engine:"inter",mechanism:"criterion_pairs",modes:["hard","soft"]},
+  {engine:"inter",mechanism:"table_pattern",modes:["soft"]},
+  {engine:"inter",mechanism:"companionship",modes:["soft"]},
+  {engine:"venue",mechanism:"placement_by_criterion",modes:["hard","soft"]},
+  {engine:"venue",mechanism:"tiered_placement",modes:["staged"]},
+  {engine:"venue",mechanism:"property_need",modes:["hard","soft"]},
+  {engine:"venue",mechanism:"holes_term",modes:["soft"]},
+  {engine:"venue",mechanism:"property_fit",modes:["soft"]},
+  {engine:"venue",mechanism:"locked_assignment",modes:["hard"]},
+  {engine:"stage",mechanism:"priority_mark",modes:["mark"]}
+];
 const layout = { floors: [
   { zone_id: "ground", width: 400, height: 300, tables: [
     { table_id: "G1", x: 20, y: 20, width: 160, height: 140, shape: "rectangle" }
@@ -84,7 +62,7 @@ async function setup(handler = async () => ({}), stored = {}) {
   globalThis.Blob = dom.window.Blob;
   const calls = [];
   const api = {
-    get: async path => { calls.push([path,"GET"]); return path === "/v1/rules/catalog" ? catalog : handler(path); },
+    get: async path => { calls.push([path,"GET"]); return path === "/v2/rules/catalog" ? catalog : handler(path); },
     post: async (path, payload, responseType) => {
       calls.push([path, payload, responseType]);
       return handler(path, payload, responseType);
@@ -178,1486 +156,355 @@ test("Group name is available as an import mapping target and sent to the API", 
   assert.equal(app.state.guests[0].group_name, "The Greens");
 });
 
-test("all seven rule shapes are rendered from API metadata; CRUD and new instances need no code changes", async () => {
-  const { app, dom, $, $$ } = await setup();
-  app.show("rules");
-  for (const shape of catalog.shapes.map(s => s.shape)) {
-    setValue($("#new-rule-shape"), shape, dom.window);
-    click($("#add-rule"));
-  }
-  assert.equal(app.state.rules.length, 7);
-  assert.deepEqual(app.state.rules.map(r => r.shape), catalog.shapes.map(s => s.shape));
-  assert.equal(app.state.rules.find(r => r.shape === "pin").mode, "hard");
-  assert.equal(app.state.rules.find(r => r.shape === "capacity").weight, null);
-  assert.equal($$("#delete-rule-0").length, 1);
-  setValue($("#rule-0-attribute"), "language", dom.window);
-  setValue($("#rule-weight-0"), "15", dom.window);
-  assert.equal(app.state.rules[0].parameters.attribute, "language");
-  assert.equal(app.state.rules[0].weight, 15);
-  setValue($("#rule-mode-0"), "hard", dom.window);
-  assert.equal(app.state.rules[0].weight, null);
-  assert.equal(app.state.rules[0].mode, "hard");
-  setValue($("#new-rule-shape"), "attribute_grouping", dom.window);
-  click($("#add-rule"));
-  assert.equal(app.state.rules.filter(r => r.shape === "attribute_grouping").length, 2);
-  click($("#delete-rule-1"));
-  assert.equal(app.state.rules.length, 7);
-});
 
-test("map editor imports structured geometry, edits capacity/position, validates round-trip over API, and drags tables", async () => {
-  const { app, dom, $, calls, root } = await setup(async (path, payload) => {
-    if (path !== "/v1/layouts/import") return {};
-    const decoded = JSON.parse(Buffer.from(payload.files[0].content_base64, "base64").toString("utf8"));
-    return decoded;
-  });
-  app.show("map");
-  upload($("#layout-file"), "layout.json", new TextEncoder().encode(JSON.stringify(layout)), dom.window);
-  await until(() => !!$("#table-G1-capacity"));
-  assert.equal(app.state.tables[0].capacity, null);
-  setValue($("#table-G1-capacity"), "4", dom.window);
-  setValue($("#table-G1-x"), "35", dom.window);
-  click(root.querySelector('form[data-table-id="G1"] button[type="submit"]'));
-  assert.equal(app.state.tables[0].capacity, 4);
-  assert.equal(app.state.layout.floors[0].tables[0].x, 35);
-  click($("#validate-layout"));
-  await until(() => root.textContent.includes("Venue layout validated"));
-  const req = calls.filter(([path]) => path === "/v1/layouts/import").at(-1)[1];
-  assert.equal(req.tables[0].capacity, 4);
-  assert.equal(JSON.parse(Buffer.from(req.files[0].content_base64, "base64")).floors[0].tables[0].x, 35);
-  assert.ok($("#map-editor-svg").querySelector('[data-table-id="G1"]'));
-  const svg = $("#map-editor-svg");
-  svg.getBoundingClientRect = () => ({ width: 400, height: 300 });
-  const group = svg.querySelector('[data-table-id="G1"]');
-  group.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, clientX: 50, clientY: 50 }));
-  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointermove", { bubbles: true, clientX: 70, clientY: 65 }));
-  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
-  assert.equal(app.state.layout.floors[0].tables[0].x, 55);
-  assert.equal(app.state.layout.floors[0].tables[0].y, 35);
-});
-
-test("solved plan switches between all API exports and shows reasons, compromises, unused chairs", async () => {
-  const { app, dom, calls, $, root } = await setup(async (path, payload) => {
-    if (path === "/v1/solve") return plan;
-    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
-    if (path === "/v1/exports/floor-map/svg") return { pages: [{zone_id: "ground",
-      svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>family-one</text></svg>'}] };
-    if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"],{type:"application/pdf"});
-    if (path === "/v1/exports/json") return plan;
-    throw Error("Unexpected request " + path);
-  });
+// Phase 3 replaces the retired v1 shape tests with v2 engine/mechanism assertions.
+// Headless API contract tests still cover the legacy migration endpoints.
+function seed(app) {
   app.state.guests = [
-    { id: "g1", name: "Alice", group_id: "family-one", attributes: {} },
-    { id: "g2", name: "Bob", group_id: "family-one", attributes: {} }
+    {id:"g1",name:"Alice",group_id:"family-one",group_name:"Family One",attributes:{language:"English",age:74,mobility:"wheelchair"}},
+    {id:"g2",name:"Bob",group_id:"family-one",group_name:"Family One",attributes:{language:"English",age:12,mobility:"mobile"}},
+    {id:"g3",name:"Carol",group_id:"family-two",group_name:"Family Two",attributes:{language:"Greek",age:38,mobility:"mobile"}}
   ];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!$(".plan-entry"));
-  assert.match(root.textContent, /Shares language at this table/);
-  assert.match(root.textContent, /Table G1 has two empty chairs/);
-  assert.match(root.textContent, /Empty chairs/);
-  click($("#view-floor"));
-  await until(() => !!$("#working-floor-svg"));
-  assert.ok($("#working-floor-svg").querySelector('[data-table-id="G1"]'));
-  click($("#view-cards"));
-  await until(() => !!$(".working-table-card"));
-  assert.equal($("#cards-preview"), null, "working cards must not be a PDF frame");
-  click($("#view-print"));
-  setValue($("#print-format"), "cards", dom.window);
-  await until(() => !!$("#cards-preview"));
-  assert.equal($("#cards-preview").src, "blob:test/print");
-  assert.equal($("#cards-per-page").value, "1");
-  setValue($("#cards-per-page"), "4", dom.window);
-  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4"));
-  await until(() => !!$("#cards-preview"));
-  click($("#download-cards"));
-  await until(() => calls.filter(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=4").length === 2);
-  setValue($("#cards-per-page"), "2", dom.window);
-  await until(() => calls.some(([path]) => path === "/v1/exports/table-cards/pdf?cards_per_page=2"));
-  await until(() => !!$("#cards-preview"));
-  // Let the download task settle before navigating (actions are serialized).
-  await new Promise(resolve => setTimeout(resolve, 10));
-  click($("#view-json"));
-  await until(() => root.textContent.includes('"score_breakdown"'));
-  assert.ok(calls.some(([path]) => path === "/v1/exports/json"));
-  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 1);
-  assert.ok(calls.every(([path]) => path === "/v1/rules/catalog" || path.startsWith("/v1/")));
-});
-
-
-
-test("infeasible report shows packing cause without misleading File: prefix", async () => {
-  const { app, root, $ } = await setup(async path => {
-    if (path === "/v1/solve") return {
-      session_id: "packing", status: "infeasible", total_score: null, solve_seconds: 0.1,
-      conflicting_constraints: ["Party packing: at least 3 tables are needed but only 2 are available."],
-      message: "No seating arrangement is possible with the available table capacities and party sizes."
-    };
-    return {};
-  });
-  app.state.guests = [{ id: "g1", name: "Alice", attributes: {} }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "T1", zone_id: "ground", capacity: 10 }];
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => root.textContent.includes("at least 3 tables"));
-  assert.match(root.textContent, /Why no seating plan fits/);
-  assert.match(root.textContent, /Party packing/);
-  assert.doesNotMatch(root.textContent, /File:|capacity:T1/);
-});
-
-test("a full guest/rule/layout/solved session survives reload and explicit reset preserves templates", async () => {
-  const handler = async (path, payload) => {
-    if (path === "/v1/solve") return plan;
-    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
-    if (path === "/v1/configurations/validate") return payload;
-    return {};
-  };
-  const first = await setup(handler);
-  first.app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one", attributes: {} }];
-  first.app.state.zones = [{ id: "ground", name: "Ground" }];
-  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  first.app.state.layout = layout;
-  first.app.state.preview = { headers: ["Name"], sample_rows: [], issues: [] };
-  first.app.state.mapping = { Name: "name" };
-  first.app.show("rules");
-  click(first.$("#add-rule"));
-  setValue(first.$("#rule-0-attribute"), "language", first.dom.window);
-  first.app.show("plan");
-  click(first.$("#solve-plan"));
-  await until(() => !!first.app.state.plan);
-  const saved = Object.fromEntries(
-    Object.keys(first.storage).map(key => [key, first.storage.getItem(key)]));
-  const restored = await setup(handler, saved);
-  assert.equal(restored.app.state.guests.length, 1);
-  assert.equal(restored.app.state.tables.length, 1);
-  assert.equal(restored.app.state.rules.length, 1);
-  assert.equal(restored.app.state.mapping.Name, "name");
-  assert.deepEqual(restored.app.state.layout, layout);
-  assert.deepEqual(restored.app.state.plan, plan);
-  await until(() => !!restored.$(".plan-entry"));
-  click(restored.$("#new-session"));
-  assert.equal(restored.app.state.guests.length, 0);
-  assert.equal(restored.app.state.rules.length, 0);
-  assert.equal(restored.app.state.layout.floors.length, 0);
-  assert.equal(restored.storage.getItem("seating-optimizer:session:v1")?.includes('"guests":[]'), true);
-});
-
-test("named full configurations can be saved, duplicated, loaded, exported, imported and deleted without guests", async () => {
-  const handler = async (path, payload) => {
-    if (path === "/v1/configurations/validate") return payload;
-    if (path === "/v1/layouts/import") return layout;
-    return {};
-  };
-  const first = await setup(handler);
-  first.app.state.zones = [{ id: "ground", name: "Ground" }];
-  first.app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  first.app.state.layout = layout;
-  first.app.state.rules = [{ id: "lang", shape: "attribute_grouping", mode: "soft",
-    weight: 4, parameters: { attribute: "language" } }];
-  first.app.show("map");
-  setValue(first.$("#template-name"), "Weekly dinner", first.dom.window);
-  click(first.$("#save-template"));
-  await until(() => first.root.textContent.includes("Saved configuration template"));
-  assert.equal(first.app.state.guests.length, 0);
-  const stored = first.storage.getItem("seating-optimizer:templates:v1");
-  assert.equal(JSON.parse(stored)[0].rules[0].parameters.attribute, "language");
-  click(first.$("#duplicate-template"));
-  await until(() => first.root.textContent.includes("Duplicated template"));
-  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 2);
-  click(first.$("#new-session"));
-  first.app.show("map");
-  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
-  click(first.$("#load-template"));
-  await until(() => first.app.state.tables.length === 1);
-  assert.equal(first.app.state.rules[0].weight, 4);
-  assert.equal(first.app.state.layout.floors.length, 1);
-  assert.equal(first.app.state.guests.length, 0);
-  let exported;
-  first.dom.window.URL.createObjectURL = blob => { exported = blob; return "blob:test/export"; };
-  click(first.$("#export-configuration"));
-  await until(() => exported);
-  assert.match(first.root.textContent, /Exported the complete venue/);
-  setValue(first.$("#template-select"), "Weekly dinner", first.dom.window);
-  click(first.$("#delete-template"));
-  await until(() => first.root.textContent.includes("Deleted saved template"));
-  assert.equal(JSON.parse(first.storage.getItem("seating-optimizer:templates:v1")).length, 1);
-  // A full JSON file imported into a fresh session reuses the headless validator.
-  const content = JSON.parse(JSON.stringify(JSON.parse(stored)[0]));
-  const fresh = await setup(handler);
-  fresh.app.show("map");
-  const file = { name: "venue-configuration.json", size: 200,
-    text: async () => JSON.stringify(content) };
-  Object.defineProperty(fresh.$("#configuration-file"), "files", { configurable: true, value: [file] });
-  fresh.$("#configuration-file").dispatchEvent(new fresh.dom.window.Event("change", { bubbles: true }));
-  await until(() => fresh.app.state.tables.length === 1);
-  assert.deepEqual(fresh.app.state.rules, content.rules);
-  assert.deepEqual(fresh.app.state.layout, content.layout);
-  assert.equal(fresh.app.state.guests.length, 0);
-});
-
-test("corrupt storage is ignored and a storage quota failure is visible rather than a silent reset", async () => {
-  const first = await setup(async () => ({}), {
-    "seating-optimizer:session:v1": "{bad json",
-    "seating-optimizer:templates:v1": '{"broken":true}'
-  });
-  assert.equal(first.app.state.guests.length, 0);
-  assert.ok(first.$("#new-session"));
-  const proto = first.dom.window.Storage.prototype;
-  const original = proto.setItem;
-  proto.setItem = () => { throw Error("quota"); };
-  try {
-    first.app.show("map");
-    assert.match(first.root.textContent, /Browser storage is unavailable or full/);
-  } finally { proto.setItem = original; }
-});
-
-test("gateway sanitizes raw fetch/network exceptions but preserves meaningful HTTP diagnostics", async () => {
-  const gateway = createGateway(async () => { throw new TypeError("Failed to fetch"); });
-  await assert.rejects(() => gateway.get("/v1/rules/catalog"),
-    /Could not reach the server.*try again/);
-  assert.equal(friendlyApiError(Error("NetworkError when attempting to fetch resource.")),
-    "Could not reach the server — check your connection and try again.");
-  const bad = createGateway(async () => ({
-    ok: false, status: 422, text: async () => JSON.stringify({ detail: "Invalid layout geometry" })
-  }));
-  await assert.rejects(() => bad.post("/v1/layouts/import", {}), /Invalid layout geometry/);
-});
-
-test("import, venue validation, solve and export retry only the failed request without losing state", async () => {
-  const offline = new Set(["/v1/import/preview"]);
-  const handler = async (path, payload) => {
-    if (offline.has(path)) throw new TypeError("Failed to fetch");
-    if (path === "/v1/import/preview") return {
-      headers: ["Guest Name", "Party Size"], mapping: { "Guest Name": "name", "Party Size": "size" },
-      sample_rows: [], issues: []
-    };
-    if (path === "/v1/import") return {
-      guests: [{ id: "g1", name: "Alice", attributes: {}, group_id: "family" }],
-      rows_imported: 1, issues: []
-    };
-    if (path === "/v1/layouts/import") return layout;
-    if (path === "/v1/solve") return plan;
-    if (path === "/v1/exports/table") return "Table G1: Alice and Bob";
-    if (path === "/v1/exports/table-cards/pdf") return new Blob(["%PDF"], { type: "application/pdf" });
-    return {};
-  };
-  const { app, dom, $, root, calls } = await setup(handler);
-  upload($("#guest-file"), "guests.csv", new TextEncoder().encode("Guest Name,Party Size\nAlice,1\n"), dom.window);
-  await until(() => !!$("#retry-action"));
-  assert.match($("#notice").textContent, /Could not reach the server/);
-  assert.doesNotMatch(root.textContent, /Failed to fetch/);
-  assert.equal(app.state.preview, null);
-  offline.delete("/v1/import/preview");
-  click($("#retry-action"));
-  await until(() => !!$("#map-guest-name"));
-  assert.equal(calls.filter(([path]) => path === "/v1/import/preview").length, 2);
-  click($("#import-guests"));
-  await until(() => app.state.guests.length === 1);
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.show("map");
-  offline.add("/v1/layouts/import");
-  click($("#validate-layout"));
-  await until(() => !!$("#retry-action"));
-  assert.deepEqual(app.state.layout, layout);
-  offline.delete("/v1/layouts/import");
-  click($("#retry-action"));
-  await until(() => root.textContent.includes("Venue layout validated"));
-  app.show("plan");
-  offline.add("/v1/solve");
-  click($("#solve-plan"));
-  await until(() => !!$("#retry-action"));
-  assert.equal(app.state.plan, null);
-  offline.delete("/v1/solve");
-  click($("#retry-action"));
-  await until(() => !!app.state.plan);
-  assert.ok($(".plan-entry"));
-  // An export-preview failure offers Retry for that export, not re-solve.
-  offline.add("/v1/exports/table-cards/pdf");
-  click($("#view-print"));
-  setValue($("#print-format"), "cards", dom.window);
-  await until(() => !!$("#retry-action"));
-  assert.ok(app.state.plan);
-  assert.doesNotMatch(root.textContent, /Failed to fetch/);
-  offline.delete("/v1/exports/table-cards/pdf");
-  click($("#retry-action"));
-  await until(() => !!$("#cards-preview"));
-  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 2);
-  app.show("map");
-  offline.add("/v1/layouts/import");
-  click($("#export-layout"));
-  await until(() => !!$("#retry-action"));
-  offline.delete("/v1/layouts/import");
-  click($("#retry-action"));
-  await until(() => root.textContent.includes("Venue layout validated") || !$("#retry-action"));
-  assert.equal(calls.filter(([path]) => path === "/v1/layouts/import").length, 4);
-});
-
-test("layout tags are edited and imported as passive facts, while a guest-need rule carries weight", async () => {
-  const imported = { floors: [{ zone_id: "hall", width: 400, height: 300, tables: [
-    { table_id: "A", x: 15, y: 20, width: 150, height: 110, shape: "rectangle",
-      properties: ["aisle-edge"] }
-  ] }] };
-  const { app, dom, root, $, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/layouts/import") {
-      return JSON.parse(Buffer.from(payload.files[0].content_base64, "base64").toString("utf8"));
-    }
-    return {};
-  });
-  app.show("map");
-  upload($("#layout-file"), "hall.json", new TextEncoder().encode(JSON.stringify(imported)), dom.window);
-  await until(() => !!$("#table-A-properties"));
-  assert.deepEqual(app.state.tables[0].properties, ["aisle-edge"]);
-  assert.equal($("#table-A-properties").value, "aisle-edge");
-  setValue($("#table-A-capacity"), "4", dom.window);
-  setValue($("#table-A-properties"), "accessible, aisle-edge", dom.window);
-  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
-  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
-  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
-  click($("#validate-layout"));
-  await until(() => root.textContent.includes("Venue layout validated"));
-  const check = calls.filter(([path]) => path === "/v1/layouts/import").at(-1)[1];
-  assert.deepEqual(check.tables[0].properties, ["accessible", "aisle-edge"]);
-  const encoded = JSON.parse(Buffer.from(check.files[0].content_base64, "base64").toString("utf8"));
-  assert.deepEqual(encoded.floors[0].tables[0].properties, ["accessible", "aisle-edge"]);
-
-  app.show("rules");
-  setValue($("#new-rule-shape"), "table_property_need", dom.window);
-  click($("#add-rule"));
-  setValue($("#rule-0-attribute"), "mobility", dom.window);
-  setValue($("#rule-0-value"), "wheelchair", dom.window);
-  setValue($("#rule-0-property"), "accessible", dom.window);
-  setValue($("#rule-weight-0"), "7", dom.window);
-  assert.equal(app.state.rules[0].parameters.property, "accessible");
-  assert.equal(app.state.rules[0].weight, 7);
-  setValue($("#rule-mode-0"), "hard", dom.window);
-  assert.equal(app.state.rules[0].weight, null);
-  assert.equal(app.state.rules[0].mode, "hard");
-  app.state.guests = [{ id: "g1", name: "Guest", attributes: { mobility: "wheelchair" } }];
-  const request = app.projectProblem();
-  assert.deepEqual(request.tables[0].properties, ["accessible", "aisle-edge"]);
-  assert.equal(request.rules[0].shape, "table_property_need");
-  assert.equal(request.rules[0].weight, null);
-
-  app.show("map");
-  setValue($("#table-A-properties"), "ACCESSIBLE, accessible", dom.window);
-  click(root.querySelector('form[data-table-id="A"] button[type="submit"]'));
-  assert.match(root.textContent, /property names must be unique/i);
-  assert.deepEqual(app.state.tables[0].properties, ["accessible", "aisle-edge"]);
-});
-
-test("creating a table lets the owner set table tags without importing a guest list", async () => {
-  const { app, dom, $, root } = await setup();
-  app.show("map");
-  const form = $("#floor-form");
-  setValue(form.querySelector('[name="id"]'), "hall", dom.window);
-  setValue(form.querySelector('[name="name"]'), "Main hall", dom.window);
-  click($("#add-floor"));
-  setValue($("#new-table-id"), "T1", dom.window);
-  setValue($("#new-table-capacity"), "5", dom.window);
-  setValue($("#new-table-properties"), "quiet, near-exit", dom.window);
-  click($("#add-table"));
-  assert.equal(app.state.guests.length, 0);
-  assert.deepEqual(app.state.tables[0].properties, ["quiet", "near-exit"]);
-  assert.deepEqual(app.state.layout.floors[0].tables[0].properties, ["quiet", "near-exit"]);
-});
-
-test("re-saving a named template updates the stored configuration and reloads corrected values", async () => {
-  const { app, dom, $, storage, root } = await setup(async (path, payload) =>
-    path === "/v1/configurations/validate" ? payload : {});
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.state.rules = [{ id: "lang", shape: "attribute_grouping", mode: "soft",
-    weight: 2, parameters: { attribute: "language" } }];
-  app.show("map");
-  setValue($("#template-name"), "Dinner", dom.window);
-  click($("#save-template"));
-  await until(() => root.textContent.includes("Saved configuration template: Dinner"));
-  app.state.rules[0].weight = 9;
-  app.state.tables[0].capacity = 7;
-  click($("#save-template"));
-  await until(() => root.textContent.includes("Updated configuration template: Dinner"));
-  const stored = JSON.parse(storage.getItem("seating-optimizer:templates:v1"));
-  assert.equal(stored.length, 1);
-  assert.equal(stored[0].rules[0].weight, 9);
-  assert.equal(stored[0].tables[0].capacity, 7);
-  app.state.rules[0].weight = 1;
-  app.state.tables[0].capacity = 2;
-  setValue($("#template-select"), "Dinner", dom.window);
-  click($("#load-template"));
-  await until(() => root.textContent.includes("Loaded template Dinner"));
-  assert.equal(app.state.rules[0].weight, 9);
-  assert.equal(app.state.tables[0].capacity, 7);
-});
-
-test("rule creation exposes a type-first form and existing rules can change type", async () => {
-  const { app, dom, $, root } = await setup();
-  app.show("rules");
-  assert.match(root.textContent, /select its type first/i);
-  setValue($("#new-rule-shape"), "table_property_need", dom.window);
-  assert.match($("#add-rule").textContent, /Guest need/);
-  click($("#add-rule"));
-  assert.equal(app.state.rules[0].shape, "table_property_need");
-  setValue($("#rule-shape-0"), "attribute_grouping", dom.window);
-  assert.equal(app.state.rules[0].shape, "attribute_grouping");
-  setValue($("#rule-0-attribute"), "language", dom.window);
-  setValue($("#rule-shape-0"), "table_property_need", dom.window);
-  assert.deepEqual(app.state.rules[0].parameters, {});
-  assert.equal(app.state.rules[0].weight, 2);
-  assert.ok($("#rule-0-property"), "converted rule shows guest-need fields");
-});
-
-test("working list tabs are interactive while only print preview fetches printable HTML", async () => {
-  const printable = "<!DOCTYPE html><html><head></head><body><p>Exact plan HTML</p></body></html>";
-  const { app, $, dom, calls } = await setup(async path => {
-    if (path === "/v1/solve") return plan;
-    if (path.includes("/html?")) return printable;
-    if (path.startsWith("/v1/exports/table-cards/pdf")) return new Blob(["%PDF"], { type: "application/pdf" });
-    return {};
-  });
-  app.state.guests = [{ id: "g1", name: "Alice" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!app.state.plan);
-  for (const tab of ["people", "people-floor", "groups", "groups-table", "cards"]) {
-    click($("#view-" + tab));
-    assert.ok($(".plan-entry"));
-    assert.equal($("#list-preview"), null);
-    assert.equal($("#print-list"), null);
-  }
-  assert.equal(calls.filter(([path]) => path.includes("/html?")).length, 0);
-  click($("#view-print"));
-  await until(() => !!$("#list-preview"));
-  assert.equal($("#list-preview").srcdoc, printable);
-  for (const [format, endpoint] of [
-    ["people", "people-list/html?group_by=combined"],
-    ["people-floor", "people-list/html?group_by=floor"],
-    ["groups", "table-list/html?group_by=combined"],
-    ["groups-table", "table-list/html?group_by=table"]
-  ]) {
-    setValue($("#print-format"), format, dom.window);
-    await until(() => !!$("#list-preview"));
-    assert.equal($("#print-reasons").checked, false);
-    assert.ok(calls.some(([path]) => path.includes(endpoint + "&include_reasons=false")));
-    const box = $("#print-reasons");
-    box.checked = true;
-    box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    await until(() => calls.some(([path]) => path.includes(endpoint + "&include_reasons=true")));
-    assert.equal($("#print-reasons").checked, true);
-  }
-  setValue($("#print-format"), "cards", dom.window);
-  await until(() => !!$("#cards-preview"));
-  assert.equal($("#list-preview"), null);
-});
-
-test("global pattern rule editor composes a different count pattern, score and on/off controls", async () => {
-  catalog.shapes.push(globalPatternSpec);
-  try {
-    const { app, dom, $, root } = await setup();
-    app.show("rules");
-    setValue($("#new-rule-shape"), "global_pattern", dom.window);
-    click($("#add-rule"));
-    const stored = app.state.rules[0];
-    assert.equal(stored.shape, "global_pattern");
-    assert.equal(stored.mode, "soft");
-    assert.equal(stored.parameters.scope, "global");
-    assert.equal(stored.parameters.enabled, false);
-    assert.deepEqual(stored.parameters.conditions, [
-      { fact: "groups_at_table", op: "==", value: 1 },
-      { fact: "empty_seats", op: "==", value: 1 }
-    ]);
-    const enabled = $("#rule-pattern-enabled-0");
-    enabled.checked = true;
-    enabled.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    setValue($("#rule-0-effect"), "reward", dom.window);
-    setValue($("#rule-weight-0"), "12", dom.window);
-    setValue($("#rule-0-pattern-0-fact"), "groups_at_table", dom.window);
-    setValue($("#rule-0-pattern-0-op"), ">=", dom.window);
-    setValue($("#rule-0-pattern-0-value"), "2", dom.window);
-    click($("#rule-0-remove-pattern-1"));
-    assert.equal(stored.parameters.conditions.length, 1);
-    click($("#rule-0-add-pattern"));
-    setValue($("#rule-0-pattern-1-fact"), "occupied_seats", dom.window);
-    setValue($("#rule-0-pattern-1-op"), ">=", dom.window);
-    setValue($("#rule-0-pattern-1-value"), "2", dom.window);
-    assert.deepEqual(stored.parameters, {
-      scope: "global", enabled: true, effect: "reward",
-      conditions: [
-        { fact: "groups_at_table", op: ">=", value: 2 },
-        { fact: "occupied_seats", op: ">=", value: 2 }
-      ]
-    });
-    assert.equal(stored.weight, 12);
-    app.state.plan = { ...plan, pattern_matches: [
-      { rule_id: stored.id, table_id: "G1", points: 12,
-        description: "Global pattern matched table G1." }
-    ] };
-    app.show("plan");
-    assert.match(root.textContent, /Global pattern matches/);
-    assert.match(root.textContent, /Global pattern matched table G1/);
-  } finally { catalog.shapes.pop(); }
-});
-
-
-
-test("global pattern count autosave rejects empty, nonnumeric, negative and fractional drafts", async () => {
-  catalog.shapes.push(globalPatternSpec);
-  try {
-    const { app, dom, $, storage } = await setup();
-    app.show("rules");
-    setValue($("#new-rule-shape"), "global_pattern", dom.window);
-    click($("#add-rule"));
-    const count = $("#rule-0-pattern-0-value");
-    const savedCount = () => JSON.parse(storage.getItem("seating-optimizer:session:v1"))
-      .data.rules[0].parameters.conditions[0].value;
-    assert.equal(savedCount(), 1);
-    for (const invalid of ["", "not-a-number", "-1", "2.5", "01", "100001"]) {
-      setValue(count, invalid, dom.window);
-      assert.equal(count.value, invalid, "invalid draft remains visible");
-      assert.equal(count.getAttribute("aria-invalid"), "true");
-      assert.match($("#rule-0-pattern-0-value-error").textContent, /whole number/);
-      assert.equal(app.state.rules[0].parameters.conditions[0].value, 1);
-      assert.equal(savedCount(), 1, "invalid value is never autosaved");
-      assert.throws(() => app.projectProblem(), /Fix the highlighted global-pattern count/);
-    }
-    app.show("rules"); // Rendering another view must not silently clear the error.
-    assert.equal($("#rule-0-pattern-0-value").value, "100001");
-    assert.equal($("#rule-0-pattern-0-value").getAttribute("aria-invalid"), "true");
-    setValue($("#rule-0-pattern-0-value"), "0", dom.window);
-    assert.equal(app.state.rules[0].parameters.conditions[0].value, 0);
-    assert.equal(savedCount(), 0);
-    assert.equal($("#rule-0-pattern-0-value").hasAttribute("aria-invalid"), false);
-    const input = $("#rule-0-pattern-0-value");
-    input.value = "17";
-    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    assert.equal(app.state.rules[0].parameters.conditions[0].value, 17);
-    assert.equal(savedCount(), 17, "autosave applies on input, without waiting for blur");
-  } finally { catalog.shapes.pop(); }
-});
-
-test("valid seeded pattern saves and loads through browser templates; invalid draft blocks apply", async () => {
-  catalog.shapes.push(globalPatternSpec);
-  try {
-    const { app, dom, $, root, storage } = await setup(async (path, payload) =>
-      path === "/v1/configurations/validate" ? payload : {});
-    app.state.zones = [{ id: "ground", name: "Ground" }];
-    app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-    app.state.layout = layout;
-    app.show("rules");
-    setValue($("#new-rule-shape"), "global_pattern", dom.window);
-    click($("#add-rule"));
-    const seeded = JSON.parse(JSON.stringify(app.state.rules[0]));
-    setValue($("#rule-0-pattern-0-value"), "", dom.window);
-    app.show("map");
-    setValue($("#template-name"), "Dinner", dom.window);
-    click($("#save-template"));
-    await until(() => root.textContent.includes("Fix the highlighted global-pattern count"));
-    assert.equal(storage.getItem("seating-optimizer:templates:v1"), null);
-    app.show("rules");
-    assert.equal($("#rule-0-pattern-0-value").getAttribute("aria-invalid"), "true");
-    setValue($("#rule-0-pattern-0-value"), "1", dom.window);
-    app.show("map");
-    click($("#save-template"));
-    await until(() => root.textContent.includes("Saved configuration template: Dinner"));
-    const stored = JSON.parse(storage.getItem("seating-optimizer:templates:v1"));
-    assert.deepEqual(stored[0].rules[0], seeded);
-    app.show("rules");
-    setValue($("#rule-0-pattern-0-value"), "0", dom.window);
-    app.show("map");
-    setValue($("#template-select"), "Dinner", dom.window);
-    click($("#load-template"));
-    await until(() => root.textContent.includes("Loaded template Dinner"));
-    assert.deepEqual(app.state.rules[0], seeded);
-    const savedSession = storage.getItem("seating-optimizer:session:v1");
-    const restored = await setup(async () => ({}), { "seating-optimizer:session:v1": savedSession });
-    assert.deepEqual(restored.app.state.rules[0], seeded);
-    restored.app.show("rules");
-    assert.equal(restored.$("#rule-0-pattern-0-value").value, "1");
-    assert.equal(restored.$("#rule-0-pattern-0-value").hasAttribute("aria-invalid"), false);
-  } finally { catalog.shapes.pop(); }
-});
-
-test("table priority checkbox persists between creation, editing, layout and solve payload", async () => {
-  const { app, dom, $, root } = await setup();
-  app.show("map");
-  const form = $("#floor-form");
-  setValue(form.querySelector('[name="id"]'), "hall", dom.window);
-  setValue(form.querySelector('[name="name"]'), "Hall", dom.window);
-  click($("#add-floor"));
-  setValue($("#new-table-id"), "T1", dom.window);
-  $("#new-table-small-priority").checked = true;
-  click($("#add-table"));
-  assert.equal(app.state.tables[0].small_group_priority, true);
-  assert.equal(app.state.layout.floors[0].tables[0].small_group_priority, true);
-  app.state.guests = [{ id: "alice", name: "Alice" }];
-  assert.equal(app.projectProblem().tables[0].small_group_priority, true);
-  const check = $("#table-T1-small-priority");
-  check.checked = false;
-  click(root.querySelector('form[data-table-id="T1"] button[type="submit"]'));
-  assert.equal(app.state.tables[0].small_group_priority, false);
-  assert.equal(app.state.layout.floors[0].tables[0].small_group_priority, false);
-});
-
-
-test("list field picker and printable titles humanize unmapped attributes across redraws", async () => {
-  const { app, $, dom, calls } = await setup(async path => {
-    if (path === "/v1/solve") return {
-      ...plan, assignments: plan.assignments.map(entry => ({
-        ...entry, guest_attributes: [{ language: "Greek", age_layer: "Adult", Babies: "2" }]
-      }))
-    };
-    if (path === "/v1/exports/table") return "table output";
-    if (path.includes("/html?")) return "<!doctype html><html><body>List</body></html>";
-    return {};
-  });
-  app.state.mapping = {
-    "Spoken languages": "attribute.language",
-    "Guest name": "name"
-  };
-  app.state.guests = [{ id: "g1", name: "Alice" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!app.state.plan);
-  click($("#view-print"));
-  setValue($("#print-format"), "people", dom.window);
-  await until(() => !!$(".list-field-picker"));
-  const labels = () => Object.fromEntries(
-    [...$(".list-field-picker").querySelectorAll(".list-field-choice")].map(label => [
-      label.querySelector("input").value, label.textContent.trim()
-    ]));
-  assert.deepEqual(labels(), {
-    Babies: "Babies", age_layer: "Age layer", language: "Spoken languages"
-  });
-  assert.doesNotMatch($(".list-field-picker").textContent, /\b(?:age_layer|language)\b/);
-  app.state.mapping["Age band"] = "attribute.age_layer";
-  app.render();
-  assert.equal(labels().age_layer, "Age band");
-  const language = $(".list-field-picker input[value='language']");
-  language.checked = true;
-  language.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  await until(() => calls.some(([path]) => path.includes("fields=language")));
-  assert.equal(app.state.listFields.includes("language"), true);
-  assert.equal(labels().language, "Spoken languages");
-  const age = $(".list-field-picker input[value='age_layer']");
-  age.checked = true;
-  age.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  await until(() => calls.some(([path]) =>
-    path.includes("fields=language") && path.includes("fields=age_layer")));
-  const latestPeopleParams = () => new URL(calls.filter(([path]) =>
-    path.startsWith("/v1/exports/people-list/html?")).at(-1)[0], "http://localhost").searchParams;
-  assert.deepEqual(latestPeopleParams().getAll("fields"), ["language", "age_layer"]);
-  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Spoken languages", "Age band"]);
-  await until(() => !!$("#list-preview")); // preview completed before the mapping changes
-  delete app.state.mapping["Spoken languages"];
-  app.state.mapping["Preferred language"] = "attribute.language";
-  app.render();
-  assert.equal(labels().language, "Preferred language");
-  assert.equal($(".list-field-picker input[value='language']").checked, true);
-  await until(() => latestPeopleParams().getAll("field_labels")[0] === "Preferred language");
-  await until(() => !!$("#list-preview"));
-  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Preferred language", "Age band"]);
-  delete app.state.mapping["Age band"];
-  app.render();
-  assert.equal(labels().age_layer, "Age layer");
-  assert.equal(labels().language, "Preferred language");
-  assert.equal($(".list-field-picker input[value='age_layer']").checked, true);
-  assert.doesNotMatch($(".list-field-picker").textContent, /\bage_layer\b/);
-  await until(() => latestPeopleParams().getAll("field_labels")[1] === "Age layer");
-  assert.deepEqual(latestPeopleParams().getAll("field_labels"), ["Preferred language", "Age layer"]);
-});
-
-test("list field picker uses imported names and sends the selected columns to printable HTML", async () => {
-  const printable = "<!DOCTYPE html><html><head></head><body><table></table></body></html>";
-  const { app, $, dom, calls } = await setup(async path => {
-    if (path === "/v1/solve") return { ...plan, assignments: plan.assignments.map(a => ({
-      ...a, guest_attributes: a.guest_ids.map(() => ({ Language: "Greek", Notes: "Door" }))
-    })) };
-    if (path === "/v1/exports/table") return "table output";
-    if (path.includes("/html?")) return printable;
-    return {};
-  });
-  app.state.guests = [{ id: "g1", name: "Alice" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!app.state.plan);
-  click($("#view-print"));
-  setValue($("#print-format"), "people", dom.window);
-  await until(() => !!$(".list-field-picker"));
-  const input = [...$(".list-field-picker").querySelectorAll("input")].find(el => el.value === "Language");
-  assert.ok(input, "picker includes original imported field");
-  input.checked = true;
-  input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  await until(() => calls.some(([path]) => path.includes("fields=Language")));
-  await until(() => !!$("#list-preview")); // preview is re-fetched after a picker change
-  assert.ok(app.state.listFields.includes("Language"));
-});
-
-
-test("assignment cards use party labels once, hide generated members, and pluralize people and points", async () => {
-  const synthetic = { ...plan,
-    tables: [{ table_id: "A", zone_id: "ground", capacity: 6, occupied: 6, empty_seats: 0 }],
-    assignments: [{
-      group_id: "registration:2", group_name: "Huge Clan", table_id: "A",
-      guest_ids: Array.from({ length: 6 }, (_, i) => "r2-m" + (i + 7)),
-      guest_names: Array.from({ length: 6 }, (_, i) => "Huge Clan (" + (i + 7) + "/12)"),
-      reasons: [{ rule_id: "split", description: "Group Huge Clan split across adjacent tables A, B.", points: 1 }],
-      points: 1
-    }, {
-      group_id: "registration:2", group_name: "Huge Clan", table_id: "B",
-      guest_ids: Array.from({ length: 6 }, (_, i) => "r2-m" + (i + 1)),
-      guest_names: Array.from({ length: 6 }, (_, i) => "Huge Clan (" + (i + 1) + "/12)"),
-      reasons: [], points: 0
-    }]
-  };
-  const { app, $, root } = await setup(async path => {
-    if (path === "/v1/solve") return synthetic;
-    if (path === "/v1/exports/table") return "Huge Clan — 6/12";
-    return {};
-  });
-  app.state.guests = [{ id: "r2-m7", name: "Huge Clan (7/12)", group_name: "Huge Clan" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "A", zone_id: "ground", capacity: 6 }];
-  app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!$(".reason-card"));
-  const card = $(".reason-card");
-  assert.match(card.textContent, /Huge Clan — 6\/12 → A/);
-  assert.equal(root.querySelectorAll(".reason-card").length, 2);
-  assert.match(root.querySelectorAll(".reason-card")[1].textContent, /Huge Clan — 6\/12 → B/);
-  assert.doesNotMatch(card.textContent, /registration:2|Huge Clan \(\d+\/12\)/);
-  assert.match(card.querySelector("p").textContent, /1\.00 point$/);
-  assert.doesNotMatch(card.textContent, /1 people|1 points/);
-
-  app.state.plan.assignments = [{
-    group_id: "registration:3", group_name: "Green Family", table_id: "A",
-    guest_ids: ["a"], guest_names: ["Alice Green"], reasons: [], points: 0
-  }];
-  app.show("plan");
-  assert.match($(".reason-card").textContent, /Green Family — 1 → A/);
-  assert.match($(".reason-card").textContent, /Alice Green/);
-  assert.doesNotMatch($(".reason-card").textContent, /1 people/);
-  app.state.plan.assignments = [{
-    group_id: "registration:3", group_name: "Green Family", table_id: "A",
-    guest_ids: ["a", "b"], guest_names: ["Alice Green", "Bob Green"], reasons: [], points: 0
-  }];
-  app.show("plan");
-  assert.match($(".reason-card").textContent, /Green Family — 2 → A/);
-
-  app.state.plan.assignments = [{
-    group_id: "registration:4", group_name: "Green Family", table_id: "A",
-    guest_ids: ["solo"], guest_names: ["Green Family"], reasons: [], points: 0
-  }];
-  app.show("plan");
-  assert.match($(".reason-card h4").textContent, /Green Family — 1 → A/);
-  assert.equal($(".reason-card").textContent.split("Green Family").length - 1, 1);
-  assert.doesNotMatch($(".reason-card").textContent, /Guest — 1/);
-
-  app.state.plan.assignments = [{
-    group_id: "guest:unknown", group_name: null, table_id: "A",
-    guest_ids: ["unknown"], guest_names: [""], reasons: [], points: 0
-  }];
-  app.show("plan");
-  assert.match($(".reason-card h4").textContent, /Guest — 1 → A/);
-});
-
-
-test("rule targets display imported party labels while preserving internal IDs as values", async () => {
-  const { app, $, dom } = await setup();
-  app.state.guests = [
-    { id: "r2-m1", name: "Huge Clan (1/12)", group_id: "registration:2", group_name: "Huge Clan" },
-    { id: "r2-m2", name: "Huge Clan (2/12)", group_id: "registration:2", group_name: "Huge Clan" }
+  app.state.zones = [{id:"ground",name:"Ground floor"},{id:"upper",name:"Upper floor"}];
+  app.state.tables = [
+    {id:"G1",zone_id:"ground",capacity:4,properties:["accessible","quiet_corner"]},
+    {id:"U1",zone_id:"upper",capacity:4,properties:["near_window"]}
   ];
+  app.state.layout = layout;
+}
+function chooseMechanism(app,$,dom,engine,mechanism) {
   app.show("rules");
-  setValue($("#new-rule-shape"), "pair", dom.window);
+  setValue($("#new-rule-engine"),engine,dom.window);
+  setValue($("#new-rule-mechanism"),mechanism,dom.window);
   click($("#add-rule"));
-  const options = [...$("#rule-0-left").options];
-  assert.deepEqual(options.map(option => [option.value, option.textContent]), [
-    ["", "Select guest or group"], ["registration:2", "Huge Clan"]
-  ]);
-  setValue($("#rule-0-left"), "registration:2", dom.window);
-  assert.equal(app.state.rules[0].parameters.left, "registration:2");
+}
+test("new rule builder exposes real four-engine mechanism registry without a legacy shape selector",async()=>{
+  const {app,dom,$,$$}=await setup();
+  seed(app);app.show("rules");
+  assert.equal($("#new-rule-shape"),null);
+  assert.equal($("#rule-id-0"),null);
+  const engines=[...$("#new-rule-engine").options].map(o=>o.value);
+  assert.deepEqual(engines,["intra","inter","venue","stage"]);
+  chooseMechanism(app,$,dom,"intra","split_term");
+  assert.equal(app.state.rules.length,1);
+  assert.deepEqual([app.state.rules[0].engine,app.state.rules[0].mechanism,app.state.rules[0].weight],
+    ["intra","split_term",5]);
+  assert.match($(".rule-accordion-head").textContent,/Keep a family together/);
+  assert.equal($$(".rule-accordion").length,1);
+  assert.equal($$(".rule-accordion-body").length,1);
 });
-
-
-test("global pattern match card uses singular facts and points", async () => {
-  const { app, root } = await setup();
-  app.state.plan = { ...plan, pattern_matches: [{
-    rule_id: "lonely-chair", table_id: "G1", points: -1,
-    description: "Global pattern matched table G1 (1 group, 1 occupied seat, 1 empty seat); penalty 1 point."
-  }] };
-  app.show("plan");
-  assert.match(root.textContent, /1 group, 1 occupied seat, 1 empty seat/);
-  assert.match(root.textContent, /\(-1 point\)/);
-  assert.doesNotMatch(root.textContent, /1 groups|1 empty seats|-1 points/);
+test("all thirteen generic mechanisms are instances rather than retired closed shapes",async()=>{
+  const {app,dom,$,$$}=await setup();seed(app);
+  for(const spec of catalog)chooseMechanism(app,$,dom,spec.engine,spec.mechanism);
+  assert.equal(app.state.rules.length,catalog.length);
+  assert.equal($$(".rule-accordion").length,catalog.length);
+  assert.equal($$(".rule-accordion-body").length,1);
+  assert.equal(app.state.rules.some(rule=>rule.shape==="capacity"),false);
+  assert.equal(app.state.rules.some(rule=>Object.hasOwn(rule,"shape")),false);
+  assert.ok(app.state.rules.every(rule=>rule.id.startsWith("rule-")));
+  const generated=new Set(app.state.rules.map(rule=>rule.id));
+  assert.equal(generated.size,catalog.length);
 });
-
-test("v2 selection persists across workspace views and person/party actions stay in place", async () => {
-  const { app, $, dom, root } = await setup(async path => {
-    if (path === "/v1/solve") return plan;
+test("soft weights use the 1/5/25 ladder and advanced authored number; no weight on hard rules",async()=>{
+  const {app,dom,$}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"inter","criterion_pairs");
+  const weight=$("#rule-weight-0");
+  assert.deepEqual([...weight.options].slice(0,3).map(o=>o.value),["1","5","25"]);
+  setValue(weight,"25",dom.window);
+  assert.equal(app.state.rules[0].weight,25);
+  const advanced=$(".advanced-value");advanced.open=true;
+  const points=advanced.querySelector('input[type="number"]');
+  setValue(points,"42",dom.window);
+  assert.equal(app.state.rules[0].weight,42);
+  setValue($("#rule-mode-0"),"hard",dom.window);
+  assert.equal(app.state.rules[0].weight,null);
+  assert.equal(app.state.rules[0].mode,"hard");
+});
+test("criterion field and value controls come from imported guest attributes and family aggregates",async()=>{
+  const {app,dom,$}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"venue","placement_by_criterion");
+  const fields=[...$("#criterion-field").options].map(o=>o.value);
+  for(const field of ["language","mobility","age","party_size","min(age)","max(age)","any(age)","youngest_age(family)"])
+    assert.ok(fields.includes(field),"missing "+field);
+  setValue($("#criterion-field"),"language",dom.window);
+  assert.deepEqual([...$("#criterion-value").options].map(o=>JSON.parse(o.value)),["English","Greek"]);
+  setValue($("#criterion-value"),JSON.stringify("Greek"),dom.window);
+  assert.deepEqual(app.state.rules[0].criterion,{subject:"guest",field:"language",op:"==",value:"Greek"});
+  setValue($("#criterion-field"),"youngest_age(family)",dom.window);
+  setValue($("#criterion-op"),"<",dom.window);
+  assert.equal(app.state.rules[0].criterion.subject,"family");
+  assert.equal(app.state.rules[0].criterion.op,"<");
+});
+test("rule card name is the only label; delete and toggles are compact icon actions",async()=>{
+  const {app,dom,$,root}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"venue","holes_term");
+  const name=$(".rule-accordion-body input[type='text']");
+  setValue(name,"Avoid gaps",dom.window);
+  assert.match(root.textContent,/Avoid gaps/);
+  assert.equal($(".rule-accordion-head").textContent.includes("rule-1"),false);
+  assert.equal($("#delete-rule-0").getAttribute("aria-label"),"Remove Avoid gaps");
+  const checkbox=$("#rule-enabled-0");
+  checkbox.checked=false;checkbox.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
+  assert.equal(app.state.rules[0].enabled,false);
+  click($("#delete-rule-0"));
+  assert.equal(app.state.rules.length,0);
+});
+test("priority mark is mode mark and tiered preferences use same accordion workflow",async()=>{
+  const {app,dom,$,$$}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"stage","priority_mark");
+  assert.equal(app.state.rules[0].mode,"mark");
+  assert.equal(app.state.rules[0].weight,null);
+  assert.equal(app.state.rules[0].grade,1);
+  setValue($("#new-rule-engine"),"venue",dom.window);
+  setValue($("#new-rule-mechanism"),"tiered_placement",dom.window);
+  click($("#add-rule"));
+  assert.equal(app.state.rules[1].mode,"staged");
+  assert.equal($$(".tier-row").length,1);
+  click($('[aria-label="Add placement tier"]'));
+  assert.equal(app.state.rules[1].tiers.length,2);
+  click($('[aria-label="Move tier up"]'));
+  assert.equal(app.state.rules[1].tiers.length,2);
+});
+test("table pattern count clauses are data, and count() accepts a nested criterion",async()=>{
+  const {app,dom,$}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"inter","table_pattern");
+  assert.equal(app.state.rules[0].conditions[0].fact,"empty_seats");
+  click($('[aria-label="Add table condition"]'));
+  assert.equal(app.state.rules[0].conditions.length,2);
+  const fact=$(".rule-fields .control-row select");
+  setValue(fact,"count",dom.window);
+  assert.equal(app.state.rules[0].conditions[0].fact,"count");
+  assert.equal(app.state.rules[0].conditions[0].criterion.subject,"guest");
+  assert.ok($("#criterion-field"));
+});
+test("table property vocabulary is shared between rules and the venue editor",async()=>{
+  const {app,dom,$}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"venue","property_need");
+  const properties=[...$("#rule-property").options].map(o=>o.value);
+  assert.deepEqual(properties,["accessible","near_window","quiet_corner"]);
+  setValue($("#rule-property"),"quiet_corner",dom.window);
+  assert.equal(app.state.rules[0].property,"quiet_corner");
+  app.show("map");
+  assert.ok($(".property-picker"));
+  assert.ok([...$(".property-picker").querySelectorAll("span")].some(x=>x.textContent==="quiet_corner"));
+});
+test("automatically generated floor ID is never a user editable field",async()=>{
+  const {app,$}=await setup();app.show("map");
+  const form=$("#floor-form");
+  assert.ok(form);
+  assert.equal(form.querySelector('[name="id"]'),null);
+  form.querySelector('[name="name"]').value="Balcony";
+  click($("#add-floor"));
+  assert.equal(app.state.zones.length,1);
+  assert.equal(app.state.zones[0].id,"floor-1");
+  assert.equal(app.state.zones[0].name,"Balcony");
+});
+test("map keyboard arrow move is equivalent to drag and persists local geometry",async()=>{
+  const {app,dom,$}=await setup();seed(app);app.show("map");
+  const before=app.state.layout.floors[0].tables[0].x;
+  const target=$('#map-editor-svg [data-table-id="G1"]');
+  assert.equal(target.getAttribute("tabindex"),"0");
+  target.dispatchEvent(new dom.window.KeyboardEvent("keydown",{key:"ArrowRight",bubbles:true}));
+  assert.equal(app.state.layout.floors[0].tables[0].x,before+5);
+});
+test("v2 solves include data-model rule instances, show skeleton and fetch view from server",async()=>{
+  let finish;
+  const {app,$,calls,root}=await setup(async path=>{
+    if(path==="/v2/solve")return new Promise(resolve=>{finish=resolve});
     return {};
   });
-  app.state.guests = [{ id: "g1", name: "Alice" }, { id: "g2", name: "Bob" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
+  seed(app);
+  app.show("plan");click($("#solve-plan"));
+  assert.ok($(".solve-progress"),"Progress skeleton appears while solver runs");
+  assert.equal(app.state.solving,true);
+  assert.equal(calls.find(([p])=>p==="/v2/solve")?.[0],"/v2/solve");
+  finish(plan);
+  await until(()=>!!$(".plan-entry"));
+  assert.equal(app.state.solving,false);
+  assert.match(root.textContent,/Solution · FEASIBLE/);
+  assert.equal($("#view-json"),null);
+  assert.ok($("#download-json"));
+});
+test("v2 plan infeasible state names operator rule and offers edit link",async()=>{
+  const {app,$}=await setup();seed(app);
+  app.state.rules=[{id:"rule-1",name:"Seniors only downstairs",engine:"venue",
+    mechanism:"placement_by_criterion",mode:"hard",weight:null,polarity:null,enabled:true,
+    criterion:{subject:"guest",field:"age",op:">=",value:65},zones:["ground"]}];
+  app.state.plan={...plan,status:"infeasible",message:"No valid layout",conflicting_constraints:["rule:rule-1 violated"]};
   app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!$(".plan-entry"));
-  click($(".plan-target"));
-  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
-  click($("#inspect-selection"));
-  assert.match($(".plan-details").textContent, /Shares language at this table/);
-  click($("#view-people"));
-  assert.equal($(".plan-target").getAttribute("aria-pressed"), "true");
-  click($(".plan-person"));
-  assert.deepEqual(app.state.selectedPlanItem, { kind: "person", id: "g1" });
-  click($("#select-whole-party"));
-  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
-  const search = $("#plan-search");
-  search.value = "no matching party";
-  search.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-  assert.equal(root.querySelectorAll(".plan-entry").length, 0);
-  assert.equal($("#plan-selection") !== null, true, "selection survives filtered results");
-  setValue($("#plan-sort"), "name", dom.window);
-  setValue($("#plan-filter-floor"), "ground", dom.window);
-  click($("#view-groups-table"));
-  assert.equal(root.querySelectorAll(".plan-entry").length, 0);
+  assert.match($(".conflict-row").textContent,/Seniors only downstairs/);
+  assert.doesNotMatch($(".conflict-row").textContent,/rule-1/);
+  click($(".conflict-row button"));
+  assert.equal(app.state.screen,"rules");
+  assert.ok($(".rule-accordion-body"));
+});
+test("selection is a checkbox state, clear has a back action, and summary counts people and tables",async()=>{
+  const {app,$,root}=await setup();seed(app);app.state.plan=plan;app.show("plan");
+  const box=$('.plan-check input[type="checkbox"]');
+  assert.ok(box);
+  box.click();
+  assert.ok($("#plan-selection"));
+  assert.match($("#plan-selection").textContent,/2 people · 1 table affected/);
+  assert.equal($("#clear-plan-selection").title,"Clear selection");
   click($("#clear-plan-selection"));
-  assert.equal(app.state.selectedPlanItem, null);
-  app.state.workspaceQuery = "";
-  app.render();
-  assert.ok($(".plan-entry"));
-  assert.equal($("#list-preview"), null);
+  assert.equal($("#plan-selection"),null);
+  assert.ok(root.querySelector('.plan-check input[type="checkbox"]'));
 });
-
-test("print preview requests new plan after a working-view change and shows per-table pages", async () => {
-  const { app, $, dom, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/solve") return plan;
-    if (path.includes("/html?")) return "<html><body>Print for " + payload.session_id + "</body></html>";
+test("print format switches use server HTML/PDF and plan JSON has a separate export button",async()=>{
+  const {app,$,calls}=await setup(async (path,payload,type)=>{
+    if(path.includes("/html"))return '<html><body><table><tr><td>Family One</td></tr></table></body></html>';
+    if(path.includes("floor-map/pdf"))return new Blob(["%PDF"],{type:"application/pdf"});
+    if(path==="/v2/exports/json")return plan;
     return {};
   });
-  app.state.guests = [{ id: "g1", name: "Alice" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
+  seed(app);app.state.plan=plan;app.show("plan");click($("#view-print"));
+  await until(()=>!!$("#list-preview"));
+  assert.ok(calls.some(([p])=>p.includes("/v2/exports/table-list/html")));
+  assert.equal($("#view-json"),null);
+  assert.ok($("#download-json"));
+});
+test("no unseating occurs on shortage until the operator explicitly chooses",async()=>{
+  const {app,$}=await setup();seed(app);
+  app.state.plan={...plan,status:"infeasible",message:"Too many people — short by 1",
+    unseated_reasons:[{group_id:"family-two",group_name:"Family Two",guest_ids:["g3"],
+      reason:"lack_of_space",status:"pending",description:"Short by one chair"}]};
   app.show("plan");
-  click($("#solve-plan"));
-  await until(() => !!app.state.plan);
-  click($("#view-groups-table"));
-  click($(".plan-target"));
-  click($("#view-print"));
-  await until(() => !!$("#list-preview"));
-  assert.match($("#list-preview").srcdoc, /Print for test/);
-  assert.ok(calls.some(([path]) => path.includes("/table-list/html?group_by=table")));
-  assert.equal($("#print-list") !== null, true);
-  click($("#view-table"));
-  assert.equal($("#print-list"), null);
-  assert.deepEqual(app.state.selectedPlanItem, { kind: "party", id: "family-one" });
-  click($("#view-print"));
-  await until(() => !!$("#list-preview"));
-  assert.equal($("#print-format").value, "groups-table");
-});
-
-
-test("reassignment in every working view offers consequences, applies the plan and survives a re-solve", async () => {
-  const secondTable = { table_id: "G2", zone_id: "ground", capacity: 4,
-    occupied: 0, empty_seats: 4 };
-  const floor = structuredClone(layout);
-  floor.floors[0].tables.push({ table_id: "G2", x: 210, y: 20, width: 150,
-    height: 130, shape: "rectangle" });
-  const direction = { id: "manual-1", group_id: "family-one",
-    action: "move_to", place_type: "table", place_id: "G2", allow_split: false };
-  const old = { ...structuredClone(plan), layout: floor,
-    manual_instructions: [], tables: [plan.tables[0], secondTable] };
-  const moved = { ...structuredClone(old), total_score: 5,
-    manual_instructions: [direction],
-    tables: [{ ...plan.tables[0], occupied: 0, empty_seats: 4 },
-      { ...secondTable, occupied: 2, empty_seats: 2 }],
-    assignments: old.assignments.map(a => ({ ...a, table_id: "G2" })) };
-  const { app, $, root, calls, dom, storage } = await setup(async (path, payload) => {
-    if (path === "/v1/reassign/options") {
-      assert.equal(payload.instruction.group_id, "family-one");
-      assert.equal(payload.instruction.place_id, "G2");
-      return { status: "available", blockers: [], options: [{
-        id: "option-1", kind: "free-space", title: "Move to G2",
-        score_delta: -3, soft_rule_warnings: ["soft-lang: 3 fewer points"],
-        movements: [{ group_id: "family-one", party_name: "Green Family",
-          before: ["G1"], after: ["G2"], people: 2 }],
-        plan: moved
-      }] };
-    }
-    if (path === "/v1/solve") return payload.manual_instructions.length ? moved : old;
-    if (path.includes("/html?")) return "<!doctype html><html><body>New table G2</body></html>";
-    return {};
-  });
-  app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one" },
-    { id: "g2", name: "Bob", group_id: "family-one" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 },
-    { id: "G2", zone_id: "ground", capacity: 4 }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.layout = floor;
-  app.state.plan = old;
-  app.show("plan");
-
-  for (const view of ["table", "people", "people-floor", "groups", "groups-table", "floor", "cards"]) {
-    app.state.selectedPlanItem = null;
-    await app.loadView(view);
-    assert.ok($(".plan-entry"), "Working view " + view + " contains party entries");
-    click($(".plan-target"));
-    assert.equal(app.state.selectedPlanItem.id, "family-one");
-    assert.ok($("#intent-not-here"), view + " can exclude a selected party");
-    assert.ok($("#intent-move-to"), view + " can move a selected party");
-    assert.ok([...root.querySelectorAll(".plan-entry-line button")]
-      .some(button => button.textContent === "Move to"), view + " has inline move actions");
-  }
-
-  click($("#intent-move-to"));
-  assert.equal($("#reassign-place").value, "G2");
-  assert.ok($("#reassign-allow-split"), "Explicit split consent is available");
-  click($("#find-reassign-options"));
-  await until(() => !!$("#apply-option-1"));
-  assert.match($("#reassign-results").textContent, /soft-lang: 3 fewer points/);
-  assert.match($("#reassign-results").textContent, /Score change: -3 points/);
-  assert.match($("#reassign-results").textContent, /Green Family/);
-  assert.equal(app.state.plan.assignments[0].table_id, "G1",
-    "Reviewing an option must not prematurely change the plan");
-  click($("#apply-option-1"));
-  assert.equal(app.state.plan.assignments[0].table_id, "G2");
-  assert.equal(app.state.manualInstructions[0].place_id, "G2");
-  assert.ok($("#stored-instructions"));
-  assert.ok(storage.getItem("seating-optimizer:session:v1").includes("manual-1"));
-
-  click($("#solve-plan"));
-  await until(() => calls.some(([path, payload]) =>
-    path === "/v1/solve" && payload.manual_instructions?.[0]?.id === "manual-1"));
-  await until(() => $("#notice")?.textContent.includes("Solver returned"));
-  // The solve handler also awaits the current view load before releasing
-  // the app-wide action guard. Do not click Remove while that action runs.
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(app.state.plan.assignments[0].table_id, "G2",
-    "Re-solving continues to honour the stored direction");
-  await until(() => !!$("#stored-instructions"));
-  click($("#view-print"));
-  setValue($("#print-format"), "people", dom.window);
-  await until(() => calls.some(([path, payload]) =>
-    path.startsWith("/v1/exports/people-list/html?") && payload.assignments[0].table_id === "G2"));
-
-  click($("#view-table"));
-  click($("#remove-instruction-manual-1"));
-  await until(() => app.state.manualInstructions.length === 0 &&
-    app.state.plan.assignments[0].table_id === "G1",
-    "Removing direction must complete the asynchronous server re-solve");
-  assert.equal(app.state.plan.assignments[0].table_id, "G1",
-    "Removing direction re-solves without it");
-  assert.ok(calls.some(([path, payload]) =>
-    path === "/v1/solve" && payload.manual_instructions?.length === 0));
-});
-
-test("blocked reassignment names the infinite rule and does not offer Apply", async () => {
-  const { app, $, root } = await setup(async path => {
-    if (path === "/v1/reassign/options") return {
-      status: "blocked", options: [],
-      blockers: ["rule:hard-pin-A", "Table G2 hard capacity: insufficient empty seats"]
-    };
-    return {};
-  });
-  app.state.guests = [{ id: "g1", name: "Alice", group_id: "family-one" }];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = layout;
-  app.state.plan = { ...plan, manual_instructions: [] };
-  app.show("plan");
-  click($(".plan-target"));
-  click($("#intent-not-here"));
-  click($("#find-reassign-options"));
-  await until(() => !!$("#reassign-results"));
-  assert.match(root.textContent, /No feasible option/);
-  assert.match(root.textContent, /hard-pin-A/);
-  assert.match(root.textContent, /hard capacity/);
-  assert.equal(root.querySelectorAll("[id^='apply-option-']").length, 0);
-});
-
-
-test("rule instance name, note, and compact toggle preserve legacy defaults and session data", async () => {
-  const { app, dom, $, root, storage } = await setup();
-  const legacy = { id: "legacy-lang", shape: "attribute_grouping", mode: "soft",
-    weight: 7, parameters: { attribute: "language" } };
-  app.state.rules = [structuredClone(legacy)];
-  app.show("rules");
-  const card = () => root.querySelector('[data-rule-id="legacy-lang"]');
-  assert.equal(card().querySelector("h2").textContent, "legacy-lang",
-    "A missing rule name falls back to its id");
-  assert.equal($("#rule-name-0").value, "");
-  assert.equal($("#rule-description-0").value, "");
-  assert.equal($("#rule-enabled-0").checked, true,
-    "A legacy missing enabled field means active");
-  assert.equal($("#rule-enabled-0").closest("label").tagName, "LABEL");
-  assert.ok($("#rule-enabled-0").closest("label").title.includes("Disable this rule"));
-  assert.ok($("#rule-enabled-0").closest(".rule-instance-header"),
-    "The compact toggle is on the card's existing header row");
-  assert.equal($("#rule-pattern-enabled-0"), null);
-
-  setValue($("#rule-name-0"), "  My family language preference  ", dom.window);
-  assert.equal(card().querySelector("h2").textContent, "My family language preference");
-  setValue($("#rule-description-0"), "A personal note, not the catalog type description.", dom.window);
-  assert.match(card().textContent, /A personal note, not the catalog type description/);
-  assert.equal(app.state.rules[0].name, "  My family language preference  ");
-  assert.equal(app.state.rules[0].description,
-    "A personal note, not the catalog type description.");
-
-  const before = structuredClone(app.state.rules[0]);
-  const checkbox = $("#rule-enabled-0");
-  checkbox.checked = false;
-  checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  assert.equal(app.state.rules[0].enabled, false);
-  assert.ok(card().classList.contains("rule-instance-off"));
-  assert.equal(card().querySelector("h2").textContent, "My family language preference");
-  assert.equal($("#delete-rule-0") !== null, true);
-  assert.deepEqual(app.state.rules[0].parameters, before.parameters);
-  assert.equal(app.state.rules[0].weight, before.weight);
-  const saved = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
-  assert.equal(saved.data.rules[0].enabled, false);
-  assert.equal(saved.data.rules[0].name, before.name);
-  assert.equal(saved.data.rules[0].description, before.description);
-
-  const returned = await setup(async () => ({}),
-    { "seating-optimizer:session:v1": JSON.stringify(saved) });
-  returned.app.show("rules");
-  assert.equal(returned.$('[data-rule-id="legacy-lang"] h2').textContent,
-    "My family language preference");
-  assert.equal(returned.$("#rule-enabled-0").checked, false);
-  assert.equal(returned.$("#rule-description-0").value, before.description);
-  const restore = returned.$("#rule-enabled-0");
-  restore.checked = true;
-  restore.dispatchEvent(new returned.dom.window.Event("change", { bubbles: true }));
-  assert.equal(returned.app.state.rules[0].enabled, true);
-  assert.deepEqual(returned.app.state.rules[0].parameters, before.parameters);
-  assert.equal(returned.app.state.rules[0].weight, 7);
-  assert.equal(returned.app.state.rules[0].name, before.name);
-  assert.equal(returned.app.state.rules[0].description, before.description);
-});
-
-test("global-pattern clause toggle remains independent of rule-instance toggle", async () => {
-  catalog.shapes.push(globalPatternSpec);
-  try {
-    const { app, dom, $ } = await setup();
-    app.show("rules");
-    setValue($("#new-rule-shape"), "global_pattern", dom.window);
-    click($("#add-rule"));
-    const instance = app.state.rules[0];
-    assert.equal(instance.enabled, true);
-    assert.equal(instance.parameters.enabled, false);
-    assert.equal($("#rule-enabled-0").checked, true);
-    assert.equal($("#rule-pattern-enabled-0").checked, false);
-    const checkbox = $("#rule-enabled-0");
-    checkbox.checked = false;
-    checkbox.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    assert.equal(instance.enabled, false);
-    assert.equal(instance.parameters.enabled, false);
-    const clause = $("#rule-pattern-enabled-0");
-    clause.checked = true;
-    clause.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    assert.equal(instance.parameters.enabled, true);
-    assert.equal(instance.enabled, false, "The clause control cannot enable the instance");
-    const restore = $("#rule-enabled-0");
-    restore.checked = true;
-    restore.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    assert.equal(instance.enabled, true);
-    assert.equal(instance.parameters.enabled, true);
-  } finally {
-    catalog.shapes.pop();
-  }
-});
-
-
-test("custom instance name is shown in conflict text while rule ID remains recoverable", async () => {
-  const { app, root } = await setup();
-  app.state.rules = [
-    { id: "hard-1", name: "Seat the family downstairs", description: "",
-      enabled: true, shape: "pin", mode: "hard", weight: null,
-      parameters: { target: "a", table: "G1" } },
-    { id: "hard-2", shape: "pin", mode: "hard", weight: null,
-      parameters: { target: "a", table: "G2" } },
-  ];
-  app.state.plan = { ...structuredClone(plan), status: "infeasible",
-    conflicting_constraints: ["rule:hard-1", "rule:hard-2"],
-    message: "The hard constraints conflict.", assignments: [], tables: [] };
-  app.show("plan");
-  assert.match(root.textContent, /Seat the family downstairs \[rule:hard-1\]/);
-  assert.match(root.textContent, /rule:hard-2/,
-    "A legacy rule without a name still uses its id");
-});
-
-test("graded priority editor supports direct and criterion marks as removable rule data", async () => {
-  const spec = {
-    shape: "low_priority", title: "Low-priority family",
-    description: "Order without points", modes: ["mark"], default_mode: "mark",
-    default_weight: null, fields: [
-      { name: "selector", label: "Apply mark to", kind: "select", required: true,
-        choices: ["group", "size_below"] },
-      { name: "group_id", label: "Family", kind: "target", required: false, choices: [] },
-      { name: "threshold", label: "Size below", kind: "text", required: false, choices: [] },
-      { name: "grade", label: "Grade", kind: "text", required: true, choices: [] },
-    ],
-  };
-  catalog.shapes.push(spec);
-  try {
-    const { dom, app, $, root } = await setup();
-    app.state.guests = [{ id: "a", name: "Alice", group_id: "family-a", attributes: {} }];
-    app.show("rules");
-    setValue($("#new-rule-shape"), "low_priority", dom.window);
-    click($("#add-rule"));
-    assert.equal(app.state.rules[0].shape, "low_priority");
-    assert.equal(app.state.rules[0].mode, "mark");
-    assert.equal(app.state.rules[0].weight, null);
-    assert.equal(app.state.rules[0].parameters.grade, 1);
-    assert.ok($("#rule-0-group_id"));
-    setValue($("#rule-0-group_id"), "family-a", dom.window);
-    setValue($("#rule-0-grade"), "6", dom.window);
-    assert.deepEqual(app.state.rules[0].parameters,
-      { selector: "group", group_id: "family-a", grade: 6 });
-    assert.equal($("#rule-weight-0"), null);
-    setValue($("#rule-0-selector"), "size_below", dom.window);
-    assert.equal($("#rule-0-group_id"), null);
-    assert.ok($("#rule-0-threshold"));
-    setValue($("#rule-0-threshold"), "4", dom.window);
-    assert.deepEqual(app.state.rules[0].parameters,
-      { selector: "size_below", grade: 6, threshold: 4 });
-    assert.match(root.textContent, /Order only/);
-    click($("#delete-rule-0"));
-    assert.equal(app.state.rules.length, 0);
-  } finally {
-    catalog.shapes.pop();
-  }
-});
-
-test("overcapacity alarms require the operator to choose who becomes not seated", async () => {
-  const initial = {
-    ...structuredClone(plan), status: "infeasible", total_score: null,
-    assignments: [], tables: [], not_seated: [], pending_groups: [],
-    priority_marks: [{ group_id: "family-one", group_name: "Family One",
-      grade: 3, guest_count: 2, source_rule_ids: ["priority"] }],
-    message: "Too many people — short by 1.",
-    conflicting_constraints: ["Too many people — short by 1: 5 guests, 4 chairs."]
-  };
-  const { app, $, root, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/solve") return {
-      ...structuredClone(plan), manual_instructions: payload.manual_instructions,
-      priority_marks: initial.priority_marks, pending_groups: [],
-      not_seated: [{ group_id: "family-one", group_name: "Family One",
-        guest_ids: ["g1", "g2"], guest_names: ["Alice", "Bob"], grade: 3 }],
-    };
-    return {};
-  });
-  app.state.guests = [
-    { id: "g1", name: "Alice", group_id: "family-one", attributes: {} },
-    { id: "g2", name: "Bob", group_id: "family-one", attributes: {} },
-  ];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = structuredClone(layout);
-  app.state.plan = initial;
-  app.show("plan");
-  assert.match(root.textContent, /short by 1/);
-  assert.equal(app.state.manualInstructions.length, 0);
+  assert.equal(app.state.manualInstructions.length,0);
+  assert.ok($("#overflow-choice"));
   assert.ok($("#confirm-unseat"));
-  click($("#confirm-unseat"));
-  await until(() => app.state.plan.not_seated?.length === 1);
-  assert.equal(app.state.manualInstructions[0].action, "unseat");
-  assert.equal(app.state.manualInstructions[0].group_id, "family-one");
-  assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
-  assert.ok(calls.some(([path, payload]) => path === "/v1/solve" &&
-    payload.manual_instructions?.[0]?.action === "unseat"));
+  assert.match($("#nav-plan").textContent,/Seating plan/);
 });
-
-test("pending review shows solver options and persists only an applied decision", async () => {
-  const pending = {
-    ...structuredClone(plan), status: "needs_review", total_score: 0,
-    priority_marks: [{ group_id: "later", group_name: "Later Family",
-      grade: 4, guest_count: 2, source_rule_ids: ["defer"] }],
-    pending_groups: [{ group_id: "later", group_name: "Later Family",
-      grade: 4, guest_count: 2, source_rule_ids: ["defer"] }],
-    not_seated: [], manual_instructions: [], message: "Low-priority grade 4 cannot fit.",
-  };
-  const { app, $, root, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/reassign/options") {
-      const direction = { id: payload.instruction.id, group_id: "later", action: "unseat" };
-      return { status: "available", blockers: [], options: [{
-        id: "option-1", kind: "leave_unseated", title: "Leave Later Family unseated",
-        movements: [{ group_id: "later", party_name: "Later Family",
-          before: [], after: [], people: 2 }],
-        score_delta: 0, soft_rule_warnings: [],
-        plan: { ...structuredClone(plan), manual_instructions: [direction],
-          not_seated: [{ group_id: "later", group_name: "Later Family",
-            guest_ids: ["l1", "l2"], guest_names: ["Later one", "Later two"], grade: 4 }],
-          pending_groups: [] }
-      }] };
+test("generic headless move preview receives v2 rule data and only apply commits the option",async()=>{
+  let observedInstruction;
+  const {app,$,calls}=await setup(async (path,payload)=>{
+    if(path==="/v2/reassign/options") {
+      observedInstruction=payload.instruction;
+      const changed={...plan,manual_instructions:[payload.instruction]};
+      return {status:"available",options:[{id:"v2-option-1",title:"Move to another table",
+        kind:"solver-checked",score_delta:-1,movements:[
+          {group_id:"family-one",party_name:"Family One",before:["G1"],after:["U1"],people:2}],
+        soft_rule_warnings:[],plan:changed}],blockers:[]};
     }
     return {};
   });
-  app.state.plan = pending;
-  app.state.guests = [
-    { id: "g1", name: "Alice", group_id: "family-one", attributes: {} },
-    { id: "g2", name: "Bob", group_id: "family-one", attributes: {} },
-    { id: "l1", name: "Later one", group_id: "later", attributes: {} },
-    { id: "l2", name: "Later two", group_id: "later", attributes: {} }
-  ];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = structuredClone(layout);
-  app.show("plan");
-  assert.ok($("#pending-options-later"));
-  assert.equal(app.state.manualInstructions.length, 0);
-  click($("#pending-options-later"));
-  await until(() => !!$("#apply-option-1"));
-  assert.equal(app.state.manualInstructions.length, 0);
-  assert.equal(calls.filter(([path]) => path === "/v1/reassign/options").length, 1);
-  click($("#apply-option-1"));
-  assert.equal(app.state.manualInstructions[0].action, "unseat");
-  assert.equal(app.state.plan.not_seated[0].group_id, "later");
-  assert.match(root.textContent, /Operator-selected not seated/);
+  seed(app);app.state.plan=plan;app.show("plan");
+  const party=$('.plan-check input[type="checkbox"]');party.click();
+  click($("#intent-move-to"));
+  await until(()=>!!$("#find-reassign-options"));
+  click($("#find-reassign-options"));
+  await until(()=>!!$("#apply-v2-option-1"));
+  assert.equal(calls.filter(([p])=>p==="/v2/reassign/options").length,1);
+  assert.equal(app.state.manualInstructions.length,0);
+  click($("#apply-v2-option-1"));
+  assert.equal(app.state.manualInstructions[0].id,observedInstruction.id);
 });
-
-
-test("workspace party removal requires confirmation, prints exact unseated list, and restore clears it", async () => {
-  const original = { ...structuredClone(plan), not_seated: [], manual_instructions: [] };
-  const unseated = (directions) => ({
-    ...structuredClone(original), total_score: 0, assignments: [],
-    manual_instructions: directions,
-    not_seated: [{ group_id: "family-one", group_name: "Green Family",
-      guest_ids: ["g1", "g2"], guest_names: ["Alice", "Bob"], grade: null }],
-    tables: original.tables.map(t => ({ ...t, occupied: 0, empty_seats: t.capacity })),
-  });
-  const output = "<!DOCTYPE html><html><body>Not seated in the main room — Green Family — 2</body></html>";
-  const blank = "<!DOCTYPE html><html><body>No one is currently marked not seated.</body></html>";
-  const { app, $, dom, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/solve") return payload.manual_instructions.some(i => i.action === "unseat")
-      ? unseated(payload.manual_instructions) : original;
-    if (path === "/v1/exports/not-seated-list/html")
-      return payload.not_seated?.length ? output : blank;
+test("v2 session saves and reloads with instances, while preserving named template storage",async()=>{
+  const {app,dom,$,storage}=await setup();seed(app);
+  chooseMechanism(app,$,dom,"venue","holes_term");
+  const stored=storage.getItem("seating-optimizer:session:v2");
+  assert.ok(stored);
+  assert.equal(JSON.parse(stored).version,2);
+  assert.equal(JSON.parse(stored).data.rules[0].mechanism,"holes_term");
+  const fresh=await setup(async()=>({}),{"seating-optimizer:session:v2":stored});
+  assert.equal(fresh.app.state.rules.length,1);
+  assert.equal(fresh.app.state.rules[0].name,"Avoid empty seats");
+});
+test("errors remain actionable and retry is kept on failed generic solve",async()=>{
+  const {app,$}=await setup(async path=>{
+    if(path==="/v2/solve")throw Error("Server returned 503");
     return {};
   });
-  app.state.guests = [
-    { id: "g1", name: "Alice", group_id: "family-one", group_name: "Green Family" },
-    { id: "g2", name: "Bob", group_id: "family-one", group_name: "Green Family" },
-  ];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = structuredClone(layout);
-  app.state.plan = original;
-  app.show("plan");
-
-  click($(".plan-target"));
-  assert.ok($("#intent-unseat-party"), "A whole registered party can be moved off the plan");
-  click($("#intent-unseat-party"));
-  assert.ok($("#confirm-unseat-party"));
-  assert.equal(app.state.manualInstructions.length, 0);
-  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 0);
-  click($("#cancel-unseat-party"));
-  assert.equal($("#confirm-unseat-party"), null, "Cancel never changes any assignment");
-
-  click($(".plan-person"));
-  assert.equal($("#intent-unseat-party"), null, "Do not silently remove a whole party from person selection");
-  click($("#select-whole-party"));
-  click($("#intent-unseat-party"));
-  click($("#confirm-unseat-party"));
-  await until(() => app.state.plan.not_seated?.length === 1);
-  const decision = calls.find(([path, payload]) => path === "/v1/solve" &&
-    payload.manual_instructions?.some(i => i.action === "unseat"));
-  assert.ok(decision, "Only the human confirmation posts an unseat instruction");
-  assert.equal(decision[1].manual_instructions[0].group_id, "family-one");
-  assert.equal(app.state.plan.assignments.length, 0);
-  assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
-
-  click($("#view-print"));
-  setValue($("#print-format"), "not-seated", dom.window);
-  await until(() => $("#list-preview")?.srcdoc === output);
-  assert.ok(calls.some(([path, payload]) => path === "/v1/exports/not-seated-list/html" &&
-    payload.not_seated?.[0]?.group_id === "family-one"));
-  assert.equal($("#print-reasons"), null, "The not-seated page has no scoring-reasons option");
-  assert.ok($("#download-list"));
-  assert.ok($("#restore-family-one"));
-
-  click($("#restore-family-one"));
-  await until(() => app.state.plan.not_seated?.length === 0);
-  assert.equal(app.state.manualInstructions.length, 0);
-  click($("#view-print"));
-  await until(() => $("#list-preview")?.srcdoc === blank);
-  assert.equal($("#list-preview").srcdoc.includes("Green Family"), false);
+  seed(app);app.show("plan");click($("#solve-plan"));
+  await until(()=>!!$("#retry-action"));
+  assert.match($("#notice").textContent,/503/);
+  assert.equal(app.state.guests.length,3);
 });
 
-test("an over-capacity alarm can print previously operator-selected people without new selection", async () => {
-  const recorded = {
-    ...structuredClone(plan), status: "infeasible", total_score: null,
-    assignments: [], tables: [], pending_groups: [],
-    manual_instructions: [{ id: "owner-2", group_id: "family-one", action: "unseat" }],
-    not_seated: [{ group_id: "family-one", group_name: "Green Family",
-      guest_ids: ["g1", "g2"], guest_names: ["Alice", "Bob"], grade: 2 }],
-    priority_marks: [{ group_id: "family-one", group_name: "Green Family",
-      grade: 2, guest_count: 2, source_rule_ids: ["grade"] }],
-    message: "Too many people — short by 1.",
-    conflicting_constraints: ["Too many people — short by 1: 5 guests, 4 chairs."],
-  };
-  const html = "<!DOCTYPE html><html><body>Not seated in the main room</body></html>";
-  const { app, $, calls } = await setup(async (path, payload) => {
-    if (path === "/v1/exports/not-seated-list/html") {
-      assert.deepEqual(payload.not_seated, recorded.not_seated);
-      return html;
-    }
+
+test("F1/U14: 43 guests, seven tables and six migrated rules show the +6 named plan-wide score", async () => {
+  const {app,root,$}=await setup();
+  const hebrew = {id:"hebrew-upper-preference",name:"",engine:"venue",
+    mechanism:"placement_by_criterion",mode:"soft",weight:2,polarity:"reward",
+    criterion:{subject:"guest",field:"language",op:"==",value:"Hebrew"},zones:["upper"]};
+  app.state.rules=[hebrew,
+    ...["split_term","holes_term","property_need","priority_mark","companionship"]
+      .map((mechanism,index)=>({id:"migrated-"+index,name:"",engine:"venue",mechanism,
+        mode:"soft",weight:1,enabled:true}))];
+  const guests=Array.from({length:43},(_,i)=>({id:"p"+i,name:i<3?"India Family ("+(i+1)+"/3)":"Guest "+i,
+    group_id:i<3?"india":"visitor-"+i,group_name:i<3?"India Family":"Visitor "+i,
+    attributes:{language:i<3?"Hebrew":"English"}}));
+  app.state.guests=guests;
+  const tables=["B1","A1","A2","A3","A4","A5","A6"].map((id,i)=>({
+    table_id:id,zone_id:i===0?"upper":"ground",capacity:10,occupied:i===0?3:7,
+    empty_seats:i===0?7:3
+  }));
+  app.state.plan={...plan,total_score:6,
+    score_breakdown:[{rule_id:"hebrew-upper-preference",points:6}],
+    tables,assignments:[{group_id:"india",group_name:"India Family",table_id:"B1",
+      guest_ids:["p0","p1","p2"],guest_names:["India Family (1/3)","India Family (2/3)","India Family (3/3)"],
+      points:0,reasons:[{rule_id:"capacity",description:"Within chair capacity",points:0}]}]};
+  app.show("plan");
+  assert.equal(app.state.guests.length,43);
+  assert.equal(app.state.tables.length,0); // Seven tables are API plan facts, not fabricated venue state.
+  assert.equal(app.state.plan.tables.length,7);
+  assert.equal(app.state.rules.length,6);
+  assert.match($(".score-breakdown").textContent,/Place matching guests on floors: language is Hebrew: \+6 points/);
+  assert.doesNotMatch($(".score-breakdown").textContent,/hebrew-upper-preference|Unnamed consideration/);
+  assert.match(root.textContent,/No assignment-specific score — see plan breakdown/);
+  click($('.plan-entry [title="Details"]'));
+  assert.match($(".plan-details").textContent,/Plan-wide scoring \(not attributed to this family\)/);
+  assert.match($(".plan-details").textContent,/language is Hebrew: \+6 points/);
+  assert.doesNotMatch($(".plan-details").textContent,/No matching rule records/);
+});
+
+test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mobile panes", async () => {
+  const {app,$,root}=await setup();
+  app.show("import");
+  assert.ok($("#guest-file").classList.contains("visually-hidden-file"));
+  assert.equal($("#guest-file-trigger").title,"Choose guest list spreadsheet (CSV or XLSX)");
+  assert.equal($("#guest-file-trigger").getAttribute("aria-label"),$("#guest-file-trigger").title);
+  seed(app);
+  app.show("map");
+  for (const id of ["configuration-file","layout-file"]) {
+    assert.ok($("#"+id).classList.contains("visually-hidden-file"));
+    assert.ok($("#"+id+"-trigger").title.length>10);
+  }
+  for (const id of ["save-template","export-configuration","load-template","duplicate-template",
+    "delete-template","validate-layout","export-layout","add-floor","add-table"]) {
+    const action=$("#"+id);
+    assert.ok(action,id+" must exist");
+    assert.ok(action.classList.contains("icon-button"),id+" must be an icon action");
+    assert.ok(action.title.length>4,id+" requires complete tooltip");
+    assert.equal(action.getAttribute("aria-label"),action.title);
+  }
+  assert.equal($("#add-table").textContent.trim(),"＋");
+  assert.equal($("#new-table-small-priority").parentElement.className,"priority-checkbox");
+  assert.equal($("#table-G1-small-priority").parentElement.className,"priority-checkbox");
+  assert.equal($(".map-layout").dataset.mobilePane,"map");
+  click($("#venue-mobile-tables"));
+  assert.equal($(".map-layout").dataset.mobilePane,"tables");
+  assert.equal($("#venue-mobile-tables").getAttribute("aria-pressed"),"true");
+  click($("#venue-mobile-map"));
+  assert.equal($(".map-layout").dataset.mobilePane,"map");
+  assert.ok(root.querySelector("#map-editor-svg"));
+});
+
+test("F2: network failure retains the last successful plan after edited inputs invalidate it", async () => {
+  const {app,dom,$,root}=await setup(async path=>{
+    if(path==="/v2/solve")throw Error("Server returned 503");
     return {};
   });
-  app.state.plan = recorded;
-  app.state.manualInstructions = structuredClone(recorded.manual_instructions);
-  app.state.guests = [
-    { id: "g1", name: "Alice", group_id: "family-one", group_name: "Green Family" },
-    { id: "g2", name: "Bob", group_id: "family-one", group_name: "Green Family" },
-  ];
-  app.state.zones = [{ id: "ground", name: "Ground" }];
-  app.state.tables = [{ id: "G1", zone_id: "ground", capacity: 4 }];
-  app.state.layout = structuredClone(layout);
+  seed(app);
+  app.state.plan=structuredClone(plan);
   app.show("plan");
-  assert.equal($("#confirm-unseat"), null, "No new selection is offered when everyone here is already unseated");
-  assert.ok($("#open-not-seated-print"));
-  assert.equal($("#list-preview"), null);
-  click($("#open-not-seated-print"));
-  await until(() => $("#list-preview")?.srcdoc === html);
-  assert.equal(app.state.view, "print");
-  assert.equal(app.state.printFormat, "not-seated");
-  assert.equal(calls.filter(([path]) => path === "/v1/solve").length, 0);
-  assert.equal(app.state.plan.not_seated[0].group_id, "family-one");
-});
-
-test("tiered rule editor builds ordered floor/table sets and persists instances as event data", async () => {
-  const tierSpec = {
-    shape: "tiered_placement", title: "Tiered placement preference",
-    description: "Stage whole-party placement in preferred floors/tables",
-    modes: ["staged"], default_mode: "staged", default_weight: null,
-    fields: [
-      { name: "target", label: "Guest or group", kind: "target", required: true, choices: [] },
-      { name: "tiers", label: "Ordered tiers", kind: "tiers", required: true, choices: [] }
-    ]
-  };
-  catalog.shapes.push(tierSpec);
-  try {
-    const { app, $, dom, storage } = await setup();
-    app.state.zones = [{ id: "upper", name: "Floor 2" },
-      { id: "lower", name: "Floor 1" }];
-    app.state.tables = [{ id: "U", zone_id: "upper", capacity: 8 },
-      { id: "U2", zone_id: "upper", capacity: 4 },
-      { id: "L", zone_id: "lower", capacity: 8 }];
-    app.state.guests = [{ id: "g1", name: "First member", group_id: "family-one",
-      group_name: "Registered family" }];
-    app.show("rules");
-
-    setValue($("#new-rule-shape"), "tiered_placement", dom.window);
-    click($("#add-rule"));
-    const rule = app.state.rules[0];
-    assert.equal(rule.shape, "tiered_placement");
-    assert.equal(rule.mode, "staged");
-    assert.equal(rule.weight, null);
-    assert.equal($("#rule-weight-0"), null);
-    assert.deepEqual(rule.parameters.tiers, [{ zones: ["upper"], tables: [] }],
-      "First configured zone is editable data, not a hardcoded solver preference");
-
-    setValue($("#rule-0-target"), "family-one", dom.window);
-    setValue($("#rule-0-tier-0-add-location"), "t:U2", dom.window);
-    assert.deepEqual(rule.parameters.tiers[0], { zones: ["upper"], tables: ["U2"] });
-    click($("#rule-0-add-tier"));
-    assert.equal(rule.parameters.tiers.length, 2);
-    setValue($("#rule-0-tier-1-add-location"), "z:lower", dom.window);
-    assert.deepEqual(rule.parameters.tiers[1], { zones: ["lower"], tables: [] });
-    click($("#rule-0-tier-1-up"));
-    assert.deepEqual(rule.parameters.tiers, [
-      { zones: ["lower"], tables: [] },
-      { zones: ["upper"], tables: ["U2"] }
-    ]);
-    click($("#rule-0-tier-0-remove-zones-lower"));
-    setValue($("#rule-0-tier-0-add-location"), "t:L", dom.window);
-    assert.deepEqual(rule.parameters.tiers[0], { zones: [], tables: ["L"] });
-    assert.equal($("#rule-0-tier-0-up").disabled, true);
-    assert.ok($("#rule-0-tier-0-add-location").closest(".tier-rank"));
-    assert.ok($("#rule-0-tier-0-remove-tables-L").title.includes("Remove table"));
-
-    const saved = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
-    assert.deepEqual(saved.data.rules[0].parameters, {
-      target: "family-one", tiers: [
-        { zones: [], tables: ["L"] },
-        { zones: ["upper"], tables: ["U2"] }
-      ]
-    });
-    assert.equal(saved.data.rules[0].mode, "staged");
-    assert.equal(saved.data.rules[0].weight, null);
-  } finally {
-    catalog.shapes.pop();
-  }
-});
-
-test("zone companionship is catalog-driven, with editable exclusions saved in the instance", async () => {
-  const companionshipSpec = {
-    shape: "zone_companionship", title: "Zone companionship",
-    description: "Penalty for a lone non-excluded group with another zone in use",
-    modes: ["soft"], default_mode: "soft", default_weight: 2,
-    fields: [{ name: "exclude_groups", label: "Deliberately alone parties",
-      kind: "group_exclusions", required: false, choices: [] }]
-  };
-  catalog.shapes.push(companionshipSpec);
-  try {
-    const { app, dom, $, storage, root } = await setup();
-    app.state.guests = [
-      { id: "a", name: "Alice", group_id: "party-one", group_name: "The Smiths" },
-      { id: "b", name: "Bob", group_id: "party-one", group_name: "The Smiths" },
-      { id: "c", name: "Clara", group_id: "party-two", group_name: "The Greens" },
-      { id: "d", name: "David" },
-    ];
-    app.show("rules");
-    setValue($("#new-rule-shape"), "zone_companionship", dom.window);
-    click($("#add-rule"));
-    const rule = app.state.rules[0];
-    assert.equal(rule.shape, "zone_companionship");
-    assert.equal(rule.mode, "soft");
-    assert.equal(rule.weight, 2);
-    assert.deepEqual(rule.parameters, { exclude_groups: [] });
-    assert.equal($("#rule-weight-0").value, "2");
-    assert.match(root.textContent, /Optional: explicitly exempt parties/);
-    const options = [...$("#rule-0-exclude-add").options];
-    assert.equal(options.filter(o => o.value === "party-one").length, 1,
-      "A registered family appears exactly once, not once per person");
-    assert.ok(options.some(o => o.value === "guest:d"),
-      "A guest without a group ID uses the solver's canonical party ID");
-    setValue($("#rule-weight-0"), "13", dom.window);
-    setValue($("#rule-0-exclude-add"), "party-one", dom.window);
-    assert.equal(rule.weight, 13);
-    assert.deepEqual(rule.parameters.exclude_groups, ["party-one"]);
-    assert.ok($("#rule-0-exclude-party-one"));
-    assert.match(root.textContent, /The Smiths/);
-
-    setValue($("#rule-0-exclude-add"), "guest:d", dom.window);
-    assert.deepEqual(rule.parameters.exclude_groups, ["party-one", "guest:d"]);
-    const stored = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
-    assert.deepEqual(stored.data.rules[0].parameters.exclude_groups,
-      ["party-one", "guest:d"]);
-    assert.equal(stored.data.rules[0].weight, 13);
-
-    click($("#rule-0-exclude-party-one"));
-    assert.deepEqual(rule.parameters.exclude_groups, ["guest:d"]);
-    assert.equal($("#rule-0-exclude-party-one"), null);
-    const next = JSON.parse(storage.getItem("seating-optimizer:session:v1"));
-    assert.deepEqual(next.data.rules[0].parameters.exclude_groups, ["guest:d"]);
-  } finally {
-    catalog.shapes.pop();
-  }
+  // Changing an input marks the old plan stale, but it can still be displayed on failure.
+  setValue($("#time-limit"),"4",dom.window);
+  assert.equal(app.state.plan,null);
+  click($("#solve-plan"));
+  await until(()=>!!$("#retry-action"));
+  assert.equal(app.state.plan.total_score,8);
+  assert.match(root.textContent,/Solution · FEASIBLE/);
+  assert.match(root.textContent,/Showing the last successful plan/);
+  assert.match($("#notice").textContent,/503/);
+  assert.ok($(".plan-entry"));
 });

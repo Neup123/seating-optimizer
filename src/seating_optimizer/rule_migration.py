@@ -31,6 +31,38 @@ def _criterion(parameters: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _derived_name(data: Mapping[str, Any]) -> str:
+    """Human-readable default for unnamed legacy instances; never display an ID."""
+    mechanisms = {
+        "criterion_pairs": "Connect matching people",
+        "placement_by_criterion": "Place matching guests on floors",
+        "property_need": "Prefer a table property",
+        "pair_relation": "Place families together or apart",
+        "holes_term": "Avoid empty seats",
+        "locked_assignment": "Lock a family to a table",
+        "table_pattern": "Table occupancy pattern",
+        "split_term": "Keep a family together",
+        "property_fit": "Reward a matching table property",
+        "priority_mark": "Mark a family's seating priority",
+        "tiered_placement": "Placement preference tiers",
+        "companionship": "Avoid solitary placement",
+    }
+    label = mechanisms.get(str(data["mechanism"]), str(data["mechanism"]).replace("_", " ").title())
+    criterion = data.get("criterion")
+    if isinstance(criterion, Mapping) and criterion.get("field"):
+        operators = {"==": "is", "!=": "is not", "<": "below",
+                     "<=": "at most", ">": "above", ">=": "at least", "in": "in"}
+        field = str(criterion["field"]).replace("_", " ")
+        value = criterion.get("value")
+        if value is not None and value != "":
+            value_text = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+            return f"{label}: {field} {operators.get(str(criterion.get('op')), 'matches')} {value_text}"
+        return f"{label}: {field}"
+    if data.get("property"):
+        return f"{label}: {str(data['property']).replace('_', ' ')}"
+    return label
+
+
 def migrate_instance(rule: Any) -> GenericRule | None:
     """Translate by shape only; never look at an instance's ID or name."""
     source = _data(rule)
@@ -106,6 +138,8 @@ def migrate_instance(rule: Any) -> GenericRule | None:
     else:
         # Exhaustiveness checked above; adding a shape without a handler fails.
         raise AssertionError(shape)
+    if not str(meta["name"]).strip():
+        meta["name"] = _derived_name(data)
     return GenericRule.model_validate({**meta, **data})
 
 

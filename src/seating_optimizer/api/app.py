@@ -6,6 +6,7 @@ import binascii
 from importlib.resources import files
 from pathlib import Path
 from typing import Literal
+from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
@@ -23,6 +24,8 @@ from seating_optimizer.generic_rules import mechanism_catalog
 from seating_optimizer.generic_solver import (GenericProblem, GenericPlan, GenericVenueConfiguration, solve_generic)
 from seating_optimizer.rule_migration import migrate_configuration
 from seating_optimizer.reassignment import ReassignRequest, ReassignResponse, propose_reassignment
+from seating_optimizer.models import ManualInstruction, Model
+from seating_optimizer.reassignment import Movement
 
 
 class LayoutFile(BaseModel):
@@ -34,6 +37,28 @@ class LayoutImportRequest(BaseModel):
     files: list[LayoutFile] = Field(min_length=1)
     zones: list[Zone] | None = None
     tables: list[Table] | None = None
+
+
+class GenericReassignRequest(Model):
+    problem: GenericProblem
+    plan: GenericPlan
+    instruction: ManualInstruction
+
+
+class GenericReassignOption(Model):
+    id: str
+    kind: str
+    title: str
+    movements: list[Movement]
+    score_delta: int
+    soft_rule_warnings: list[str]
+    plan: GenericPlan
+
+
+class GenericReassignResponse(Model):
+    status: str
+    options: list[GenericReassignOption] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
 
 
 class ImportRequest(BaseModel):
@@ -102,6 +127,72 @@ def create_app() -> FastAPI:
             return solve_generic(problem)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/reassign/options", response_model=GenericReassignResponse)
+    def generic_reassignment(request: GenericReassignRequest) -> GenericReassignResponse:
+        """Preview an operator direction through the SAME v2 solver and rule data.
+
+        No local seating heuristic or v1 shape adapter is used. A preview is not
+        persisted; the operator must explicitly apply the returned instruction.
+        """
+        problem, plan, instruction = request.problem, request.plan, request.instruction
+        if plan.session_id != problem.session_id or plan.manual_instructions != problem.manual_instructions:
+            raise HTTPException(status_code=409, detail="Plan changed. Solve again before previewing a move.")
+        if plan.status not in {"optimal", "feasible", "needs_review"}:
+            raise HTTPException(status_code=422, detail="A solved plan is required.")
+        if instruction.id in {item.id for item in problem.manual_instructions}:
+            raise HTTPException(status_code=422, detail="Instruction ID already exists.")
+        groups = {guest.group_id or "guest:" + guest.id for guest in problem.guests}
+        if instruction.group_id not in groups:
+            raise HTTPException(status_code=422, detail="Choose a registered family.")
+        if instruction.action == "unseat":
+            raise HTTPException(status_code=422, detail="Use the explicit operator unseat action.")
+        candidate = problem.model_copy(deep=True)
+        candidate.manual_instructions.append(instruction)
+        if instruction.allow_split and instruction.group_id not in candidate.splittable_groups:
+            candidate.splittable_groups.append(instruction.group_id)
+        try:
+            updated = solve_generic(candidate)
+        except (KeyError, ValueError) as exc:
+            return GenericReassignResponse(status="blocked", blockers=[str(exc)])
+        if updated.status not in {"optimal", "feasible"}:
+            return GenericReassignResponse(
+                status="unknown" if updated.status == "unknown" else "blocked",
+                blockers=[updated.message, *updated.conflicting_constraints[:5]],
+            )
+        old = defaultdict(list)
+        new = defaultdict(list)
+        people = defaultdict(int)
+        names = {}
+        for guest in problem.guests:
+            people[guest.group_id or "guest:" + guest.id] += 1
+        for target, assignments in ((old, plan.assignments), (new, updated.assignments)):
+            for assignment in assignments:
+                target[assignment.group_id].append(assignment.table_id)
+                names[assignment.group_id] = assignment.group_name
+        moves = [Movement(group_id=gid, party_name=names.get(gid, "Unnamed family"),
+                          before=sorted(set(old[gid])), after=sorted(set(new[gid])),
+                          people=people[gid])
+                 for gid in sorted(groups) if sorted(old[gid]) != sorted(new[gid])]
+        if instruction.group_id not in {m.group_id for m in moves} and instruction.action != "seat_pending":
+            return GenericReassignResponse(status="blocked",
+                                           blockers=["The direction did not change this family's placement."])
+        before = {score.rule_id: score.points for score in plan.score_breakdown}
+        after = {score.rule_id: score.points for score in updated.score_breakdown}
+        names_by_id = {rule.id: rule.display_name for rule in problem.rules}
+        warnings = [names_by_id.get(rule_id, "Consideration") + ": " + str(before[rule_id] - after.get(rule_id, 0)) +
+                    " fewer points"
+                    for rule_id in before if after.get(rule_id, 0) < before[rule_id]]
+        title = ("Seat pending family" if instruction.action == "seat_pending" else
+                 "Move family to chosen destination" if instruction.action == "move_to" else
+                 "Keep family away from chosen location")
+        return GenericReassignResponse(status="available", options=[
+            GenericReassignOption(
+                id="v2-option-1", kind="solver-checked", title=title,
+                movements=moves, score_delta=(updated.total_score or 0) - (plan.total_score or 0),
+                soft_rule_warnings=warnings, plan=updated,
+            )
+        ])
 
     @app.post("/v1/layouts/import", response_model=VenueLayout)
     def import_venue(request: LayoutImportRequest) -> VenueLayout:
@@ -209,6 +300,80 @@ def create_app() -> FastAPI:
         return Response(content=pdf, media_type="application/pdf",
                         headers={"Content-Disposition": 'attachment; filename="table-cards.pdf"'})
 
+    # V2 export contract accepts the full GenericPlan without discarding
+    # criterion states or operator decision records. Rendering is server-owned.
+    @app.post("/v2/exports/table", response_class=PlainTextResponse)
+    def generic_table_export(plan: GenericPlan) -> str:
+        return render_table(plan)
+
+    @app.post("/v2/exports/json")
+    def generic_json_export(plan: GenericPlan) -> Response:
+        return Response(content=render_json(plan), media_type="application/json")
+
+    @app.post("/v2/exports/people-list/html", response_class=HTMLResponse)
+    def generic_people_list_export(
+        plan: GenericPlan, group_by: Literal["combined", "floor"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+        fields: list[str] | None = Query(default=None),
+        field_labels: list[str] | None = Query(default=None),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_people_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons,
+                fields=fields, field_labels=field_labels
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/table-list/html", response_class=HTMLResponse)
+    def generic_table_list_export(
+        plan: GenericPlan, group_by: Literal["combined", "table"] = Query(default="combined"),
+        include_reasons: bool = Query(default=False),
+        fields: list[str] | None = Query(default=None),
+    ) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_table_list_html(
+                plan, group_by=group_by, include_reasons=include_reasons, fields=fields
+            ))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/not-seated-list/html", response_class=HTMLResponse)
+    def generic_not_seated_list_export(plan: GenericPlan) -> HTMLResponse:
+        try:
+            return HTMLResponse(render_not_seated_list_html(plan))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/floor-map/svg", response_model=SvgFloorBundle)
+    def generic_floor_svg_export(plan: GenericPlan) -> SvgFloorBundle:
+        try:
+            return render_floor_svg(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v2/exports/floor-map/pdf")
+    def generic_floor_pdf_export(plan: GenericPlan) -> Response:
+        try:
+            pdf = render_floor_pdf(plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="floor-maps.pdf"'})
+
+    @app.post("/v2/exports/table-cards/pdf")
+    def generic_table_cards_export(
+        plan: GenericPlan, cards_per_page: int = Query(default=1)
+    ) -> Response:
+        if cards_per_page not in (1, 2, 4):
+            raise HTTPException(status_code=422, detail="cards_per_page must be 1, 2 or 4")
+        try:
+            pdf = render_table_cards_pdf(plan, cards_per_page=cards_per_page)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": 'attachment; filename="table-cards.pdf"'})
+
     @app.get("/openapi.yaml", response_class=PlainTextResponse)
     def openapi_yaml() -> str:
         return files("seating_optimizer.api").joinpath("openapi.yaml").read_text(encoding="utf-8")
@@ -230,6 +395,10 @@ def create_app() -> FastAPI:
     @app.get("/assets/plan-workspace.js", include_in_schema=False)
     def visual_plan_workspace_script() -> FileResponse:
         return FileResponse(web_dir / "plan-workspace.js", media_type="text/javascript")
+
+    @app.get("/assets/v2-rules.js", include_in_schema=False)
+    def visual_v2_rules_script() -> FileResponse:
+        return FileResponse(web_dir / "v2-rules.js", media_type="text/javascript")
 
     @app.get("/assets/style.css", include_in_schema=False)
     def visual_client_styles() -> FileResponse:

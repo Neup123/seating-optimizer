@@ -1,16 +1,16 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
+import { renderGenericRules, tablePropertyVocabulary, displayRuleName } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
-const VIEWS = [["table", "Table view"], ["people", "People list"], ["people-floor", "People by floor"],
-  ["groups", "Table list"], ["groups-table", "Per-table lists"],
-  ["floor", "Floor maps"], ["cards", "Table cards"], ["print", "Print preview"], ["json", "JSON plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
-const SESSION_KEY = "seating-optimizer:session:v1";
-const TEMPLATES_KEY = "seating-optimizer:templates:v1";
+const SESSION_KEY = "seating-optimizer:session:v2";
+const LEGACY_SESSION_KEY = "seating-optimizer:session:v1";
+const TEMPLATES_KEY = "seating-optimizer:templates:v2";
+const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
-  "guests", "selectedShape", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId"];
+  "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
+  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
   try {
@@ -40,7 +40,10 @@ function partyName(assignment) {
   return neutral;
 }
 function ruleLabel(rule, fallback) {
-  return (typeof rule?.name === "string" && rule.name.trim()) || fallback;
+  // Never surface an internal rule ID as an operator-facing label.
+  if (rule) return displayRuleName(rule);
+  if (["capacity", "table_capacity"].includes(fallback)) return "Chair capacity";
+  return "Solver constraint";
 }
 function importedPartyName(guest) {
   if (guest.group_name?.trim()) return guest.group_name.trim();
@@ -75,6 +78,42 @@ function action(label, callback, className = "secondary", id) {
   if (id) b.id = id;
   b.addEventListener("click", callback);
   return b;
+}
+function iconAction(title, kind, callback, className = "secondary icon-button", id, showText = false) {
+  const b = action("", callback, className, id);
+  b.title=title;b.setAttribute("aria-label", title);
+  const svg=document.createElementNS(SVG_NS,"svg");
+  svg.setAttribute("width","19");svg.setAttribute("height","19");
+  svg.setAttribute("viewBox","0 0 24 24");
+  svg.setAttribute("fill","none");svg.setAttribute("stroke","currentColor");
+  svg.setAttribute("stroke-width","2");svg.setAttribute("stroke-linejoin","round");
+  svg.setAttribute("stroke-linecap","round");svg.setAttribute("aria-hidden","true");
+  const shapes={
+    download:["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","m7 10 5 5 5-5","M12 15V3"],
+    printer:["M6 9V2h12v7","M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2","M6 14h12v8H6z"],
+    list:["M8 6h13","M8 12h13","M8 18h13","M3 6h.01","M3 12h.01","M3 18h.01"],
+    map:["M3 6 9 3l6 3 6-3v15l-6 3-6-3-6 3z","M9 3v15","M15 6v15"],
+    tables:["M3 3h18v18H3z","M3 10h18","M10 3v18"],
+    people:["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M22 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"],
+    check:["M20 6 9 17l-5-5"],
+    upload:["M12 16V3","m5 10 7-7 7 7","M3 16v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4"],
+    plus:["M12 5v14","M5 12h14"]
+  };
+  for (const path of shapes[kind] || shapes.list) {
+    const item=document.createElementNS(SVG_NS,"path");
+    item.setAttribute("d",path);svg.append(item);
+  }
+  b.append(svg);
+  if (showText) b.append(element("span","",title));
+  return b;
+}
+function fileControl(title, input) {
+  // Keep the file input programmable and accessible without native chooser chrome.
+  input.classList.add("visually-hidden-file");
+  input.setAttribute("aria-label", title);
+  const chooser = iconAction(title, "upload", () => input.click(),
+    "secondary icon-button", input.id + "-trigger");
+  return append(element("div", "file-picker"), chooser, input);
 }
 function textField(label, value, onChange, options = {}) {
   const holder = element("label", "field");
@@ -194,25 +233,25 @@ export function createApp(root, api = createGateway()) {
     return {
       screen: "import", view: "table", viewContent: null, viewError: "",
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-      catalog: null, selectedShape: "attribute_grouping", rules: [], nextRule: 1,
+      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "meal-1", seconds: 5, plan: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
-      notice: "Choose a CSV or XLSX guest list to begin.", error: false, retryAction: null,
-      templateName: "", templateSelected: "", storageWarning: ""
+      notice: "", error: false, retryAction: null,
+      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: ""
     };
   }
   const state = emptySession();
   // Uncommitted invalid text stays visible through re-renders, but never enters rules.
   const invalidPatternDrafts = new WeakMap();
-  const savedTemplates = storedJSON(TEMPLATES_KEY, []);
+  const savedTemplates = storedJSON(TEMPLATES_KEY, storedJSON(LEGACY_TEMPLATES_KEY, []));
   const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
-  const previous = storedJSON(SESSION_KEY, null);
-  if (previous?.version === 1 && previous.data && Array.isArray(previous.data.guests) &&
+  const previous = storedJSON(SESSION_KEY, storedJSON(LEGACY_SESSION_KEY, null));
+  if ([1, 2].includes(previous?.version) && previous.data && Array.isArray(previous.data.guests) &&
       Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&
       Array.isArray(previous.data.zones) && Array.isArray(previous.data.layout?.floors)) {
     for (const key of SESSION_FIELDS) {
@@ -221,8 +260,13 @@ export function createApp(root, api = createGateway()) {
     if (!Array.isArray(state.manualInstructions))
       state.manualInstructions = state.plan?.manual_instructions || [];
     state.notice = "Restored your previous planning session.";
+    state.needsMigration = previous.version === 1 || state.rules.some(rule => rule.shape);
     state.error = false;
   }
+  if (!state.needsMigration) for (const rule of state.rules) {
+    if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
+  }
+  if (["optimal", "feasible"].includes(state.plan?.status)) state.lastGoodPlan = deepCopy(state.plan);
   let viewObjectUrl = null;
   let listContentEndpoint = null;
   let viewRequest = 0;
@@ -250,7 +294,7 @@ export function createApp(root, api = createGateway()) {
     const data = {};
     for (const key of SESSION_FIELDS) data[key] = state[key];
     try {
-      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
       state.storageWarning = "";
     } catch (_) {
       // Import source data can exceed the per-origin quota; retain all imported
@@ -258,7 +302,7 @@ export function createApp(root, api = createGateway()) {
       if (data.importFile?.content_base64) {
         data.importFile = { filename: data.importFile.filename };
         try {
-          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 1, data }));
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
           state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
           return;
         } catch (_) { /* even the smaller snapshot did not fit */ }
@@ -280,12 +324,13 @@ export function createApp(root, api = createGateway()) {
     if (configuredTables().length !== state.tables.length)
       throw Error("All configured tables need a positive chair capacity.");
     return deepCopy({
-      version: 1, name, zones: state.zones, tables: state.tables,
+      version: 2, name, zones: state.zones, tables: state.tables,
       layout: state.layout, rules: state.rules
     });
   }
   function applyConfiguration(config) {
     const copy = deepCopy(config);
+    if (copy.version !== 2) throw Error("Migrate this template through the API first.");
     if (hasInvalidStoredPatternCounts(copy.rules))
       throw Error("Imported configuration contains an invalid global-pattern count.");
     state.zones = copy.zones;
@@ -298,6 +343,9 @@ export function createApp(root, api = createGateway()) {
         drawing.small_group_priority = Boolean(table.small_group_priority);
     }
     state.rules = copy.rules;
+    for (const rule of state.rules) {
+      if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
+    }
     state.nextRule = Math.max(1, ...state.rules.map(r => {
       const match = /^rule-(\d+)$/.exec(r.id);
       return match ? Number(match[1]) + 1 : 1;
@@ -310,7 +358,7 @@ export function createApp(root, api = createGateway()) {
     const catalog = state.catalog;
     clearObjectUrl();
     Object.assign(state, emptySession(), { catalog });
-    if (catalog?.shapes?.length) state.selectedShape = catalog.shapes[0].shape;
+    if (Array.isArray(catalog) && catalog.length) { state.ruleEngine = catalog[0].engine; state.ruleMechanism = catalog[0].mechanism; }
     announce("New empty session started. Saved configuration templates are still available.");
   }
   // Change handlers on inputs sometimes update state without re-rendering.
@@ -342,6 +390,8 @@ export function createApp(root, api = createGateway()) {
     finally { working = false; }
   }
   function invalidate() {
+    if (["optimal", "feasible"].includes(state.plan?.status))
+      state.lastGoodPlan = deepCopy(state.plan);
     state.plan = null; state.viewContent = null; state.selectedPlanItem = null;
     state.reassignMode = null; state.reassignResponse = null;
     state.pendingUnseatGroupId = null;
@@ -376,7 +426,7 @@ export function createApp(root, api = createGateway()) {
     return importHeaders.get(key) || key.replace(/_+/g, " ").replace(/^./, char => char.toUpperCase());
   }
   function listEndpoint(view) {
-    if (view === "not-seated") return "/v1/exports/not-seated-list/html";
+    if (view === "not-seated") return "/v2/exports/not-seated-list/html";
     const people = view === "people" || view === "people-floor";
     const grouped = view === "people-floor" || view === "groups-table";
     const by = people ? (grouped ? "floor" : "combined") : (grouped ? "table" : "combined");
@@ -388,10 +438,10 @@ export function createApp(root, api = createGateway()) {
       query.append("fields", field);
       if (people) query.append("field_labels", attributeLabel(field, importHeaders));
     }
-    return "/v1/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
+    return "/v2/exports/" + (people ? "people-list" : "table-list") + "/html?" + query.toString();
   }
   function tableCardsEndpoint() {
-    return "/v1/exports/table-cards/pdf" +
+    return "/v2/exports/table-cards/pdf" +
       (state.cardsPerPage === 1 ? "" : "?cards_per_page=" + state.cardsPerPage);
   }
   function clearObjectUrl() {
@@ -422,8 +472,7 @@ export function createApp(root, api = createGateway()) {
       if (state.screen === screen) b.setAttribute("aria-current", "page");
       nav.append(b);
     });
-    sidebar.append(nav, element("p", "side-note",
-      "All assignments and printable exports are produced by the REST API. No seating rules execute in the browser."));
+    sidebar.append(nav);
     return sidebar;
   }
   function render() {
@@ -433,7 +482,7 @@ export function createApp(root, api = createGateway()) {
       void loadView("print");
       return;
     }
-    saveSession();
+    if (!state.needsMigration) saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -441,19 +490,29 @@ export function createApp(root, api = createGateway()) {
     const header = element("div", "topline");
     const text = element("div");
     const title = SCREENS.find(([screen]) => screen === state.screen)?.[1] || "Seating Plan";
-    text.append(element("h1", "", title), element("p", "", "Build, optimize and review a seating session"));
+    const subtitles = {
+      import: "Map registration fields for use in rules",
+      rules: "Define who, what, where and priority",
+      map: "Place tables and set chair counts",
+      plan: "Solve and review the operator's choices"
+    };
+    text.append(element("h1", "", title), element("p", "", subtitles[state.screen]));
     const stats = element("div", "stats");
     stats.append(element("span", "pill", state.guests.length + " guests"),
       element("span", "pill", state.tables.length + " tables"),
       element("span", "pill", state.rules.length + " rules"));
     header.append(text, stats);
     main.append(header);
-    main.append(row(action("New empty session", newSession, "danger small", "new-session")));
+    const newButton = action("＋", newSession, "quiet small icon-button", "new-session");
+    newButton.title = "Start a new empty session";
+    newButton.setAttribute("aria-label", newButton.title);
+    main.append(row(newButton, element("span", "save-state", state.storageWarning
+      ? "Changes could not be saved" : "✓ Saved locally")));
     if (state.storageWarning) main.append(element("p", "problem", state.storageWarning));
     const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
     notice.setAttribute("role", "status");
     notice.id = "notice";
-    main.append(notice);
+    if (state.notice) main.append(notice);
     if (state.error && state.retryAction) {
       main.append(row(action("Retry failed action", () => attempt(state.retryAction),
         "primary", "retry-action")));
@@ -468,9 +527,7 @@ export function createApp(root, api = createGateway()) {
 
   function renderImport() {
     const area = element("div", "form-measure import-flow");
-    const form = card("Upload guest registrations", "CSV or XLSX. The server detects headers; you can override every column before importing.");
-    const fileLabel = element("label", "");
-    fileLabel.append(element("span", "", "Guest list spreadsheet"));
+    const form = card("Guest registrations");
     const file = document.createElement("input");
     file.type = "file"; file.id = "guest-file"; file.accept = ".csv,.xlsx";
     file.addEventListener("change", async () => attempt(async () => {
@@ -487,13 +544,13 @@ export function createApp(root, api = createGateway()) {
       invalidate();
       announce("Header preview loaded. Review the mapping and import the guests.");
     }));
-    fileLabel.append(file);
-    form.append(fileLabel);
+    form.append(fileControl("Choose guest list spreadsheet (CSV or XLSX)", file));
     if (state.importFile) form.append(element("p", "muted", "Selected: " + state.importFile.filename));
     area.append(form);
     if (!state.preview) return area;
 
-    const mappingCard = card("Map columns", "Automatic matches are preselected. Choose a target or enter any custom attribute key. Unmapped columns are preserved under their original header.");
+    const mappingCard = card("Map columns");
+    mappingCard.append(element("span", "draft-status", "Draft mapping · Saved locally"));
     const choices = [["", "Unmapped (preserve as attribute)"],
       ["name", "Guest / registration name"], ["size", "Party size"],
       ["group_id", "Group ID"], ["group_name", "Group name"],
@@ -504,12 +561,16 @@ export function createApp(root, api = createGateway()) {
     const table = document.createElement("table");
     const head = element("thead");
     const tr = element("tr");
-    ["Source column", "Target field", "Preview value"].forEach(t => tr.append(element("th", "", t)));
+    ["Source column", "Criterion", "Target field", "Preview value"].forEach(t => tr.append(element("th", "", t)));
     head.append(tr); table.append(head);
     const body = element("tbody");
     state.preview.headers.forEach(header => {
       const rowEl = element("tr");
       rowEl.append(element("td", "", header));
+      const targetIsCriterion = (state.mapping[header] || "").startsWith("attribute.") ||
+        !["name","size","group_id","group_name"].includes(state.mapping[header]);
+      rowEl.append(element("td", targetIsCriterion ? "criterion-ready" : "muted",
+        targetIsCriterion ? "◇ Rule field" : "—"));
       const cell = element("td");
       const value = state.mapping[header] || "";
       const selected = choices.some(choice => choice[0] === value) ? value :
@@ -546,11 +607,11 @@ export function createApp(root, api = createGateway()) {
         "Multiple columns mapped to " + target + ": " + sources.join(", ") +
         ". Choose a different target before importing."));
     }
-    const buttons = row(action("Review corrected mapping", () => attempt(async () => {
+    const buttons = row(iconAction("Review corrected mapping", "check", () => attempt(async () => {
       if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to review its mapping.");
       state.preview = await api.post("/v1/import/preview", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       announce("Mapping checked by the API. Review any row-level issues below.");
-    }), "secondary", "preview-mapping"), action("Import guests", () => attempt(async () => {
+    }), "secondary icon-button", "preview-mapping"), iconAction("Import guests", "upload", () => attempt(async () => {
       if (!state.importFile?.content_base64) throw Error("Re-select the spreadsheet to import guests again.");
       const result = await api.post("/v1/import", { ...state.importFile, mapping: state.mapping, header_aliases: {} });
       state.importResult = result;
@@ -563,7 +624,7 @@ export function createApp(root, api = createGateway()) {
         invalidate();
         announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
       }
-    }), "primary", "import-guests"));
+    }), "primary icon-button", "import-guests"));
     buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;
     mappingCard.append(buttons);
     area.append(mappingCard);
@@ -593,383 +654,11 @@ export function createApp(root, api = createGateway()) {
     return area;
   }
 
-  function defaultRuleParameters(spec) {
-    const params = {};
-    spec.fields.forEach(f => {
-      if (f.kind === "select" && f.choices.length) params[f.name] = f.choices[0];
-    });
-    if (spec.shape === "low_priority") {
-      params.selector = "group";
-      params.grade = 1;
-    }
-    if (spec.shape === "tiered_placement") {
-      // The event owns all preferences; use its first configured zone only
-      // as an editable initial choice, never as a solver default.
-      params.tiers = [{ zones: state.zones[0] ? [state.zones[0].id] : [], tables: [] }];
-    }
-    if (spec.shape === "zone_companionship") params.exclude_groups = [];
-    if (spec.shape === "global_pattern") {
-      // Editable lonely-last-seat example: a rule configuration, not a new solver branch.
-      params.scope = "global";
-      params.enabled = false;
-      params.conditions = [
-        { fact: "groups_at_table", op: "==", value: 1 },
-        { fact: "empty_seats", op: "==", value: 1 }
-      ];
-    }
-    return params;
-  }
-
-  function renderPatternEditor(rule, index) {
-    const panel = element("div", "pattern-editor");
-    panel.append(element("p", "muted",
-      "Scope: whole plan · All comparisons are AND clauses, evaluated per table. " +
-      "Every matching table earns or loses the selected weight."));
-    const facts = [
-      ["groups_at_table", "Number of groups at table"],
-      ["occupied_seats", "Occupied seats at table"],
-      ["empty_seats", "Empty seats at table"]
-    ];
-    const operators = [
-      ["==", "equals"], ["!=", "does not equal"], ["<", "less than"],
-      ["<=", "at most"], [">", "greater than"], [">=", "at least"]
-    ];
-    const conditions = Array.isArray(rule.parameters.conditions) ? rule.parameters.conditions : [];
-    conditions.forEach((condition, j) => {
-      const clause = element("div", "pattern-clause");
-      clause.append(selectField("Table fact", facts, condition.fact, value => {
-        condition.fact = value; invalidate();
-      }, { id: "rule-" + index + "-pattern-" + j + "-fact" }));
-      clause.append(selectField("Comparison", operators, condition.op, value => {
-        condition.op = value; invalidate();
-      }, { id: "rule-" + index + "-pattern-" + j + "-op" }));
-      const id = "rule-" + index + "-pattern-" + j + "-value";
-      const countLabel = element("label", "field");
-      countLabel.append(element("span", "", "Count"));
-      const input = document.createElement("input");
-      // Text preserves invalid characters so the user can see and correct them.
-      input.type = "text";
-      input.inputMode = "numeric";
-      input.id = id;
-      const draft = invalidPatternDrafts.get(condition);
-      input.value = draft === undefined ? String(condition.value ?? "") : draft;
-      const error = element("span", "field-error");
-      error.id = id + "-error";
-      error.setAttribute("role", "alert");
-      input.setAttribute("aria-describedby", error.id);
-      function setError(message) {
-        error.textContent = message;
-        error.hidden = !message;
-        if (message) input.setAttribute("aria-invalid", "true");
-        else input.removeAttribute("aria-invalid");
-      }
-      setError(draft === undefined && typeof condition.value !== "number"
-        ? "Saved count must be a whole number. Re-enter it."
-        : patternCountError(input.value));
-      function acceptCount() {
-        const message = patternCountError(input.value);
-        if (message) invalidPatternDrafts.set(condition, input.value);
-        else {
-          condition.value = Number(input.value);
-          invalidPatternDrafts.delete(condition);
-        }
-        setError(message);
-        invalidate();
-        saveSession(); // Valid edits are immediate; invalid text never enters persisted rules.
-      }
-      input.addEventListener("input", acceptCount);
-      input.addEventListener("change", acceptCount);
-      countLabel.append(input, error);
-      clause.append(countLabel);
-      clause.append(action("Remove comparison", () => {
-        if (conditions.length === 1) return announce("A pattern requires at least one comparison.", true);
-        conditions.splice(j, 1);
-        invalidate(); render();
-      }, "danger small", "rule-" + index + "-remove-pattern-" + j));
-      panel.append(clause);
-    });
-    panel.append(action("Add comparison", () => {
-      if (conditions.length >= 8) return announce("Patterns support up to eight comparisons.", true);
-      if (!Array.isArray(rule.parameters.conditions)) rule.parameters.conditions = [];
-      rule.parameters.conditions.push({ fact: "occupied_seats", op: ">=", value: 1 });
-      invalidate(); render();
-    }, "secondary small", "rule-" + index + "-add-pattern"));
-    return panel;
-  }
-
-  function renderTierEditor(rule, index) {
-    const area = element("section", "tier-editor");
-    area.append(element("h3", "", "Placement tiers — first is most preferred"));
-    area.append(element("p", "muted",
-      "Each tier accepts any listed floor or table. Move to the next tier only if the entire party cannot fit. Unlisted locations are a last resort."));
-    const tiers = Array.isArray(rule.parameters.tiers) ? rule.parameters.tiers : [];
-    const update = () => { invalidate(); render(); };
-    const icon = (text, description, callback, id, disabled = false) => {
-      const button = action(text, callback, "quiet small tier-icon", id);
-      button.title = description;
-      button.setAttribute("aria-label", description);
-      button.disabled = disabled;
-      return button;
-    };
-    tiers.forEach((tier, rank) => {
-      const row = element("div", "tier-rank");
-      row.setAttribute("data-tier-rank", String(rank + 1));
-      const header = element("div", "row between tier-rank-header");
-      const title = element("strong", "", "Tier " + (rank + 1));
-      const controls = element("div", "row tier-rank-controls");
-      controls.append(icon("↑", "Move tier " + (rank + 1) + " earlier", () => {
-        [tiers[rank - 1], tiers[rank]] = [tiers[rank], tiers[rank - 1]];
-        update();
-      }, "rule-" + index + "-tier-" + rank + "-up", rank === 0));
-      controls.append(icon("↓", "Move tier " + (rank + 1) + " later", () => {
-        [tiers[rank + 1], tiers[rank]] = [tiers[rank], tiers[rank + 1]];
-        update();
-      }, "rule-" + index + "-tier-" + rank + "-down", rank === tiers.length - 1));
-      controls.append(icon("×", "Remove tier " + (rank + 1), () => {
-        tiers.splice(rank, 1); update();
-      }, "rule-" + index + "-tier-" + rank + "-remove", tiers.length === 1));
-      header.append(title, controls);
-      row.append(header);
-      const chosen = element("div", "tier-locations");
-      const locations = [
-        ["zones", "Floor", state.zones.map(z => [z.id, z.name])],
-        ["tables", "Table", state.tables.map(t => [t.id, t.id + " · " + t.zone_id])],
-      ];
-      for (const [key, type, source] of locations) {
-        for (const location of tier[key] || []) {
-          const text = source.find(([id]) => id === location)?.[1] || location;
-          const chip = element("span", "tier-location", type + ": " + text);
-          chip.append(icon("×", "Remove " + type.toLowerCase() + " " + text +
-            " from tier " + (rank + 1), () => {
-            tier[key] = (tier[key] || []).filter(id => id !== location);
-            update();
-          }, "rule-" + index + "-tier-" + rank + "-remove-" + key + "-" + location));
-          chosen.append(chip);
-        }
-      }
-      if (!chosen.children.length) chosen.append(element("span", "muted", "Choose at least one location"));
-      row.append(chosen);
-      const options = [
-        ["", "Add a floor or table"],
-        ...state.zones.map(z => ["z:" + z.id, "Floor: " + z.name]),
-        ...state.tables.map(t => ["t:" + t.id, "Table: " + t.id + " · " + t.zone_id])
-      ];
-      row.append(selectField("Add location", options, "", value => {
-        if (!value) return;
-        const key = value.slice(0, 2) === "z:" ? "zones" : "tables";
-        const id = value.slice(2);
-        if (!Array.isArray(tier[key])) tier[key] = [];
-        if (!tier[key].includes(id)) tier[key].push(id);
-        update();
-      }, { id: "rule-" + index + "-tier-" + rank + "-add-location" }));
-      area.append(row);
-    });
-    area.append(action("Add tier", () => {
-      tiers.push({ zones: [], tables: [] }); rule.parameters.tiers = tiers; update();
-    }, "secondary small", "rule-" + index + "-add-tier"));
-    return area;
-  }
-
-  function renderCompanionshipExclusions(rule, index) {
-    const area = element("div", "exclusion-editor");
-    area.append(element("p", "muted",
-      "Optional: explicitly exempt parties deliberately seated alone. Excluded parties still count as companions for other groups."));
-    const list = element("div", "exclusion-list");
-    const excluded = Array.isArray(rule.parameters.exclude_groups) ? rule.parameters.exclude_groups : [];
-    const choices = new Map();
-    state.guests.forEach(guest => {
-      const id = guest.group_id || "guest:" + guest.id;
-      if (!choices.has(id)) choices.set(id, importedPartyName(guest));
-    });
-    excluded.forEach(gid => {
-      const chip = element("span", "exclusion-chip", choices.get(gid) || gid);
-      const remove = action("×", () => {
-        rule.parameters.exclude_groups = excluded.filter(id => id !== gid);
-        invalidate(); render();
-      }, "quiet small exclusion-remove", "rule-" + index + "-exclude-" + gid);
-      remove.title = "Remove " + (choices.get(gid) || gid) + " from deliberate-solitude exclusions";
-      remove.setAttribute("aria-label", remove.title);
-      chip.append(remove); list.append(chip);
-    });
-    if (!excluded.length) list.append(element("span", "muted", "No excluded parties"));
-    area.append(list);
-    area.append(selectField("Exclude a registered party", [
-      ["", "Select a party to exclude"],
-      ...[...choices].filter(([gid]) => !excluded.includes(gid))
-        .map(([gid, name]) => [gid, name])
-    ], "", value => {
-      if (!value || excluded.includes(value)) return;
-      rule.parameters.exclude_groups = [...excluded, value];
-      invalidate(); render();
-    }, { id: "rule-" + index + "-exclude-add" }));
-    return area;
-  }
-
   function renderRules() {
-    const area = element("div", "form-measure rules-flow");
-    const form = card("Build consideration rules", "Considerations and graded priority marks are editable rule instances. Markers control order, not points.");
-    if (!state.catalog) {
-      form.append(element("p", "problem", "Rule catalog is unavailable. Use Retry above."));
-      return append(area, form);
-    }
-    const shapes = state.catalog.shapes;
-    const newRuleForm = element("fieldset", "new-rule-form");
-    newRuleForm.append(element("legend", "", "Add a new consideration — select its type first"));
-    const chosenShape = shapes.find(s => s.shape === state.selectedShape) || shapes[0];
-    newRuleForm.append(selectField("Step 1 — Type of the rule you want to create",
-      shapes.map(s => [s.shape, s.title]), chosenShape.shape,
-      next => { state.selectedShape = next; render(); }, { id: "new-rule-shape" }));
-    newRuleForm.append(element("p", "muted", chosenShape.description ||
-      "Choose a type to see the new rule's fields."));
-    newRuleForm.append(action("Step 2 — Add " + chosenShape.title + " rule", () => {
-      const spec = shapes.find(s => s.shape === state.selectedShape);
-      const parameters = defaultRuleParameters(spec);
-      state.rules.push({
-        id: "rule-" + state.nextRule++, shape: spec.shape, mode: spec.default_mode,
-        weight: spec.default_mode === "soft" ? spec.default_weight : null, parameters,
-        name: "", description: "", enabled: true
-      });
-      invalidate();
-      announce("Added a " + spec.title + " rule. Set its parameters below.");
-    }, "primary", "add-rule"));
-    newRuleForm.append(element("p", "muted",
-      "Step 1 sets the NEW rule's type only. Existing rules below have their own type control."));
-    form.append(newRuleForm);
-    area.append(form);
-    if (!state.rules.length) {
-      area.append(append(card("No considerations yet"), element("p", "muted",
-        "Add grouping, zone restrictions, pair preferences, capacity, fill efficiency, or locked assignments.")));
-    }
-    state.rules.forEach((rule, i) => {
-      const spec = shapes.find(s => s.shape === rule.shape);
-      const displayName = ruleLabel(rule, rule.id);
-      const section = card(displayName, rule.description || null);
-      section.setAttribute("data-rule-id", rule.id);
-      section.classList.toggle("rule-instance-off", rule.enabled === false);
-      const header = element("div", "row between rule-instance-header");
-      const type = element("span", "badge", rule.shape);
-      type.title = spec?.description || rule.shape;
-      header.append(type);
-      const tools = element("div", "rule-instance-actions");
-      const toggle = element("label", "rule-instance-toggle");
-      toggle.title = rule.enabled === false
-        ? "Enable this rule. Its saved weight, parameters and constraints become active again."
-        : "Disable this rule without deleting it. It will contribute no constraints, points or explanations.";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.id = "rule-enabled-" + i;
-      checkbox.checked = rule.enabled !== false;
-      checkbox.setAttribute("aria-label", "Enable rule " + displayName);
-      checkbox.addEventListener("change", () => {
-        rule.enabled = checkbox.checked;
-        invalidate(); render();
-      });
-      toggle.append(checkbox, element("span", "", rule.enabled === false ? "Off" : "On"));
-      tools.append(toggle, action("Remove rule", () => {
-        state.rules.splice(i, 1); invalidate(); announce("Rule removed.");
-      }, "danger small", "delete-rule-" + i));
-      header.append(tools);
-      section.append(header);
-      section.append(selectField("Type of this existing rule (changing resets its fields)",
-        shapes.map(s => [s.shape, s.title]), rule.shape, value => {
-          if (value === rule.shape) return;
-          const nextSpec = shapes.find(s => s.shape === value);
-          const parameters = defaultRuleParameters(nextSpec);
-          rule.shape = nextSpec.shape;
-          rule.mode = nextSpec.default_mode;
-          rule.weight = nextSpec.default_mode === "soft" ? nextSpec.default_weight : null;
-          rule.parameters = parameters;
-          invalidate();
-          render();
-        }, { id: "rule-shape-" + i }));
-      section.append(grid(
-        textField("Rule ID", rule.id, value => { rule.id = value; invalidate(); render(); },
-          { id: "rule-id-" + i, required: true }),
-        textField("Name (optional)", rule.name ?? "", value => {
-          rule.name = value; invalidate(); render();
-        }, { id: "rule-name-" + i }),
-        textField("Description (optional)", rule.description ?? "", value => {
-          rule.description = value; invalidate(); render();
-        }, { id: "rule-description-" + i }),
-        selectField(rule.shape === "low_priority" ? "Order marker" :
-          rule.shape === "table_property_need" ? "Guest need: require or prefer" : "Hard or weighted",
-          spec.modes.map(m => [m,
-            m === "mark" ? "Grade marker (no score)" :
-            m === "staged" ? "STAGED (whole-party tier order)" :
-            rule.shape === "table_property_need"
-              ? (m === "hard" ? "Require (hard)" : "Prefer (soft, weighted per affected guest)")
-              : (m === "hard" ? "HARD (cannot violate)" : "Soft (weighted points)")]),
-          rule.mode, value => {
-            rule.mode = value;
-            rule.weight = value === "soft" ? (spec.default_weight || 1) : null;
-            invalidate(); render();
-          }, { id: "rule-mode-" + i }),
-        rule.mode === "soft"
-          ? textField("Points weight", rule.weight, value => { rule.weight = Number(value); invalidate(); },
-              { type: "number", min: 1, step: 1, id: "rule-weight-" + i })
-          : element("p", "muted", rule.mode === "mark" ? "Order only — no score" : rule.mode === "staged" ? "STAGED — tier order, no points" : "HARD — no weight")
-      ));
-      const fields = element("div", "grid three");
-      if (rule.shape === "global_pattern") {
-        const label = element("label", "field pattern-enabled-choice");
-        const enabled = document.createElement("input");
-        enabled.type = "checkbox";
-        enabled.id = "rule-pattern-enabled-" + i;
-        enabled.checked = rule.parameters.enabled === true;
-        enabled.addEventListener("change", () => {
-          rule.parameters.enabled = enabled.checked;
-          invalidate();
-        });
-        label.append(enabled, element("span", "", "Enable global pattern (default off)"));
-        fields.append(label);
-      }
-      spec.fields.forEach(field => {
-        if (rule.shape === "low_priority") {
-          if (field.name === "group_id" && rule.parameters.selector !== "group") return;
-          if (field.name === "threshold" && rule.parameters.selector !== "size_below") return;
-        }
-        const original = rule.parameters[field.name] ?? "";
-        const update = value => {
-          if (field.name === "selector" && rule.shape === "low_priority") {
-            delete rule.parameters.group_id;
-            delete rule.parameters.threshold;
-            if (value === "size_below") rule.parameters.threshold = 4;
-          }
-          if (value === "") delete rule.parameters[field.name];
-          else rule.parameters[field.name] = (rule.shape === "low_priority" &&
-            ["grade", "threshold"].includes(field.name)) ? Number(value) : value;
-          invalidate();
-          if (field.name === "selector" && rule.shape === "low_priority") render();
-        };
-        if (field.kind === "pattern") fields.append(renderPatternEditor(rule, i));
-        else if (field.kind === "tiers") fields.append(renderTierEditor(rule, i));
-        else if (field.kind === "group_exclusions")
-          fields.append(renderCompanionshipExclusions(rule, i));
-        else if (field.kind === "select") fields.append(selectField(field.label,
-          field.choices, original, update, { id: "rule-" + i + "-" + field.name }));
-        else if (field.kind === "zone") fields.append(selectField(field.label,
-          [["", "Select zone"], ...state.zones.map(z => [z.id, z.name])], original, update,
-          { id: "rule-" + i + "-" + field.name }));
-        else if (field.kind === "table") fields.append(selectField(field.label,
-          [["", "Select table"], ...state.tables.map(t => [t.id, t.id + " (" + t.zone_id + ")"])],
-          original, update, { id: "rule-" + i + "-" + field.name }));
-        else if (field.kind === "target") {
-          const list = [[ "", "Select guest or group" ]];
-          const seen = new Set();
-          state.guests.forEach(g => {
-            const val = g.group_id || g.id;
-            if (!seen.has(val)) { seen.add(val); list.push([val, importedPartyName(g)]); }
-          });
-          fields.append(selectField(field.label, list, original, update,
-            { id: "rule-" + i + "-" + field.name }));
-        } else fields.append(textField(field.label, original, update,
-          { id: "rule-" + i + "-" + field.name, required: field.required,
-            ...(rule.shape === "low_priority" ? { type: "number", min: 1, step: 1 } : {}) }));
-      });
-      section.append(fields);
-      area.append(section);
+    return renderGenericRules(state, {
+      changed: (invalidatePlan = true) => { if (invalidatePlan) invalidate(); saveSession(); render(); },
+      announce
     });
-    return area;
   }
 
   async function validateLayout() {
@@ -1013,10 +702,52 @@ export function createApp(root, api = createGateway()) {
     announce("Layout imported. Set chair capacities and validate the venue before solving.");
   }
 
+  function propertyControl(label, selected, id) {
+    const block = element("fieldset", "property-picker");
+    block.append(element("legend", "", label));
+    const hidden = document.createElement("input");
+    hidden.type="hidden"; hidden.id=id; hidden.value=selected.join(", ");
+    const list = element("div", "property-options");
+    const choices = [...new Set([...tablePropertyVocabulary(state.tables),...selected])].sort();
+    const valueSet = new Set(selected);
+    const changed = () => {
+      hidden.value=[...valueSet].join(", ");
+      hidden.dispatchEvent(new window.Event("change", {bubbles:true}));
+    };
+    for (const property of choices) {
+      const tag = element("label", "check-inline");
+      const check=document.createElement("input");check.type="checkbox";
+      check.checked=valueSet.has(property);
+      check.addEventListener("change",()=>{
+        if(check.checked)valueSet.add(property);else valueSet.delete(property);
+        changed();
+      });
+      tag.append(check,element("span","",property));list.append(tag);
+    }
+    const newTag=document.createElement("input");
+    newTag.type="text";newTag.placeholder="New table property";
+    newTag.setAttribute("aria-label","New table property");
+    const add=action("+",()=>{
+      const next=newTag.value.trim();
+      if(!next||next.includes(","))return;
+      if(!valueSet.has(next)) {valueSet.add(next);changed();}
+      newTag.value="";
+      if (!choices.includes(next)) {
+        const option=element("label","check-inline");
+        const check=document.createElement("input");check.type="checkbox";check.checked=true;
+        check.addEventListener("change",()=>{if(check.checked)valueSet.add(next);else valueSet.delete(next);changed();});
+        option.append(check,element("span","",next));list.append(option);
+      }
+    },"quiet small icon-button");
+    add.title="Add table property";add.setAttribute("aria-label",add.title);
+    newTag.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();add.click();}});
+    block.append(hidden,list,row(newTag,add));
+    return block;
+  }
+
   function renderMap() {
     const area = element("div");
-    const templatesCard = card("Reusable venue + rules configurations",
-      "Prepare a layout, capacities and rules before importing guests. Named templates are saved in this browser; JSON files are portable. Saving an existing name updates that template.");
+    const templatesCard = card("Venue templates");
     templatesCard.classList.add("form-measure");
     templatesCard.append(textField("Configuration name", state.templateName, value => {
       state.templateName = value;
@@ -1024,7 +755,7 @@ export function createApp(root, api = createGateway()) {
     templatesCard.append(row(
       action("Save / update template", () => attempt(async () => {
         const name = document.getElementById("template-name").value.trim();
-        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        const validated = await api.post("/v2/configurations/validate", configuration(name));
         const index = templates.findIndex(t => t.name === name);
         const oldValue = index < 0 ? null : templates[index];
         if (index < 0) templates.push(validated);
@@ -1039,7 +770,7 @@ export function createApp(root, api = createGateway()) {
       }), "primary", "save-template"),
       action("Export full configuration JSON", () => attempt(async () => {
         const name = document.getElementById("template-name").value.trim() || "Venue configuration";
-        const validated = await api.post("/v1/configurations/validate", configuration(name));
+        const validated = await api.post("/v2/configurations/validate", configuration(name));
         downloadBlob(JSON.stringify(validated, null, 2), "venue-configuration.json", "application/json");
         announce("Exported the complete venue, capacities and rules.");
       }), "secondary", "export-configuration")
@@ -1051,7 +782,8 @@ export function createApp(root, api = createGateway()) {
       action("Load template", () => attempt(async () => {
         const found = templates.find(t => t.name === state.templateSelected);
         if (!found) throw Error("Choose a saved configuration template.");
-        const validated = await api.post("/v1/configurations/validate", found);
+        const migrated = found.version === 2 ? found : (await api.post("/v2/configurations/migrate", found)).configuration;
+        const validated = await api.post("/v2/configurations/validate", migrated);
         applyConfiguration(validated);
         announce("Loaded template " + found.name + ". Import guests whenever ready.");
       }), "secondary", "load-template"),
@@ -1077,8 +809,6 @@ export function createApp(root, api = createGateway()) {
         announce("Deleted saved template " + removed.name + ".");
       }), "danger small", "delete-template")
     ));
-    const importLabel = element("label", "field");
-    importLabel.append(element("span", "", "Import full configuration JSON"));
     const configFile = document.createElement("input");
     configFile.id = "configuration-file";
     configFile.type = "file";
@@ -1088,36 +818,66 @@ export function createApp(root, api = createGateway()) {
       if (!file) return;
       if (file.size > 2_000_000) throw Error("Configuration JSON must be smaller than 2 MB.");
       const incoming = JSON.parse(await file.text());
-      const validated = await api.post("/v1/configurations/validate", incoming);
+      const migrated = incoming.version === 2 ? incoming : (await api.post("/v2/configurations/migrate", incoming)).configuration;
+      const validated = await api.post("/v2/configurations/validate", migrated);
       applyConfiguration(validated);
       announce("Imported complete configuration " + validated.name + ".");
     }));
-    templatesCard.append(append(importLabel, configFile));
-    area.append(templatesCard);
-    const intro = card("Floor layout editor", "Create numbered tables, drag them within a floor, or import structured JSON / annotated SVG drafts. Add passive table tags (accessible, aisle-edge, quiet) to match guest needs — tags carry no score by themselves.");
+    templatesCard.append(fileControl("Import full configuration JSON", configFile));
+    const templateActions = [
+      ["save-template","Save or update venue template","✓"],
+      ["export-configuration","Download full configuration JSON","⤓"],
+      ["load-template","Load selected venue template","↥"],
+      ["duplicate-template","Duplicate selected venue template","⧉"],
+      ["delete-template","Delete selected venue template","🗑"]
+    ];
+    for (const [id,title,glyph] of templateActions) {
+      const b=templatesCard.querySelector("#"+id);
+      b.textContent=glyph;b.classList.add("icon-button");
+      b.title=title;b.setAttribute("aria-label",title);
+    }
+    const templateDrawer=element("details","card form-measure template-drawer");
+    templateDrawer.open=Boolean(state.templateDrawerOpen);
+    const templateToggle=element("summary","","Venue templates");
+    templateToggle.id="template-toggle";
+    templateToggle.title="Expand or collapse saved venue templates";
+    templateToggle.setAttribute("aria-label", templateToggle.title);
+    templateDrawer.append(templateToggle);
+    templatesCard.querySelector("h2")?.remove();
+    templatesCard.classList.remove("card","form-measure");
+    templatesCard.classList.add("template-content");
+    templateDrawer.append(templatesCard);
+    templateDrawer.addEventListener("toggle",()=>{
+      state.templateDrawerOpen=templateDrawer.open;saveSession();
+    });
+    area.append(templateDrawer);
+    const intro = card("Floor layout");
     intro.classList.add("form-measure");
     const file = document.createElement("input");
     file.type = "file"; file.id = "layout-file"; file.accept = ".json,.svg"; file.multiple = true;
     file.addEventListener("change", () => attempt(async () => {
       if (file.files?.length) await loadLayoutFiles(Array.from(file.files));
     }));
-    intro.append(append(element("label", "", ""), element("span", "", "Import venue layout files"), file));
+    intro.append(fileControl("Import venue layout files (JSON or SVG)", file));
     intro.append(row(
-      action("Validate layout", () => attempt(validateLayout), "primary", "validate-layout"),
-      action("Export layout JSON", () => attempt(async () => {
+      action("✓", () => attempt(validateLayout), "primary icon-button", "validate-layout"),
+      action("↓", () => attempt(async () => {
         const validated = await api.post("/v1/layouts/import", {
           files: [{ filename: "layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }]
         });
         downloadBlob(JSON.stringify(validated, null, 2), "venue-layout.json", "application/json");
-      }), "secondary", "export-layout")
+      }), "secondary icon-button", "export-layout")
     ));
+    for (const [id,title] of [["validate-layout","Validate layout"],["export-layout","Export layout JSON"]]) {
+      const b=intro.querySelector("#"+id);b.title=title;b.setAttribute("aria-label",title);
+    }
     area.append(intro);
-    const floorForm = card("Add floor", "Zones identify the floor for solver restrictions and printable pages.");
+    const floorForm = card("Create a floor");
     floorForm.classList.add("form-measure");
     const addFloor = element("form", "grid three");
     addFloor.id = "floor-form";
     const inputs = {};
-    [["id", "Floor ID", "ground"], ["name", "Floor name", "Ground floor"],
+    [["name", "Floor name", "Ground floor"],
      ["width", "Canvas width", "700"], ["height", "Canvas height", "450"]].forEach(([key,label,placeholder]) => {
       const input = document.createElement("input");
       input.name = key; input.placeholder = placeholder; input.required = true;
@@ -1126,13 +886,15 @@ export function createApp(root, api = createGateway()) {
       inputs[key] = input;
       addFloor.append(append(element("label"), element("span", "", label), input));
     });
-    const submit = element("button", "primary", "Create floor");
+    const submit = element("button", "primary icon-button", "＋");
+    submit.title = "Create floor"; submit.setAttribute("aria-label", "Create floor");
     submit.type = "submit"; submit.id = "add-floor";
     addFloor.append(submit);
     addFloor.addEventListener("submit", event => {
       event.preventDefault();
-      const id = inputs.id.value.trim();
-      if (!id || state.zones.some(z => z.id === id)) return announce("Floor ID must be unique and nonempty.", true);
+      let sequence = state.zones.length + 1;
+      while (state.zones.some(zone => zone.id === "floor-" + sequence)) sequence++;
+      const id = "floor-" + sequence;
       const width = safeNumber(inputs.width.value), height = safeNumber(inputs.height.value);
       if (!(width > 0 && height > 0)) return announce("Floor dimensions must be positive.", true);
       state.zones.push({ id, name: inputs.name.value.trim() || id });
@@ -1148,31 +910,43 @@ export function createApp(root, api = createGateway()) {
     }
     if (!currentFloor()) state.focusedFloor = state.layout.floors[0].zone_id;
     const layout = currentFloor();
-    const panel = card("Edit tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id),
-      "Drag a numbered shape to reposition it, or edit exact geometry and table chair count below.");
+    const panel = card("Tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id));
     panel.append(selectField("Floor", state.layout.floors.map(f => [f.zone_id,
       state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
       state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
 
+    const mobileTabs = element("div", "venue-mobile-tabs segmented");
+    mobileTabs.setAttribute("role", "group");
+    mobileTabs.setAttribute("aria-label", "Venue editor section");
+    for (const [mode, title] of [["map", "Map"], ["tables", "Table settings"]]) {
+      const tab = action(title, () => { state.mobileVenuePane = mode; render(); },
+        "secondary small", "venue-mobile-" + mode);
+      tab.setAttribute("aria-pressed", String((state.mobileVenuePane || "map") === mode));
+      tab.title = "Show venue " + (mode === "map" ? "map" : "table settings");
+      mobileTabs.append(tab);
+    }
+    panel.append(mobileTabs);
     const split = element("div", "map-layout");
+    split.dataset.mobilePane = state.mobileVenuePane || "map";
     const canvas = element("div", "map-canvas");
     canvas.append(makeEditorSvg(layout));
     split.append(canvas);
-    const controls = element("div");
+    const controls = element("div", "venue-table-settings");
     const tableForm = element("form", "stack");
     tableForm.id = "table-form";
     tableForm.append(element("h3", "", "Add numbered table"));
     const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
-    const propertyInput = textField("Table tags (comma-separated)", "", () => {},
-      { id: "new-table-properties", placeholder: "accessible, aisle-edge" });
-    const priorityLabel = element("label", "field");
+    const propertyInput = propertyControl("Table properties", [], "new-table-properties");
+    const priorityLabel = element("label", "priority-checkbox");
     const priorityInput = document.createElement("input");
     priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
     priorityLabel.append(priorityInput, element("span", "", "Priority for couples and singles (soft)"));
     tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput, priorityLabel);
-    const create = element("button", "secondary", "Add table to floor"); create.type = "submit"; create.id = "add-table";
+    const create = element("button", "secondary icon-button", "＋");
+    create.type = "submit"; create.id = "add-table";
+    create.title = "Add table to floor"; create.setAttribute("aria-label", create.title);
     tableForm.append(create);
     tableForm.addEventListener("submit", event => {
       event.preventDefault();
@@ -1218,10 +992,9 @@ export function createApp(root, api = createGateway()) {
       }
       fields.append(selectField("Shape", ["rectangle", "ellipse", "circle"], drawing.shape,
         () => {}, { id: "table-" + drawing.table_id + "-shape" }));
-      editor.append(fields, textField("Table tags (comma-separated)",
-        (table?.properties || drawing.properties || []).join(", "), () => {},
-        { id: "table-" + drawing.table_id + "-properties" }));
-      const priorityLabel = element("label", "field");
+      editor.append(fields, propertyControl("Table properties",
+        table?.properties || drawing.properties || [], "table-" + drawing.table_id + "-properties"));
+      const priorityLabel = element("label", "priority-checkbox");
       const priorityInput = document.createElement("input");
       priorityInput.type = "checkbox";
       priorityInput.id = "table-" + drawing.table_id + "-small-priority";
@@ -1229,14 +1002,24 @@ export function createApp(root, api = createGateway()) {
       priorityLabel.append(priorityInput, element("span", "",
         "Priority for couples and singles (soft)"));
       editor.append(priorityLabel);
-      const save = element("button", "secondary small", "Apply dimensions");
-      save.type = "submit";
-      const remove = action("Remove table", () => {
+      const save = element("button", "secondary small icon-button", "✓");
+      save.type = "submit"; save.title="Save table";save.setAttribute("aria-label",save.title);
+      save.hidden=true;
+      const indicator=element("span","save-state","✓ Saved locally");
+      editor.addEventListener("input",e=>{
+        if(e.target.type==="hidden")return;
+        indicator.textContent="Editing draft";indicator.classList.add("unsaved");
+      });
+      editor.addEventListener("change",e=>{
+        if(e.target.matches('input,select'))editor.requestSubmit();
+      });
+      const remove = action("⌫", () => {
         layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
         state.tables = state.tables.filter(t => t.id !== drawing.table_id);
         invalidate(); announce("Removed table " + drawing.table_id + ".");
-      }, "danger small");
-      editor.append(row(save, remove));
+      }, "danger small icon-button");
+      remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
+      editor.append(row(save, indicator, remove));
       editor.addEventListener("submit", event => {
         event.preventDefault();
         const next = {};
@@ -1260,7 +1043,7 @@ export function createApp(root, api = createGateway()) {
         drawing.small_group_priority = priorityInput.checked;
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        invalidate(); announce("Updated table " + drawing.table_id + ". Use Validate layout to check geometry.");
+        invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");
       });
       list.append(editor);
     }
@@ -1280,6 +1063,9 @@ export function createApp(root, api = createGateway()) {
     bg.setAttribute("fill", "#f5f8fa"); svg.append(bg);
     for (const drawing of floor.tables) {
       const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
+      g.setAttribute("tabindex","0");
+      g.setAttribute("role","button");
+      g.setAttribute("aria-label","Move table "+drawing.table_id+" using arrow keys");
       g.setAttribute("data-table-id", drawing.table_id);
       const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
       if (drawing.shape === "rectangle") {
@@ -1302,6 +1088,16 @@ export function createApp(root, api = createGateway()) {
       label.setAttribute("font-weight", "700");
       label.textContent = drawing.table_id;
       g.append(shape,label); svg.append(g);
+      g.addEventListener("keydown", event => {
+        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
+        if (!delta) return;
+        event.preventDefault();
+        drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
+        drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        invalidate();render();
+        const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
+        active?.focus();
+      });
       g.addEventListener("pointerdown", event => {
         event.preventDefault();
         const rect = svg.getBoundingClientRect();
@@ -1343,7 +1139,7 @@ export function createApp(root, api = createGateway()) {
         throw Error("A solved plan or low-priority review is required before checking options.");
       const instruction = { ...direction, id: "manual-" + (state.nextManualId++) };
       const previousPlan = state.plan;
-      const response = await api.post("/v1/reassign/options", {
+      const response = await api.post("/v2/reassign/options", {
         problem: projectProblem(), plan: previousPlan, instruction
       });
       if (state.plan !== previousPlan)
@@ -1382,12 +1178,14 @@ export function createApp(root, api = createGateway()) {
       const direction = { id: "manual-" + state.nextManualId++, group_id: groupId, action: "unseat" };
       state.manualInstructions = [...previous, direction];
       try {
-        const updated = await api.post("/v1/solve", projectProblem());
+        const updated = await api.post("/v2/solve", projectProblem());
         state.plan = updated;
         state.manualInstructions = deepCopy(updated.manual_instructions || state.manualInstructions);
         state.selectedPlanItem = null;
         resetPlanPreview();
-        announce("Operator moved " + groupId + " to the not-seated list.");
+        const label=state.guests.find(g=>(g.group_id || "guest:"+g.id)===groupId);
+        announce("Operator moved " + (label?.group_name || label?.name || "the selected family") +
+          " to the not-seated list.");
       } catch (error) {
         state.manualInstructions = previous;
         throw error;
@@ -1403,7 +1201,7 @@ export function createApp(root, api = createGateway()) {
       const old = state.manualInstructions;
       state.manualInstructions = remaining;
       try {
-        const updated = await api.post("/v1/solve", projectProblem());
+        const updated = await api.post("/v2/solve", projectProblem());
         state.plan = updated;
         state.manualInstructions = deepCopy(updated.manual_instructions || remaining);
         resetPlanPreview();
@@ -1418,23 +1216,39 @@ export function createApp(root, api = createGateway()) {
   function explainRuleRefs(value) {
     // Keep the server's machine identifiers intact in Plan/JSON, but show
     // the operator's name next to them in human-facing diagnostics.
-    return String(value).replace(/\brule:([\w.-]+)/g, (whole, id) => {
-      const label = ruleLabel(state.rules.find(rule => rule.id === id), id);
-      return label === id ? whole : label + " [rule:" + id + "]";
-    });
+    let output = String(value);
+    for (const rule of state.rules) {
+      if (!rule?.name) continue;
+      output = output.replaceAll("rule:" + rule.id, rule.name);
+    }
+    return output.replace(/rule:[\w.-]+/g, "an unnamed consideration");
   }
   function renderPlan() {
     const area = element("div");
-    const controls = card("Solve seating", "Optimization runs only in the API. Hard constraints remain mandatory; time-limited results report feasible versus optimal.");
+    const controls = card("Solve seating");
+    const advanced = element("details", "advanced-settings");
+    if (state.advancedSolver) advanced.open = true;
+    advanced.addEventListener("toggle", () => { state.advancedSolver = advanced.open; saveSession(); });
+    advanced.append(element("summary", "", "Advanced solver settings"),
+      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
+        { id: "time-limit", type: "number", min: 0.1, step: 0.1 }));
     controls.append(row(
-      textField("Session ID", state.sessionId, v => { state.sessionId = v; invalidate(); },
-        { id: "session-id", required: true }),
-      textField("Solver time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
-        { id: "time-limit", type: "number", min: 0.1, step: 0.1 }),
       action("Optimize seating", () => attempt(async () => {
         const problem = projectProblem();
-        const plan = await api.post("/v1/solve", problem);
+        state.solving = true; render();
+        let plan;
+        try { plan = await api.post("/v2/solve", problem); }
+        catch (error) {
+          // An unsuccessful request is not an instruction to discard the last solved seating.
+          if (!state.plan && state.lastGoodPlan) state.plan = deepCopy(state.lastGoodPlan);
+          state.restoredAfterFailure = Boolean(state.plan);
+          throw error;
+        }
+        finally { state.solving = false; render(); }
         state.plan = plan;
+        state.restoredAfterFailure = false;
+        if (["optimal", "feasible"].includes(plan.status))
+          state.lastGoodPlan = deepCopy(plan);
         state.manualInstructions = deepCopy(plan.manual_instructions || state.manualInstructions);
         state.reassignResponse = null;
         state.reassignMode = null;
@@ -1452,6 +1266,14 @@ export function createApp(root, api = createGateway()) {
         if (plan.status === "optimal" || plan.status === "feasible") await loadView("table");
       }), "primary", "solve-plan")
     ));
+    controls.append(advanced);
+    if (state.solving) {
+      const progress = element("div", "solve-progress");
+      progress.setAttribute("role","status");
+      progress.append(element("div","skeleton-block"),element("div","skeleton-block short"),
+        element("p","muted","Checking seating constraints in the solver…"));
+      controls.append(progress);
+    }
     area.append(controls);
     if (!state.plan) {
       area.append(element("div", "empty", "Import guests, configure the venue, add considerations, then optimize."));
@@ -1505,13 +1327,15 @@ export function createApp(root, api = createGateway()) {
       return preview;
     }
     function renderNotSeated() {
-      if (!plan.not_seated?.length) return null;
-      const panel = card("Operator-selected not seated", "Only explicitly recorded choices appear here.");
-      for (const group of plan.not_seated) {
+      const recorded = plan.unseated_reasons || [];
+      if (!recorded.length && !plan.not_seated?.length) return null;
+      const panel = card("Not seated");
+      for (const group of (recorded.length ? recorded : plan.not_seated)) {
         const instruction = state.manualInstructions.find(i =>
           i.group_id === group.group_id && i.action === "unseat");
         panel.append(row(
-          element("span", "", group.group_name + " · " + group.guest_ids.length + " people"),
+          element("span", "", group.group_name + " · " + group.guest_ids.length + " people" +
+            (group.reason ? " · " + (group.reason === "lack_of_space" ? "Shortage" : "Operator decision") : "")),
           instruction ? action("Restore", () => removeInstruction(instruction.id),
             "quiet small", "restore-" + group.group_id) : element("span", "", "")));
       }
@@ -1557,16 +1381,41 @@ export function createApp(root, api = createGateway()) {
           "secondary small", "confirm-unseat")));
       return panel;
     }
-    const status = card("Solution report", "Status: " + plan.status.toUpperCase() +
-      " · Score: " + (plan.total_score ?? "—") +
+    const status = card("Solution · " + plan.status.toUpperCase(), "Score: " + (plan.total_score ?? "—") +
       " · Solver: " + Number(plan.solve_seconds || 0).toFixed(2) + " s");
+    if (state.restoredAfterFailure) status.append(element("p", "problem warning",
+      "Showing the last successful plan; the latest solve failed and current inputs may differ."));
+    if (plan.score_breakdown?.length) {
+      // Score entries are plan-wide: do not misattribute them to individual assignments.
+      const breakdown = element("section", "score-breakdown");
+      breakdown.setAttribute("aria-label", "Plan score breakdown");
+      breakdown.append(element("h3", "", "Score breakdown"));
+      const entries = element("ul");
+      for (const entry of plan.score_breakdown) {
+        const name = ruleLabel(state.rules.find(rule => rule.id === entry.rule_id));
+        const points = Number(entry.points || 0);
+        entries.append(element("li", "", name + ": " + (points > 0 ? "+" : "") +
+          points + (Math.abs(points) === 1 ? " point" : " points")));
+      }
+      breakdown.append(entries); status.append(breakdown);
+    }
     if (plan.status === "infeasible" || plan.status === "unknown") {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
         status.append(element("h3", "", "Why no seating plan fits"));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
-          explanations.append(element("div", "problem", explainRuleRefs(explanation)));
+          const line = element("div","problem conflict-row");
+          line.append(element("span","",explainRuleRefs(explanation)));
+          const match = state.rules.find(rule => explanation.includes(rule.id) ||
+            (rule.name && explanation.includes(rule.name)));
+          if (match) {
+            const fix = action("Edit rule",()=>{
+              state.screen="rules";state.expandedRuleId=match.id;render();
+            },"secondary small");
+            fix.title="Edit "+match.name;line.append(fix);
+          }
+          explanations.append(line);
         }
         status.append(explanations);
       }
@@ -1579,7 +1428,8 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
-    status.append(element("p", "muted", "Every assignment and explanation below came from the server's plan object."));
+    status.classList.add("compact-status");
+    for (const warning of plan.validation_warnings || []) status.append(element("p", "problem warning", warning));
     area.append(status);
     const unseated = renderNotSeated();
     if (unseated) area.append(unseated);
@@ -1605,19 +1455,43 @@ export function createApp(root, api = createGateway()) {
       if (overflowPreview) area.append(overflowPreview);
       return area;
     }
-    const views = card("Plan views");
-    const tabs = element("div", "view-tabs"); tabs.setAttribute("role", "tablist");
-    VIEWS.forEach(([name,title]) => {
-      const b = action(title, () => { void loadView(name); }, "");
-      b.id = "view-" + name;
-      b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", state.view === name ? "true" : "false");
-      tabs.append(b);
-    });
-    views.append(tabs);
+    const views = card("Review seating");
+    const toolbar = element("div","plan-view-toolbar");
+    const review = element("div","review-cluster");
+    const tabs = element("div", "view-tabs segmented");tabs.setAttribute("role","tablist");
+    const listSelected=["table","people"].includes(state.view);
+    const listMode = iconAction("List","list",()=>loadView(state.reviewListMode || "table"),
+      "secondary small", "view-list",true);
+    listMode.setAttribute("role","tab");
+    listMode.setAttribute("aria-selected",String(listSelected));
+    const mapMode = iconAction("Map","map",()=>loadView("floor"),
+      "secondary small","view-floor",true);
+    mapMode.setAttribute("role","tab");
+    mapMode.setAttribute("aria-selected",String(state.view==="floor"));
+    tabs.append(listMode,mapMode);review.append(tabs);
+    if (listSelected) {
+      const format = element("div","list-modes");format.setAttribute("role","group");
+      format.setAttribute("aria-label","List grouping");
+      for (const [mode,title,icon] of [["table","Tables","tables"],["people","People","people"]]) {
+        const b=iconAction(title,icon,()=>loadView(mode),"quiet small","view-"+mode,true);
+        b.setAttribute("aria-selected",String(state.view===mode));format.append(b);
+      }
+      review.append(format);
+    }
+    const exports = element("fieldset","export-cluster");
+    exports.append(element("legend","","Exports"));
+    const printButton=iconAction("Print and PDF","printer",()=>loadView("print"),
+      "quiet small icon-button","view-print");
+    const exportButton=iconAction("Download plan JSON","download",()=>attempt(async()=>{
+      const result = await api.post("/v2/exports/json",state.plan);
+      downloadBlob(JSON.stringify(result,null,2),"seating-plan.json","application/json");
+    }),"quiet small icon-button","download-json");
+    exports.append(printButton,exportButton);
+    toolbar.append(review,exports);
+    views.append(toolbar);
     if (state.viewError) views.append(element("p", "problem", state.viewError));
     if (state.view === "print") {
-      views.append(element("p", "muted", "Print preview is separate from the interactive workspace. The server produces the exact printable pages below."));
+
       views.append(selectField("Document", [
         ["people", "People list"], ["people-floor", "People by floor"],
         ["groups", "Table list"], ["groups-table", "Per-table pages"],
@@ -1689,7 +1563,7 @@ export function createApp(root, api = createGateway()) {
             }, "primary", "print-preview-document"),
             action("Download PDF", () => attempt(async () => {
               const endpoint = state.printFormat === "floor"
-                ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+                ? "/v2/exports/floor-map/pdf" : tableCardsEndpoint();
               const blob = await api.post(endpoint, state.plan, "blob");
               downloadBlob(blob, state.printFormat === "floor" ? "floor-maps.pdf" : "table-cards.pdf",
                 "application/pdf");
@@ -1697,9 +1571,6 @@ export function createApp(root, api = createGateway()) {
           ));
         } else views.append(element("p", "muted", "Loading PDF preview…"));
       }
-    } else if (state.view === "json") {
-      views.append(element("h3", "", "Machine-readable plan"));
-      views.append(element("pre", "", state.viewContent ? JSON.stringify(state.viewContent, null, 2) : "Loading JSON plan…"));
     } else {
       views.append(renderPlanWorkspace(state, {
         partyName, partyMembers, refresh: render,
@@ -1709,8 +1580,7 @@ export function createApp(root, api = createGateway()) {
     area.append(views);
     const ruleDisplay = id => ruleLabel(state.rules.find(rule => rule.id === id), id);
     if ((plan.pattern_matches || []).length) {
-      const matches = card("Global pattern matches",
-        "Every matched table is listed, including empty tables with no guest-level explanation cards.");
+      const matches = card("Table patterns");
       (plan.pattern_matches || []).forEach(match => {
         matches.append(element("p", "reason", ruleDisplay(match.rule_id) + ": " + match.description +
           " (" + (match.points > 0 ? "+" : "") + match.points +
@@ -1718,8 +1588,7 @@ export function createApp(root, api = createGateway()) {
       });
       area.append(matches);
     }
-    const compromises = card("Compromises and empty chairs",
-      "Unmet soft considerations are listed with lost points. Hard rules cannot be traded away.");
+    const compromises = card("Compromises and empty chairs");
     if (!plan.compromises?.length) compromises.append(element("p", "muted", "No reported soft compromises."));
     else compromises.append(issuesList(plan.compromises.map(c => ({
       row: null, column: ruleDisplay(c.rule_id), severity: "warning",
@@ -1737,7 +1606,7 @@ export function createApp(root, api = createGateway()) {
       body.append(r);
     });
     table.append(body); tableWrap.append(table); compromises.append(tableWrap); area.append(compromises);
-    const reasons = card("Per-assignment explanations", "Plain-language reasons and point contributions reported by the engine.");
+    const reasons = card("Reasons by assignment");
     const list = element("div", "reasons");
     const partyTotals = new Map();
     (plan.assignments || []).forEach(a =>
@@ -1751,7 +1620,10 @@ export function createApp(root, api = createGateway()) {
         : String(a.guest_ids.length);
       part.append(element("h4", "", partyName(a) + " — " + sizeLabel + " → " + a.table_id),
         element("p", "muted", (people.length ? people.join(", ") + " · " : "") +
-          Number(a.points).toFixed(2) + (Math.abs(Number(a.points)) === 1 ? " point" : " points")));
+          (!Number(a.points || 0) && plan.score_breakdown?.length
+            ? "No assignment-specific score — see plan breakdown"
+            : Number(a.points || 0).toFixed(2) +
+              (Math.abs(Number(a.points || 0)) === 1 ? " point" : " points"))));
       const ul = document.createElement("ul");
       (a.reasons || []).forEach(r => ul.append(element("li", "",
         ruleDisplay(r.rule_id) + ": " + r.description +
@@ -1768,6 +1640,7 @@ export function createApp(root, api = createGateway()) {
     if (view === "floor" && state.view !== "floor" &&
         state.plan?.layout?.floors?.length)
       state.focusedFloor = state.plan.layout.floors[0].zone_id;
+    if (view === "table" || view === "people") state.reviewListMode=view;
     state.view = view;
     state.viewContent = null;
     state.viewError = "";
@@ -1785,14 +1658,14 @@ export function createApp(root, api = createGateway()) {
           listContentEndpoint = endpoint;
         } else {
           const density = state.cardsPerPage;
-          const endpoint = format === "floor" ? "/v1/exports/floor-map/pdf" : tableCardsEndpoint();
+          const endpoint = format === "floor" ? "/v2/exports/floor-map/pdf" : tableCardsEndpoint();
           const blob = await api.post(endpoint, state.plan, "blob");
           if (request !== viewRequest || (format === "cards" && density !== state.cardsPerPage)) return;
           if (typeof URL.createObjectURL !== "function") throw Error("PDF preview unavailable in this browser.");
           viewObjectUrl = URL.createObjectURL(blob);
         }
       } else if (view === "json") {
-        const json = await api.post("/v1/exports/json", state.plan);
+        const json = await api.post("/v2/exports/json", state.plan);
         if (request !== viewRequest) return;
         state.viewContent = json;
       }
@@ -1816,23 +1689,30 @@ export function createApp(root, api = createGateway()) {
 
   const ready = (async () => {
     try {
-      state.catalog = await api.get("/v1/rules/catalog");
-      if (state.catalog.shapes?.length &&
-          !state.catalog.shapes.some(shape => shape.shape === state.selectedShape))
-        state.selectedShape = state.catalog.shapes[0].shape;
+      state.catalog = await api.get("/v2/rules/catalog");
     } catch (error) {
       state.notice = friendlyApiError(error);
       state.error = true;
       state.retryAction = async () => {
-        state.catalog = await api.get("/v1/rules/catalog");
-        if (state.catalog.shapes?.length &&
-            !state.catalog.shapes.some(shape => shape.shape === state.selectedShape))
-          state.selectedShape = state.catalog.shapes[0].shape;
+        state.catalog = await api.get("/v2/rules/catalog");
         announce("Rule catalog loaded successfully.");
       };
     }
+    if (state.needsMigration) {
+      try {
+        const old = {version:1,name:"Restored venue",zones:state.zones,
+          tables:state.tables,layout:state.layout,rules:state.rules};
+        const migrated = await api.post("/v2/configurations/migrate",old);
+        state.rules = migrated.configuration.rules;
+        state.needsMigration = false; state.plan = null; state.viewContent = null;
+        state.notice = "Legacy rules migrated to v2. Review them before optimizing.";
+      } catch (error) {
+        state.error = true; state.notice = "Legacy session needs migration: " + friendlyApiError(error);
+        state.rules = [];
+      }
+    }
     render();
-    if (state.plan && state.catalog) await loadView(state.view);
+    if (state.plan && Array.isArray(state.catalog)) await loadView(state.view);
   })();
   render();
   return { state, ready, render, show: screen => { state.screen = screen; render(); },

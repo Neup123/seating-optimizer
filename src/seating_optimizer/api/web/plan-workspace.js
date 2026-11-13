@@ -1,6 +1,7 @@
 /* Interactive v2 working surfaces. All placement data comes from the solved API Plan. */
 import { assignmentMatchesSelection, selectedPlanAssignments, togglePlanSelection,
   partyTotals, portionLabel } from "./plan-selection.js";
+import { displayRuleName } from "./v2-rules.js";
 
 function el(tag, css = "", text) {
   const node = document.createElement(tag);
@@ -9,7 +10,11 @@ function el(tag, css = "", text) {
   return node;
 }
 function clicker(text, fn, css = "secondary small", id) {
-  const node = el("button", css, text);
+  const glyphs = {"Not here":"⊘","Move to":"↪","Move to…":"↪","Details":"ⓘ",
+    "Hide details":"ⓘ","Clear selection":"←","Remove direction":"⌫",
+    "Remove":"⌫","Focus table":"◎","Inspect selection":"ⓘ"};
+  const node = el("button", glyphs[text] ? css + " icon-button" : css, glyphs[text] || text);
+  node.title = text; node.setAttribute("aria-label",text);
   node.type = "button";
   if (id) node.id = id;
   node.addEventListener("click", fn);
@@ -17,9 +22,14 @@ function clicker(text, fn, css = "secondary small", id) {
 }
 function choice(label, options, current, fn, id) {
   const holder = el("label", "field");
-  holder.append(el("span", "", label));
+  if (label === "Floor" || label === "Sort") {
+    holder.classList.add("compact-filter");
+    holder.title = label === "Floor" ? "Filter by floor" : "Sort assignments";
+    holder.append(el("span", "", label === "Floor" ? "⚲" : "↕"));
+  } else holder.append(el("span", "", label));
   const select = el("select");
   select.id = id;
+  select.setAttribute("aria-label",label);
   for (const [value, text] of options) {
     const option = el("option", "", text);
     option.value = value; select.append(option);
@@ -96,8 +106,12 @@ export function renderPlanWorkspace(state, {
       const name = isPerson
         ? (chosen[0].guest_names || [])[chosen[0].guest_ids.indexOf(state.selectedPlanItem.id)] || "Person"
         : partyName(chosen[0]);
-      selection.append(el("strong", "", "Selected " + (isPerson ? "person: " : "party: ") + name),
-        el("span", "muted", " At " + [...new Set(chosen.map(a => a.table_id))].join(", ") + "."));
+      const touchedPeople = isPerson ? 1 : chosen.reduce((n,a)=>n+(a.guest_ids || []).length,0);
+      const touchedTables = new Set(chosen.map(a=>a.table_id)).size;
+      selection.append(el("strong", "", name),
+        el("span", "selection-footprint", touchedPeople + " " +
+          (touchedPeople===1?"person":"people") + " · " + touchedTables +
+          " " + (touchedTables===1?"table":"tables") + " affected"));
       const bar = el("div", "row");
       bar.append(clicker("Inspect selection", () => {
         state.expandedPartyKey = chosen[0].group_id + "@" + chosen[0].table_id;
@@ -290,24 +304,37 @@ export function renderPlanWorkspace(state, {
       ((a.guest_ids || []).length === 1 ? "person" : "people"))));
     const ruleIds = new Set((a.reasons || []).map(reason => reason.rule_id));
     const related = (state.rules || []).filter(rule => ruleIds.has(rule.id) ||
-      (rule.shape === "pin" && (rule.parameters?.target === a.group_id ||
-        (a.guest_ids || []).includes(rule.parameters?.target))));
+      (rule.mechanism === "locked_assignment" && (rule.target === a.group_id ||
+        (a.guest_ids || []).includes(rule.target))));
     const members = el("div", "plan-members");
     (a.guest_ids || []).forEach((id, index) => {
-      const member = clicker(people[index] || "Member " + (index + 1),
-        () => selectItem("person", id), "plan-person");
-      member.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "person" &&
-        state.selectedPlanItem.id === id));
+      const member = el("label","plan-person-check");
+      const check = el("input");check.type="checkbox";
+      check.checked=state.selectedPlanItem?.kind==="person" && state.selectedPlanItem.id===id;
+      check.setAttribute("aria-label","Select "+(people[index] || "Member "+(index+1)));
+      check.addEventListener("change",()=>selectItem("person",id));
+      member.append(check,el("span","",people[index] || "Member "+(index+1)));
       members.append(member);
     });
     details.append(members);
     details.append(el("h4", "", "Rules for this assignment"));
     if (related.length) {
       const rules = el("ul");
-      for (const rule of related) rules.append(el("li", "", (rule.shape || "Rule") +
-        " (" + rule.id + "; " + (rule.mode || "soft") + ")"));
+      for (const rule of related) rules.append(el("li", "", displayRuleName(rule)));
       details.append(rules);
-    } else details.append(el("p", "muted", "No matching rule records in the current editor."));
+    } else details.append(el("p", "muted", "No assignment-specific rule references returned."));
+    // Score breakdown is a property of the full plan, not of any single family.
+    if (plan.score_breakdown?.length) {
+      details.append(el("h4", "", "Plan-wide scoring (not attributed to this family)"));
+      const scored = el("ul");
+      for (const entry of plan.score_breakdown) {
+        const rule = (state.rules || []).find(item => item.id === entry.rule_id);
+        const points = Number(entry.points || 0);
+        scored.append(el("li", "", displayRuleName(rule) + ": " +
+          (points > 0 ? "+" : "") + points + " points"));
+      }
+      details.append(scored);
+    }
     details.append(el("h4", "", "Solver explanation"));
     if (!(a.reasons || []).length) details.append(el("p", "muted", "No individual explanation recorded."));
     else {
@@ -326,9 +353,12 @@ export function renderPlanWorkspace(state, {
     holder.dataset.tableId = a.table_id;
     if (assignmentMatchesSelection(a, state.selectedPlanItem)) holder.classList.add("is-selected");
     const line = el("div", "plan-entry-line");
-    const party = clicker(nameFor(a), () => selectItem("party", a.group_id), "plan-target");
-    party.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "party" &&
-      state.selectedPlanItem.id === a.group_id));
+    const party = el("label","plan-target plan-check");
+    const check = el("input");check.type="checkbox";
+    check.checked=state.selectedPlanItem?.kind==="party" && state.selectedPlanItem.id===a.group_id;
+    check.setAttribute("aria-label","Select "+partyName(a));
+    check.addEventListener("change",()=>selectItem("party",a.group_id));
+    party.append(check,el("span","",nameFor(a)));
     line.append(party, el("span", "muted", "Table " + a.table_id +
       " · " + (floorOf(plan, a) || "Unspecified floor")));
     line.append(clicker("Not here", () => chooseIntent(a, "not_here"),
@@ -346,10 +376,12 @@ export function renderPlanWorkspace(state, {
         const members = el("div", "plan-members");
         named.forEach((name, index) => {
           const id = a.guest_ids[index];
-          const b = clicker(name, () => selectItem("person", id), "plan-person");
-          b.setAttribute("aria-pressed", String(state.selectedPlanItem?.kind === "person" &&
-            state.selectedPlanItem.id === id));
-          members.append(b);
+          const choice = el("label","plan-person-check");
+          const box = el("input");box.type="checkbox";
+          box.checked=state.selectedPlanItem?.kind==="person" && state.selectedPlanItem.id===id;
+          box.setAttribute("aria-label","Select "+name);
+          box.addEventListener("change",()=>selectItem("person",id));
+          choice.append(box,el("span","",name));members.append(choice);
         });
         holder.append(members);
       }
