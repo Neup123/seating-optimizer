@@ -462,12 +462,18 @@ def validate_plan_lifecycle(plan: Plan) -> Plan:
     return type(plan).model_validate(plan.model_dump(mode="json"))
 
 
-def plan_capabilities(plan: Plan) -> dict[str, bool]:
-    """Shared, explicit semantics for API clients and exported plan views."""
+def status_capabilities(status: str) -> dict[str, bool]:
+    """One semantic contract for Python and API/browser consumers."""
+    if status not in PLAN_SOLVE_STATUSES:
+        raise ValueError(f"Unknown solve status: {status}")
     return {
-        "printable": plan.status in PLAN_PRINTABLE_STATUSES,
-        "reviewable": plan.status == "needs_review",
-        "retryable": plan.status in {"unknown", "infeasible", "needs_review"},
-        "complete": plan.status in PLAN_COMPLETE_STATUSES,
+        "printable": status in PLAN_PRINTABLE_STATUSES,
+        "reviewable": status == "needs_review",
+        "retryable": status in {"unknown", "infeasible", "needs_review"},
+        "complete": status in PLAN_COMPLETE_STATUSES,
     }
+
+
+def plan_capabilities(plan: Plan) -> dict[str, bool]:
+    return status_capabilities(plan.status)
 
