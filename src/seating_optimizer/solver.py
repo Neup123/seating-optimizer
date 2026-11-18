@@ -350,10 +350,9 @@ def _solve_core(problem: Problem) -> Plan:
         return party_name_for(gid, group_names[gid], [guest.name for guest in members])
 
     tables = problem.tables
-    # The only exception to atomic groups is a lone group that fits no
-    # table. A together-linked group is still handled by the existing
-    # atomic linked-cluster model; its behaviour is unchanged.
-    maximum_table = max(table.capacity for table in tables)
+    # Eligibility is relative to each party's HARD-ADMISSIBLE tables, not
+    # the single largest table in an unrelated/forbidden floor (issue #56).
+    # Reuse the same candidate set for connected-capacity diagnostics.
     linked = {
         lookup[target] for rule in problem.rules
         if rule.shape == "pair" and rule.parameters["relation"] == "together"
@@ -362,37 +361,38 @@ def _solve_core(problem: Problem) -> Plan:
     explicit_split = set(problem.splittable_groups) | {
         i.group_id for i in problem.manual_instructions if i.allow_split
     }
-    # Explicitly authorized splits may use separate free blocks. Legacy
-    # oversized-party fallback still requires adjacent drawings.
-    adjacent_split = {
-        gid for gid, members in groups.items()
-        if len(members) > maximum_table and gid not in linked and gid not in explicit_split
-    }
-    split_groups = adjacent_split | explicit_split
-    neighbours = neighbouring_tables(problem.layout, tables)
-    for gid in sorted(adjacent_split):
-        # Prune forbidden drawings BEFORE testing connected capacity. A route
-        # through a forbidden or unoccupied intermediary does not qualify.
-        admissible = set(range(len(tables)))
-        blockers = []
+    admissible_by_group, blockers_by_group = {}, {}
+    for gid, members in groups.items():
+        admissible, blockers = set(range(len(tables))), []
         for rule in problem.rules:
-            p = rule.parameters
             if rule.mode != "hard":
                 continue
-            if rule.shape == "zone_restriction" and any(
-                    _matched(guest, rule) for guest in groups[gid]):
+            p = rule.parameters
+            if rule.shape == "zone_restriction" and any(_matched(guest, rule) for guest in members):
                 admissible &= {j for j, table in enumerate(tables)
                                if table.zone_id in _allowed_zones(rule)}
                 blockers.append(rule.id)
-            elif rule.shape == "table_property_need" and any(
-                    _matched(guest, rule) for guest in groups[gid]):
+            elif rule.shape == "table_property_need" and any(_matched(guest, rule) for guest in members):
                 admissible &= {j for j, table in enumerate(tables)
                                if _has_table_property(table, p["property"])}
                 blockers.append(rule.id)
             elif rule.shape == "pin" and lookup[p["target"]] == gid:
-                admissible &= {j for j, table in enumerate(tables)
-                               if table.id == p["table"]}
+                admissible &= {j for j, table in enumerate(tables) if table.id == p["table"]}
                 blockers.append(rule.id)
+        admissible_by_group[gid] = admissible
+        blockers_by_group[gid] = blockers
+    # Explicit operator-authorized splits may use separate free blocks. The
+    # automatic exception requires connected drawings on one permitted floor.
+    adjacent_split = {
+        gid for gid, members in groups.items()
+        if gid not in linked and gid not in explicit_split and
+        len(members) > max((tables[j].capacity for j in admissible_by_group[gid]), default=0)
+    }
+    split_groups = adjacent_split | explicit_split
+    neighbours = neighbouring_tables(problem.layout, tables)
+    for gid in sorted(adjacent_split):
+        admissible = admissible_by_group[gid]
+        blockers = blockers_by_group[gid]
         reachable = {j: neighbours[j] & admissible for j in admissible}
         if largest_connected_capacity(reachable, tables) < len(groups[gid]):
             detail = (f" Hard rules limiting usable tables: {', '.join(blockers)}."
