@@ -744,7 +744,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = [j for j, table in enumerate(tables) if table.small_group_priority]
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 if gid in split_groups:
                     preferred = model.NewBoolVar(f"small-priority:{rule.id}:{gid}")
@@ -906,7 +906,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 matched = sorted(group_tables[gid] & priority_tables)
                 if matched:
@@ -947,7 +947,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 matched = sorted(group_tables[gid] & priority_tables)
                 if matched:
