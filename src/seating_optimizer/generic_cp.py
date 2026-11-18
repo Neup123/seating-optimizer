@@ -430,24 +430,35 @@ def _pair_relation(rule, b):
 
 def _placement_by_criterion(rule, b):
     matches = b.matching(rule.criterion)
+    allowed = set(rule.zones)
+    if rule.mode == "hard":
+        # A need of ONE family member restricts every portion of the family,
+        # including auto-split members (atomic parties previously got this
+        # propagation only implicitly through their shared x variable).
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if table.zone_id not in allowed:
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if table.zone_id in set(rule.zones):
-                if rule.mode == "soft":
-                    b.terms.append(rule.weight * b.guest_at[guest.id, j])
-            elif rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
+            if table.zone_id in allowed:
+                b.terms.append(rule.weight * b.guest_at[guest.id, j])
 
 
 def _property_need(rule, b):
     matches = b.matching(rule.criterion)
+    if rule.mode == "hard":
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if not b.has_property(table, rule.property):
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if b.has_property(table, rule.property):
-                continue
-            if rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
-            else:
+            if not b.has_property(table, rule.property):
                 b.terms.append(-rule.weight * b.guest_at[guest.id, j])
 
 
