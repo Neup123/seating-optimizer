@@ -24,7 +24,7 @@ from seating_optimizer.generic_rules import mechanism_catalog
 from seating_optimizer.generic_solver import (GenericProblem, GenericPlan, GenericVenueConfiguration, solve_generic)
 from seating_optimizer.rule_migration import migrate_configuration
 from seating_optimizer.reassignment import ReassignRequest, ReassignResponse, propose_reassignment
-from seating_optimizer.models import ManualInstruction, Model
+from seating_optimizer.models import ManualInstruction, Model, PLAN_SOLVE_STATUSES, status_capabilities
 from seating_optimizer.reassignment import Movement
 
 
@@ -109,6 +109,11 @@ def create_app() -> FastAPI:
     def get_generic_rule_catalog() -> list[dict]:
         """Derive v2 catalog from the generic mechanism registry."""
         return mechanism_catalog()
+
+    @app.get("/v2/plan/status-capabilities")
+    def get_plan_status_capabilities() -> dict[str, dict[str, bool]]:
+        """Expose the exact Python lifecycle policy to browser/API consumers."""
+        return {status: status_capabilities(status) for status in sorted(PLAN_SOLVE_STATUSES)}
 
     @app.post("/v2/configurations/migrate")
     def migrate_v1_configuration(configuration: VenueConfiguration) -> dict:
