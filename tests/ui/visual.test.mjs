@@ -333,7 +333,8 @@ test("v2 plan infeasible state names operator rule and offers edit link",async()
   app.state.plan={...plan,status:"infeasible",message:"No valid layout",conflicting_constraints:["rule:rule-1 violated"]};
   app.show("plan");
   assert.match($(".conflict-row").textContent,/Seniors only downstairs/);
-  assert.doesNotMatch($(".conflict-row").textContent,/rule-1/);
+  assert.doesNotMatch($(".conflict-row > span").textContent,/rule-1/);
+  assert.match($(".rule-diagnostics").textContent,/rule:rule-1/);
   click($(".conflict-row button"));
   assert.equal(app.state.screen,"rules");
   assert.ok($(".rule-accordion-body"));
