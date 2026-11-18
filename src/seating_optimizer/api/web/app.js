@@ -20,6 +20,34 @@ function storedJSON(key, fallback) {
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
 
+/** Scan a predictable row-first grid, checking actual table bounds, not table count.
+ * A conservative gap makes each new table independently visible and selectable.
+ * Existing manually moved drawings remain the source of geometry truth.
+ */
+export function nextFreeTablePosition(floor, width, height, gap = 8) {
+  const maxX = Math.floor(floor.width - width);
+  const maxY = Math.floor(floor.height - height);
+  if (maxX < 0 || maxY < 0 || !Number.isFinite(maxX + maxY)) return null;
+  const axis = max => {
+    const values = [];
+    for (let n = Math.min(gap, max); n <= max; n += gap) values.push(n);
+    if (!values.includes(max)) values.push(max);
+    if (!values.includes(0)) values.push(0);
+    return values;
+  };
+  const overlaps = (x, y, other) => {
+    const ox = Number(other.x), oy = Number(other.y);
+    const ow = Number(other.width), oh = Number(other.height);
+    return x < ox + ow + gap && x + width + gap > ox &&
+      y < oy + oh + gap && y + height + gap > oy;
+  };
+  for (const y of axis(maxY)) for (const x of axis(maxX)) {
+    if (!(floor.tables || []).some(other => overlaps(x, y, other))) return { x, y };
+  }
+  return null;
+}
+
+
 function partyName(assignment) {
   const names = assignment.guest_names || [];
   const proposed = assignment.group_name?.trim();
@@ -960,9 +988,9 @@ export function createApp(root, api = createGateway()) {
       if (!Number.isInteger(capacity) || capacity < 1) return announce("Chair capacity must be a positive integer.", true);
       const width = Math.min(160, layout.width / 2);
       const height = shape === "circle" ? width : Math.min(125, layout.height / 2);
-      const x = 8 + (layout.tables.length % 3) * 14;
-      const y = 8 + (layout.tables.length % 3) * 14;
-      if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
+      const place = nextFreeTablePosition(layout, width, height);
+      if (!place) return announce("No non-overlapping space for this table. Move or resize an existing table, or enlarge the floor.", true);
+      const { x, y } = place;
       const small_group_priority = priorityInput.checked;
       state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
       layout.tables.push({ table_id: id, x, y, width, height, shape,
