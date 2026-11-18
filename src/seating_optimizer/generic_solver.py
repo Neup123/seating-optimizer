@@ -15,6 +15,7 @@ from pydantic import Field
 
 from .display import counted, distinct_party_name, party_name_for
 from .generic_cp import Build, add_rule, group_id, resolve_tiers
+from .chairs import chair_count, chair_weight
 from .generic_evaluator import score_fixed_plan
 from .generic_rules import (
     Criterion, GenericRule, criterion_field_state, match_family,
@@ -321,7 +322,7 @@ def _core(problem):
                  for rule_id, value in by_rule.items()]
     usage = []
     for table in builder.tables:
-        occupied = sum(mapping[g.id] == table.id for g in problem.guests)
+        occupied = sum(chair_weight(g) for g in problem.guests if mapping[g.id] == table.id)
         usage.append(TableUsage(table_id=table.id, zone_id=table.zone_id,
                                 capacity=table.capacity, occupied=occupied,
                                 empty_seats=table.capacity-occupied))
