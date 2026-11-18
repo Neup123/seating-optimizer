@@ -39,33 +39,35 @@ def split_clan() -> Plan:
 
 def test_split_clan_human_surfaces_show_one_label_per_table_and_json_remains_lossless():
     plan = split_clan()
+    imported_id = plan.assignments[0].group_id
+    assert imported_id.startswith("registration:stable:")
     table_text = render(plan, "table")
     assert table_text.count("Huge Clan — 6/12") == 2
-    assert "registration:2" not in table_text
+    assert imported_id not in table_text
     assert "(7/12)" not in table_text
     assert "Group Huge Clan split across adjacent tables A, B" in table_text
-    assert all(a.group_id == "registration:2" and a.group_name == "Huge Clan"
+    assert all(a.group_id == imported_id and a.group_name == "Huge Clan"
                for a in plan.assignments)
     people = render_people_list_html(plan)
     table_html = render_table_list_html(plan)
     for html in (people, table_html):
         assert html.count("Huge Clan — 6/12") == 2
         assert "Huge Clan (1/12)" not in html
-        assert ">registration:2<" not in html
+        assert ">" + imported_id + "<" not in html
     root = ElementTree.fromstring(people)
     assert len(root.findall('.//tr[@data-group-id]')) == 2
     assert not root.findall('.//tr[@data-guest-id]')
     assert len(ElementTree.fromstring(table_html).findall('.//tr[@data-group-id]')) == 2
     for page in render_floor_svg(plan).pages:
         assert page.svg.count("Huge Clan — 6/12") == 2
-        assert "registration:2" not in page.svg.replace('data-group-id="registration:2"', "")
+        assert imported_id not in page.svg.replace('data-group-id="' + imported_id + '"', "")
     cards = PdfReader(BytesIO(render_table_cards_pdf(plan)))
     card_text = "\n".join(page.extract_text() for page in cards.pages)
     assert card_text.count("Huge Clan — 6/12") == 2
-    assert "registration:2" not in card_text
+    assert imported_id not in card_text
     assert "(7/12)" not in card_text
     json_text = render(plan, "json")
-    assert '"group_id": "registration:2"' in json_text
+    assert '"group_id": "' + imported_id + '"' in json_text
     assert '"group_name": "Huge Clan"' in json_text
     assert all(f"Huge Clan ({index}/12)" in json_text for index in range(1, 13))
 
