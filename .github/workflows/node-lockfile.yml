@@ -1,0 +1,35 @@
+name: Generate Node lockfile once
+on:
+  push:
+    branches: [chore/98-lock-javascript-dependencies]
+permissions:
+  contents: write
+concurrency:
+  group: generate-seating-node-lockfile
+  cancel-in-progress: true
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Generate deterministic package-lock.json
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Verify locked installation
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test:ui
+      - name: Commit verified dependency lock
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build: lock Playwright and jsdom versions (#98)"
+            git push origin HEAD:chore/98-lock-javascript-dependencies
+          fi
