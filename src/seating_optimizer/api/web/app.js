@@ -1042,7 +1042,8 @@ export function createApp(root, api = createGateway()) {
             '[id="table-' + drawing.table_id + '-properties"]').value);
         } catch (error) { return invalid(error.message); }
         const shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        const proposedDrawing = {...drawing,...next,shape,properties:[...properties],
+        const {capacity: _tableCapacity, ...drawingFields}=next;
+        const proposedDrawing = {...drawing,...drawingFields,shape,properties:[...properties],
           small_group_priority:priorityInput.checked};
         const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
           small_group_priority:priorityInput.checked};
