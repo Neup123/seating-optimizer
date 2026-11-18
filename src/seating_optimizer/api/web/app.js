@@ -1028,15 +1028,19 @@ export function createApp(root, api = createGateway()) {
           const val = editor.querySelector('[id="table-' + drawing.table_id + "-" + key + '"]').value;
           next[key] = Number(val);
         }
+        const invalid = message => {
+          indicator.textContent="Not saved — "+message;
+          indicator.classList.add("unsaved");
+        };
         if (["x","y","width","height"].some(k => !Number.isFinite(next[k])))
-          return announce("Table drawing coordinates must be finite numbers.", true);
+          return invalid("Table drawing coordinates must be finite numbers.");
         if (!Number.isInteger(next.capacity) || next.capacity < 1)
-          return announce("Chair capacity must be a positive integer.", true);
+          return invalid("Chair capacity must be a positive integer.");
         let properties;
         try {
           properties = parseTableProperties(editor.querySelector(
             '[id="table-' + drawing.table_id + '-properties"]').value);
-        } catch (error) { return announce(error.message, true); }
+        } catch (error) { return invalid(error.message); }
         const shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
         const proposedDrawing = {...drawing,...next,shape,properties:[...properties],
           small_group_priority:priorityInput.checked};
@@ -1115,6 +1119,7 @@ export function createApp(root, api = createGateway()) {
         event.preventDefault();
         drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
         drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        delete state.validatedTables[drawing.table_id];
         invalidate();render();
         const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
         active?.focus();
@@ -1138,6 +1143,7 @@ export function createApp(root, api = createGateway()) {
         function stop() {
           document.removeEventListener("pointermove", move);
           document.removeEventListener("pointerup", stop);
+          delete state.validatedTables[drawing.table_id];
           invalidate(); render();
         }
         document.addEventListener("pointermove", move);
