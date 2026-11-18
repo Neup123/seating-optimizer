@@ -2,6 +2,9 @@ name: Capture verified README screenshots
 on:
   push:
     branches: [docs/97-ui-screenshots]
+concurrency:
+  group: readme-screenshots
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
