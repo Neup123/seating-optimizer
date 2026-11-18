@@ -312,6 +312,7 @@ def _core(problem):
             assignments.append(Assignment(
                 group_id=gid, group_name=names[gid], table_id=table.id,
                 guest_ids=[g.id for g in portion], guest_names=[g.name for g in portion],
+                guest_chair_requirements=[g.requires_chair for g in portion],
                 guest_attributes=[g.attributes for g in portion],
                 reasons=[Reason(rule_id=f"capacity:{table.id}",
                                 description=f"Within {table.capacity}-chair structural capacity.")],
