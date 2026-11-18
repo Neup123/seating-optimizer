@@ -974,6 +974,10 @@ components:
         table_id: {type: string}
         guest_ids: {type: array, items: {type: string}}
         guest_names: {type: array, items: {type: string}}
+        guest_chair_requirements:
+          type: array
+          description: Aligns with guest_ids; false marks a lap infant who is present without occupying a chair.
+          items: {type: boolean}
         guest_attributes:
           description: Imported attributes aligned with guest_ids and guest_names.
           type: array
