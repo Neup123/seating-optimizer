@@ -45,3 +45,28 @@ def optimize_with_split_priority(model, scoring_terms, split_occupancy, config,
     solver = create_solver(remaining)
     status = solver.Solve(model)
     return solver, status, priority_proven, perf_counter() - start
+
+
+def split_mixing_terms(model, split_groups, all_groups, tables_count, x, tag):
+    """Per split family/table, count OTHER parties sharing that table.
+
+    A party occupying only one table is not a split and incurs zero mixing
+    penalty, even if it was permitted to split. Each pair is assessed from
+    the point of view of the splittable party, with no hard-coded weight.
+    """
+    contributions=[]
+    for gid in sorted(split_groups):
+        used_count=sum(x[gid,j] for j in range(tables_count))
+        actually_split=model.NewBoolVar(f"mix:{tag}:{gid}:split")
+        model.Add(used_count>=2).OnlyEnforceIf(actually_split)
+        model.Add(used_count<=1).OnlyEnforceIf(actually_split.Not())
+        for j in range(tables_count):
+            active=model.NewBoolVar(f"mix:{tag}:{gid}:table:{j}")
+            model.AddBoolAnd([actually_split,x[gid,j]]).OnlyEnforceIf(active)
+            model.AddBoolOr([actually_split.Not(),x[gid,j].Not(),active])
+            others=sum(x[other,j] for other in all_groups if other!=gid)
+            mixed=model.NewIntVar(0,len(all_groups)-1,f"mix:{tag}:{gid}:{j}:others")
+            model.Add(mixed==others).OnlyEnforceIf(active)
+            model.Add(mixed==0).OnlyEnforceIf(active.Not())
+            contributions.append(mixed)
+    return contributions
