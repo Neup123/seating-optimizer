@@ -13,6 +13,7 @@ from pydantic import Field
 
 from .models import ManualInstruction, Model, Plan, Problem
 from .solver import solve, _group_id, _prepare, _active_problem, _solve_core
+from .chairs import chair_count, chair_weight
 
 
 class ReassignRequest(Model):
@@ -127,12 +128,15 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
         raise ValueError(f"Unknown table {instruction.place_id}")
     if instruction.place_type in {"floor", "zone"} and instruction.place_id not in {z.id for z in problem.zones}:
         raise ValueError(f"Unknown floor/zone {instruction.place_id}")
+    weights = {guest.id: chair_weight(guest) for guest in problem.guests}
+    def chairs_for(guest_ids):
+        return sum(weights[guest_id] for guest_id in guest_ids)
     ids = members[instruction.group_id]
     occupied = defaultdict(int)
     at_table: dict[str, list[str]] = defaultdict(list)
     for group, guest_ids in members.items():
         for guest_id in guest_ids:
-            occupied[previous[guest_id]] += 1
+            occupied[previous[guest_id]] += weights[guest_id]
         home = {previous[guest_id] for guest_id in guest_ids}
         if len(home) == 1:
             at_table[next(iter(home))].append(group)
@@ -180,8 +184,8 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
             if not any(layout[guest_id] == instruction.place_id for guest_id in ids):
                 return
         capacity = defaultdict(int)
-        for table_id in layout.values():
-            capacity[table_id] += 1
+        for guest_id, table_id in layout.items():
+            capacity[table_id] += weights[guest_id]
         if any(count > tables[table_id].capacity for table_id, count in capacity.items()):
             return
         attempts += 1
@@ -217,7 +221,7 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
             break
         free = tables[target].capacity - occupied[target]
         original_free = tables[source].capacity - occupied[source]
-        size = len(ids)
+        size = chairs_for(ids)
         if free >= size:
             check(replace((instruction.group_id, target)), "free-space",
                   f"Free seats: {_name(plan, instruction.group_id)} to {target}")
@@ -225,7 +229,7 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
         for other in at_table[target]:
             if other == instruction.group_id:
                 continue
-            other_size = len(members[other])
+            other_size = chairs_for(members[other])
             if free + other_size >= size and original_free + size >= other_size:
                 check(replace((instruction.group_id, target), (other, source)), "one-to-one",
                       f"Swap with {_name(plan, other)} at {target}")
@@ -233,7 +237,7 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
         others = [g for g in at_table[target] if g != instruction.group_id]
         for count in range(2, min(4, len(others)) + 1):
             for displaced in combinations(others, count):
-                displaced_size = sum(len(members[g]) for g in displaced)
+                displaced_size = sum(chairs_for(members[g]) for g in displaced)
                 if free + displaced_size >= size and original_free + size >= displaced_size:
                     check(replace((instruction.group_id, target),
                                   *((group, source) for group in displaced)),
@@ -246,10 +250,10 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
             for extra in at_table[source]:
                 if extra == instruction.group_id:
                     continue
-                remaining = tables[target].capacity - occupied[target] + len(members[other])
-                extra_size = len(members[extra])
+                remaining = tables[target].capacity - occupied[target] + chairs_for(members[other])
+                extra_size = chairs_for(members[extra])
                 if remaining >= size + extra_size and (
-                    original_free + size + extra_size >= len(members[other])
+                    original_free + size + extra_size >= chairs_for(members[other])
                 ):
                     check(replace((instruction.group_id, target), (other, source),
                                   (extra, target)), "reverse-many-for-one",
@@ -261,13 +265,13 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
                 if third_table in {source, target}:
                     continue
                 for third in third_groups:
-                    if (free + len(members[other]) >= size and
-                        tables[third_table].capacity - occupied[third_table] + len(members[third]) >= len(members[other]) and
-                        original_free + size >= len(members[third])):
+                    if (free + chairs_for(members[other]) >= size and
+                        tables[third_table].capacity - occupied[third_table] + chairs_for(members[third]) >= chairs_for(members[other]) and
+                        original_free + size >= chairs_for(members[third])):
                         check(replace((instruction.group_id, target),
                                       (other, third_table), (third, source)), "chain",
                               f"Chain via {target} and {third_table}")
-        if instruction.allow_split and size > 1:
+        if instruction.allow_split and len(ids) > 1:
             # The user explicitly opted into splitting this party. Fill the
             # target first and distribute the remainder over other free blocks.
             # Splits are described using the exact per-table counts.
@@ -286,12 +290,16 @@ def propose_reassignment(request: ReassignRequest) -> ReassignResponse:
                 room = {t: tables[t].capacity - occupied[t] for t in tables}
                 permitted = [target] + list(order)
                 index = 0
+                # Place adults first; a lap infant may accompany an assigned
+                # guardian even when the destination has zero unused chairs.
+                sequence = sorted(ids, key=lambda guest_id: -weights[guest_id])
                 for t in permitted:
-                    while room[t] > 0 and index < size:
-                        candidate[ids[index]] = t
+                    while index < len(sequence) and room[t] >= weights[sequence[index]]:
+                        guest_id=sequence[index]
+                        candidate[guest_id] = t
+                        room[t] -= weights[guest_id]
                         index += 1
-                        room[t] -= 1
-                if index == size and len({candidate[g] for g in ids}) > 1:
+                if index == len(sequence) and len({candidate[g] for g in ids}) > 1:
                     check(candidate, "split", "Split placement: " +
                           _describe_split(problem, candidate, instruction.group_id))
 
@@ -353,6 +361,9 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     groups, lookup = _prepare(problem)
     selected = intent.group_id
     ids = [g.id for g in groups[selected]]
+    weights = {guest.id: chair_weight(guest) for guest in problem.guests}
+    def chairs_for(guest_ids):
+        return sum(weights[guest_id] for guest_id in guest_ids)
     previous = {}
     for assignment in plan.assignments:
         for guest_id in assignment.guest_ids:
@@ -376,7 +387,7 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     for guest_id, table_id in previous.items():
         if table_id not in tables:
             raise ValueError("Review plan references a missing table")
-        occupied[table_id] += 1
+        occupied[table_id] += weights[guest_id]
     for gid, members in groups.items():
         seats = {previous[g.id] for g in members if g.id in previous}
         if len(seats) == 1 and all(g.id in previous for g in members):
@@ -407,10 +418,10 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
             return
         signatures.add(signature)
         capacity = defaultdict(int)
-        for table_id in layout.values():
+        for guest_id, table_id in layout.items():
             if table_id not in tables:
                 return
-            capacity[table_id] += 1
+            capacity[table_id] += weights[guest_id]
         if any(value > tables[t].capacity for t, value in capacity.items()):
             return
         attempts += 1
@@ -451,7 +462,7 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
     for target in tables:
         if checked_candidates >= max_candidates:
             break
-        if free[target] >= len(ids):
+        if free[target] >= chairs_for(ids):
             check({**previous, **{g: target for g in ids}},
                   "free-space", f"Seat at table {target} without moving others")
 
@@ -463,7 +474,7 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
         for other in at_table[target]:
             other_ids = [g.id for g in groups[other]]
             for destination in tables:
-                if destination == target or free[destination] < len(other_ids):
+                if destination == target or free[destination] < chairs_for(other_ids):
                     continue
                 layout = {**previous, **{g: target for g in ids},
                           **{g: destination for g in other_ids}}
@@ -499,13 +510,13 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
                         return
                     _, members = relocating[i]
                     for destination in blocks:
-                        if blocks[destination] < len(members):
+                        if blocks[destination] < chairs_for(members):
                             continue
-                        blocks[destination] -= len(members)
+                        blocks[destination] -= chairs_for(members)
                         assignments.append(destination)
                         pack(i + 1)
                         assignments.pop()
-                        blocks[destination] += len(members)
+                        blocks[destination] += chairs_for(members)
                         if len(options) >= max_options - 1:
                             return
                 pack(0)
@@ -527,8 +538,8 @@ def _propose_pending(request: ReassignRequest) -> ReassignResponse:
                     for destination in tables:
                         if destination in {target, middle}:
                             continue
-                        if free[destination] < len(third_ids) or (
-                                free[middle] + len(third_ids) < len(other_ids)):
+                        if free[destination] < chairs_for(third_ids) or (
+                                free[middle] + chairs_for(third_ids) < chairs_for(other_ids)):
                             continue
                         layout = {
                             **previous, **{g: target for g in ids},
