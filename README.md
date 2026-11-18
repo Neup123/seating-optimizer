@@ -56,11 +56,11 @@ The docs are served at http://127.0.0.1:8000/docs, using **Scalar** (not Swagger
 
 Every meal sitting has its own Problem and session_id; zones and tables can be reused. Every table has its own chair capacity, enforced as a hard ceiling. Groups are atomic by default. Only a lone group larger than every single table may split across a connected set of adjacent table drawings on one floor; all other groups remain unsplit.
 
-Possible statuses are optimal, feasible, infeasible and unknown. Infeasible plans report a sufficient (not necessarily minimal) named conflicting-constraint set. Unknown means the solve timed out without a feasible plan, **not** proven infeasibility. Configurable SolverConfig fields: time_limit_seconds (default 5), workers (default 8) and random_seed.
+The v1 solver uses optimal, feasible, infeasible and unknown. The staged solver can additionally return needs_review when operator placement decisions remain outstanding. Infeasible plans report a sufficient (not necessarily minimal) named conflicting-constraint set. Unknown means the solve timed out without a feasible plan, **not** proven infeasibility. Configurable SolverConfig fields: time_limit_seconds (default 5), workers (default 8) and random_seed.
 
 ## Operator-defined rule records
 
-Rules always contain an id, shape, mode (hard or soft), parameters, and a positive integer weight **only for soft** rules. No scoring weights are hardcoded. Attributes are user-defined data keys and scalar values; new kinds require no code changes.
+In the legacy v1 interface, rule records contain an id, shape, mode (including hard, soft, mark and staged), parameters, optional operator-facing name and description, and an enabled switch. Soft scoring rules use a positive weight; disabling a rule preserves its configuration without applying it. The current browser editor uses the v2 generic mechanism registry rather than the legacy shape picker. No scoring weights are hardcoded. Attributes are user-defined data keys and scalar values; new kinds require no code changes.
 
 | Shape | Parameters | Interpretation |
 | --- | --- | --- |
@@ -175,10 +175,10 @@ The no-build, English-language browser interface ships with the FastAPI applicat
 
 1. **Guest import:** choose CSV/XLSX. The browser sends the file to POST /v1/import/preview and shows every source column, automatically detected mapping and sample values. Correct header-to-field mapping manually, including free-form attribute fields. POST /v1/import performs the actual import and returns every validation issue. Imports containing errors are blocked in the UI, not silently merged or discarded.
 2. **Venue map editor:** create floors and numbered tables with independent chair counts; position rectangles, ellipses or circles by dragging or entering exact coordinates. Import structured JSON or annotated SVG files through POST /v1/layouts/import. Validate the edited layout through that same endpoint and export the JSON geometry to reuse in code or future edits.
-3. **Rule editor:** GET /v1/rules/catalog supplies metadata for **all six** rule shapes, their parameter fields and HARD/soft modes. Add, update, or remove rule records, supply positive weights for soft rules, and provide group/guest/table/zone references. The browser does not compute scores or evaluate rules.
-4. **Solve and review:** the client sends a Problem with current guests, table capacities, layout, rules and time limit to POST /v1/solve. View the server's status, rule-by-rule reasons, compromise report and table utilization. Switch between the classic table export, SVG floor maps, printable PDF table cards and complete JSON plan. Download vector floor-map PDF or table-card PDF. Every plan view comes from the API, including the /v1/exports/table, /v1/exports/floor-map/svg, /v1/exports/floor-map/pdf, /v1/exports/table-cards/pdf and /v1/exports/json endpoints.
+3. **Rule editor:** the current browser loads the generic engine/mechanism registry from GET /v2/rules/catalog. Select an engine and mechanism before adding a rule; edit its name, enabled state, effect, weight and criterion fields as appropriate. Legacy v1 rule shapes remain available through GET /v1/rules/catalog, but they are not the active browser rule creation model. The browser does not independently compute solver scores.
+4. **Solve and review:** the current client sends a complete generic problem to POST /v2/solve. A v1 solve endpoint remains available for legacy consumers. View the server's status, rule-by-rule reasons, compromise report and table utilization. Switch between the classic table export, SVG floor maps, printable PDF table cards and complete JSON plan. Download vector floor-map PDF or table-card PDF. Every plan view comes from the API, including the /v1/exports/table, /v1/exports/floor-map/svg, /v1/exports/floor-map/pdf, /v1/exports/table-cards/pdf and /v1/exports/json endpoints.
 
-The UI does not manage registration systems, payments, messaging, CRM, or persistent accounts. The active draft lives in the current browser session; preserve the source spreadsheets, rules and layouts outside the UI. Reloading the page resets the in-memory form state. This is a browser client over stateless APIs, not a separate backend.
+The UI does not manage registration systems, payments, messaging, CRM, or user accounts. It **does persist the active planning session and saved templates in browser localStorage** (keys `seating-optimizer:session:v2` and `seating-optimizer:templates:v2`), which may contain names, guest attributes, file content and plans. Reloading usually restores the session rather than clearing it. This is local browser persistence over stateless APIs, not an authenticated shared database. Export important input/configurations separately; avoid shared browsers with real guest data and clear site data when appropriate. A formal retention policy is still open in #85.
 
 ### API additions
 
@@ -229,12 +229,8 @@ These formats are stateless views of the solved `Plan` supplied to the API. Impo
 
 In **Venue map**, check **Priority for couples and singles (soft)** when adding
 or editing a table. The setting is a first-class Boolean on each `Table`
-(`small_group_priority`, default `false`), not a passive property tag. It earns
-**one additional score point per group of one or two guests assigned to a marked
-table**. Points add to all other soft rule scores, including weighted fill
-efficiency; hard constraints are never weakened. Larger groups may still occupy
-marked tables. The score breakdown reports `venue:small-group-priority`, and
-unmet preferences appear among compromises. The flag is mirrored in each
+(`small_group_priority`, default `false`), not a passive property tag. This table flag is metadata; **it only affects the optimizer when the matching small-group-priority rule instance is active**. In the legacy v1 scoring model, the active rule contributes one additional point per qualifying group of one or two assigned to a marked table; hard constraints remain binding. Larger groups may still occupy
+marked tables. With the rule enabled, the legacy score breakdown reports `venue:small-group-priority`, and unmet preferences may appear among compromises. The flag is mirrored in each
 table drawing so layout JSON and annotated SVG drafts can carry it, as do full
 configuration JSON files and saved templates. Legacy layouts default to off.
 
