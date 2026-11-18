@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from ortools.sat.python import cp_model
 
+from .objective_priority import split_mixing_terms
 from .adjacency import neighbouring_tables
 from .generic_rules import Criterion, GenericRule, compare_value, guest_value, match_family, match_guest
 from .pattern_rules import add_comparison
@@ -273,6 +274,11 @@ def _split_term(rule, b):
         b.terms.append(-rule.weight * (sum(b.x[gid, j] for j in range(b.n)) - 1))
 
 
+def _split_mixing_term(rule, b):
+    for mixed in split_mixing_terms(b.model,b.split,b.ids,b.n,b.x,rule.id):
+        b.terms.append(-rule.weight*mixed)
+
+
 def _holes_term(rule, b):
     for j, table in enumerate(b.tables):
         used = b.model.NewBoolVar(f"v2:used:{rule.id}:{j}")
@@ -477,6 +483,7 @@ def _companionship(rule, b):
 
 BUILDERS = {
     ("intra", "split_term"): _split_term,
+    ("intra", "split_mixing_term"): _split_mixing_term,
     ("intra", "own_attribute_grouping"): _own_attribute_grouping,
     ("inter", "pair_relation"): _pair_relation,
     ("inter", "criterion_pairs"): _criterion_pairs,
