@@ -255,6 +255,9 @@ def import_registrations(
     for guest in result.guests:
         grouped.setdefault(guest.group_id, []).append(guest)
     for group_id, members in grouped.items():
+        if not any(member.requires_chair for member in members):
+            result.issues.append(ImportIssue(row=None, column="lap_infants",
+                severity="error", message=f"Party {group_id} has only lap infants. Include a chair-using guardian in the same party."))
         sources = party_rows[group_id]
         explicit = [label for _, _, label in sources if label]
         # A single registration's name is the party label at every size,
