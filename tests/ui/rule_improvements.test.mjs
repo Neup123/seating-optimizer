@@ -1,3 +1,6 @@
+// CI acceptance: conflict diagnostics must show operator-readable names and
+// actionable constraints, with internal IDs available only as secondary detail.
+// Repeat in the combined UI build after the other open frontend PRs land.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
