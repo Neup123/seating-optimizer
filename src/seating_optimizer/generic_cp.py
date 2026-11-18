@@ -211,7 +211,7 @@ class Build:
             matching = [r for r in together_rules
                         if self.lookup[r.targets[0]] in members
                         and self.lookup[r.targets[1]] in members]
-            combined = sum(len(self.groups[gid]) for gid in members)
+            combined = sum(chair_count(self.groups[gid]) for gid in members)
             if len(members) < 2 or combined <= max_table or not matching:
                 continue
             active = self.model.NewBoolVar(f"v2:linked:{cluster_index}:active")
