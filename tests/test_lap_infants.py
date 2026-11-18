@@ -68,3 +68,17 @@ def test_legacy_payload_defaults_to_one_chair_per_guest():
     assert guest.requires_chair is True
     with pytest.raises(Exception):
         Guest.model_validate({"id": "a", "name": "Alice", "requires_chair": "false"})
+
+
+@pytest.mark.parametrize("engine", ["v1", "v2"])
+def test_lap_infant_appears_on_both_printable_lists(engine):
+    from seating_optimizer import render_people_list_html, render_table_list_html
+    problem = baby_problem()
+    plan = solve(problem) if engine == "v1" else solve_generic(GenericProblem.from_v1(problem))
+    people = render_people_list_html(plan)
+    tables = render_table_list_html(plan)
+    for page in (people, tables):
+        assert "Mother" in page
+        assert "Father" in page
+        assert "Baby" in page
+    assert plan.tables[0].occupied == 2  # exported table capacity is physical chairs
