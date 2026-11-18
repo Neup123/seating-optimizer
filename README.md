@@ -6,6 +6,13 @@ The approved [build brief](docs/build-plan.md) is the authoritative project plan
 
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
+## Operator and project guides
+
+- [Installation, upgrade, and acceptance checklist](docs/install-and-acceptance.md)
+- [Operator guide: import, venue, rules, seating, reassignment, and print](docs/operator-guide.md)
+- [Architecture decision record: fork-first solver selection](docs/adr-001-solver-selection.md)
+- [Architecture and trust boundaries](docs/orientation.md) (introduced in PR #100; merge that PR before relying on this link).
+
 ## Installation
 
 Python 3.11+ is required.
