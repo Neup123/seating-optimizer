@@ -1406,7 +1406,7 @@ def solve(problem: Problem) -> Plan:
         for gid, members in groups.items() if gid in unseated_ids
     ]
     active_ids = set(groups) - unseated_ids
-    active_count = sum(len(groups[gid]) for gid in active_ids)
+    active_count = sum(chair_count(groups[gid]) for gid in active_ids)
     chairs = sum(table.capacity for table in problem.tables)
     if active_count > chairs:
         short = active_count - chairs
