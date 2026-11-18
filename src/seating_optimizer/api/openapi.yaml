@@ -870,6 +870,7 @@ components:
         name: {type: string}
         group_id: {type: [string, 'null']}
         group_name: {type: [string, 'null'], description: Human-readable registration or party name.}
+        requires_chair: {type: boolean, default: true, description: False for a lap infant who accompanies their party but occupies no physical chair.}
         attributes:
           type: object
           additionalProperties: {type: [string, number, boolean]}
