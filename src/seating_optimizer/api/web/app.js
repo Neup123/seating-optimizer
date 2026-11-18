@@ -242,7 +242,7 @@ export function createApp(root, api = createGateway()) {
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "", error: false, retryAction: null,
-      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: ""
+      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: "", validatedTables: {}
     };
   }
   const state = emptySession();
@@ -1005,7 +1005,8 @@ export function createApp(root, api = createGateway()) {
       const save = element("button", "secondary small icon-button", "✓");
       save.type = "submit"; save.title="Save table";save.setAttribute("aria-label",save.title);
       save.hidden=true;
-      const indicator=element("span","save-state","✓ Saved locally");
+      const indicator=element("span","save-state",
+        state.validatedTables[drawing.table_id] ? "✓ Server validated" : "✓ Saved locally");
       editor.addEventListener("input",e=>{
         if(e.target.type==="hidden")return;
         indicator.textContent="Editing draft";indicator.classList.add("unsaved");
@@ -1020,7 +1021,7 @@ export function createApp(root, api = createGateway()) {
       }, "danger small icon-button");
       remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
-      editor.addEventListener("submit", event => {
+      editor.addEventListener("submit", async event => {
         event.preventDefault();
         const next = {};
         for (const [key] of definitions) {
@@ -1036,14 +1037,34 @@ export function createApp(root, api = createGateway()) {
           properties = parseTableProperties(editor.querySelector(
             '[id="table-' + drawing.table_id + '-properties"]').value);
         } catch (error) { return announce(error.message, true); }
-        table.capacity = next.capacity;
-        table.properties = properties;
-        table.small_group_priority = priorityInput.checked;
-        drawing.properties = [...properties];
-        drawing.small_group_priority = priorityInput.checked;
-        ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
-        drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");
+        const shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
+        const proposedDrawing = {...drawing,...next,shape,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const candidate = {
+          floors:state.layout.floors.map(floor=>({
+            ...floor,tables:floor.tables.map(old=>old.table_id===drawing.table_id?
+              proposedDrawing:old)
+          }))
+        };
+        const candidateTables=state.tables.map(old=>old.id===table.id?proposedTable:old);
+        indicator.textContent="Validating changes…";
+        indicator.classList.add("unsaved");
+        try {
+          await api.post("/v1/layouts/import",{
+            files:[{filename:"layout.json",content_base64:encodeText(JSON.stringify(candidate))}],
+            zones:state.zones,tables:candidateTables
+          });
+        } catch (error) {
+          indicator.textContent="Not saved — "+friendlyApiError(error);
+          indicator.classList.add("unsaved");
+          return; // Retain the draft fields so the operator can correct them.
+        }
+        Object.assign(table,proposedTable);
+        Object.assign(drawing,proposedDrawing);
+        state.validatedTables[drawing.table_id]=true;
+        invalidate();announce("Saved and validated table " + drawing.table_id + ".");
       });
       list.append(editor);
     }
