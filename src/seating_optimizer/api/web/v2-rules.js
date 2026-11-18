@@ -5,11 +5,11 @@ const OPS = ["==", "!=", "<", "<=", ">", ">=", "in"];
 const ENGINE_NAMES = {intra:"Within a family", inter:"Between people / families",
   venue:"Venue & placement", stage:"Priority order"};
 const FIXED_POLARITY = {
-  split_term:"penalty", companionship:"penalty", holes_term:"penalty",
+  split_term:"penalty", split_mixing_term:"penalty", companionship:"penalty", holes_term:"penalty",
   property_fit:"reward", placement_by_criterion:"reward", property_need:"penalty"
 };
 const LABELS = {
-  split_term:"Keep a family together", own_attribute_grouping:"Group a family by attribute",
+  split_term:"Keep a family together", split_mixing_term:"Avoid mixing split families with other parties", own_attribute_grouping:"Group a family by attribute",
   pair_relation:"Place two families together / apart", criterion_pairs:"Connect matching people",
   table_pattern:"Table occupancy pattern", companionship:"Avoid solitary placement",
   placement_by_criterion:"Place matching guests on floors", tiered_placement:"Placement preference tiers",
