@@ -173,7 +173,7 @@ def _property_fit(r: GenericRule, c: FixedContext) -> int:
 def _holes_term(r: GenericRule, c: FixedContext) -> int:
     return -r.weight * sum(
         t.capacity - sum(g.requires_chair for g in c.at_table[t.id])
-        for t in c.tables if c.at_table[t.id]
+        for t in c.tables if any(g.requires_chair for g in c.at_table[t.id])
     )
 
 
