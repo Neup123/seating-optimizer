@@ -7,6 +7,7 @@ from time import perf_counter
 
 from ortools.sat.python import cp_model
 
+from .chairs import chair_count, chair_weight
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
@@ -154,8 +155,8 @@ def _prepare(problem):
 
 def _capacity_obstruction(groups, tables, splittable=frozenset()):
     """A sufficient (not guessed) capacity/party-packing explanation, if available."""
-    sizes = [len(members) for gid, members in groups.items() if gid not in splittable]
-    guests = sum(len(members) for members in groups.values())
+    sizes = [chair_count(members) for gid, members in groups.items() if gid not in splittable]
+    guests = sum(chair_count(members) for members in groups.values())
     if not guests:
         return None
     chairs = sum(table.capacity for table in tables)
@@ -185,7 +186,7 @@ def _capacity_obstruction(groups, tables, splittable=frozenset()):
 
 
 def _party_packing_summary(groups, tables):
-    guests = sum(len(members) for members in groups.values())
+    guests = sum(chair_count(members) for members in groups.values())
     chairs = sum(table.capacity for table in tables)
     return (f"Party packing: {counted(len(groups), 'party', 'parties')} ({counted(guests, 'guest')}) cannot be placed "
             f"at {counted(len(tables), 'table')} ({counted(chairs, 'chair')}) while keeping each party together. "
@@ -277,7 +278,7 @@ def _resolve_tiered_stages(model, problem, groups, lookup, tables, x, assumption
     for rule in tier_rules:
         gid = lookup[rule.parameters["target"]]
         ranked = _tier_table_sets(rule, tables)
-        size = len(groups[gid])
+        size = chair_count(groups[gid])
         locked = False
         for rank, permitted in enumerate(ranked, 1):
             # No whole group can fit if every table is individually too small.
@@ -366,7 +367,7 @@ def _solve_core(problem: Problem) -> Plan:
     # oversized-party fallback still requires adjacent drawings.
     adjacent_split = {
         gid for gid, members in groups.items()
-        if len(members) > maximum_table and gid not in linked and gid not in explicit_split
+        if chair_count(members) > maximum_table and gid not in linked and gid not in explicit_split
     }
     split_groups = adjacent_split | explicit_split
     neighbours = neighbouring_tables(problem.layout, tables)
@@ -394,7 +395,7 @@ def _solve_core(problem: Problem) -> Plan:
                                if table.id == p["table"]}
                 blockers.append(rule.id)
         reachable = {j: neighbours[j] & admissible for j in admissible}
-        if largest_connected_capacity(reachable, tables) < len(groups[gid]):
+        if largest_connected_capacity(reachable, tables) < chair_count(groups[gid]):
             detail = (f" Hard rules limiting usable tables: {', '.join(blockers)}."
                       if blockers else "")
             return Plan(
@@ -435,6 +436,15 @@ def _solve_core(problem: Problem) -> Plan:
                 count = sum(guest_at[guest.id, j] for guest in groups[gid])
                 model.Add(count >= x[gid, j])
                 model.Add(count <= len(groups[gid]) * x[gid, j])
+            # Lap infants consume no chair but must occupy a table with at
+            # least one guardian from their own split party.
+            guardians = [g for g in groups[gid] if g.requires_chair]
+            if guardians:
+                for guest in groups[gid]:
+                    if not guest.requires_chair:
+                        for j in range(n):
+                            model.Add(guest_at[guest.id,j] <=
+                                      sum(guest_at[adult.id,j] for adult in guardians))
         else:
             model.Add(sum(x[gid, j] for j in range(n)) == 1)
             loc[gid] = model.NewIntVar(0, n - 1, f"table:{gid}")
@@ -454,7 +464,7 @@ def _solve_core(problem: Problem) -> Plan:
 
     seats = {}
     for j, table in enumerate(tables):
-        seats[j] = sum(guest_at[guest.id, j] for guest in problem.guests)
+        seats[j] = sum(chair_weight(guest)*guest_at[guest.id, j] for guest in problem.guests)
         model.Add(seats[j] <= table.capacity)  # Physical limits are unconditional, not diagnostic assumptions.
 
     # Existing linked-cluster exception: distinct groups stay atomic and may
@@ -464,7 +474,7 @@ def _solve_core(problem: Problem) -> Plan:
     fallback_by_rule = {}
     for cluster_index, (members, cluster_rules) in enumerate(
             together_clusters(ids, lookup, problem.rules)):
-        party_size = sum(len(groups[gid]) for gid in members)
+        party_size = sum(chair_count(groups[gid]) for gid in members)
         if party_size <= maximum_table:
             continue  # Same table remains the only qualifying together outcome.
         compulsory = [rule for rule in cluster_rules if rule.mode == "hard"]
@@ -832,7 +842,8 @@ def _solve_core(problem: Problem) -> Plan:
         for gid, members in groups.items()
     }
     placed = {gid: min(group_tables[gid]) for gid in ids}
-    usage = {j: sum(guest_placed[guest.id] == j for guest in problem.guests) for j in range(n)}
+    usage = {j: sum(chair_weight(guest) for guest in problem.guests
+                     if guest_placed[guest.id] == j) for j in range(n)}
     reasons = defaultdict(list)
     table_reasons = defaultdict(list)
     breakdown = []
