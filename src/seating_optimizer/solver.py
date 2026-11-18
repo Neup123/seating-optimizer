@@ -350,6 +350,8 @@ def _solve_core(problem: Problem) -> Plan:
         return party_name_for(gid, group_names[gid], [guest.name for guest in members])
 
     tables = problem.tables
+    # Linked clusters retain their original venue-wide atomic fallback threshold.
+    maximum_table = max(table.capacity for table in tables)
     # Eligibility is relative to each party's HARD-ADMISSIBLE tables, not
     # the single largest table in an unrelated/forbidden floor (issue #56).
     # Reuse the same candidate set for connected-capacity diagnostics.
@@ -385,8 +387,8 @@ def _solve_core(problem: Problem) -> Plan:
     # automatic exception requires connected drawings on one permitted floor.
     adjacent_split = {
         gid for gid, members in groups.items()
-        if gid not in linked and gid not in explicit_split and
-        len(members) > max((tables[j].capacity for j in admissible_by_group[gid]), default=0)
+        if gid not in linked and gid not in explicit_split and admissible_by_group[gid] and
+        len(members) > max(tables[j].capacity for j in admissible_by_group[gid])
     }
     split_groups = adjacent_split | explicit_split
     neighbours = neighbouring_tables(problem.layout, tables)
@@ -399,12 +401,10 @@ def _solve_core(problem: Problem) -> Plan:
                       if blockers else "")
             return Plan(
                 session_id=problem.session_id, status="infeasible",
-                conflicting_constraints=[
-                    f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
-                    "no single table fits, and no connected adjacent-table "
-                    "set on one drawn floor has sufficient permitted capacity."
-                    + detail
-                ],
+                conflicting_constraints=([f"rule:{rule_id}" for rule_id in blockers] +
+                    [f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
+                     "no single table fits, and no connected adjacent-table "
+                     "set on one drawn floor has sufficient permitted capacity." + detail]),
                 message="The oversized group cannot be seated at adjacent tables.",
                 solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
             )
