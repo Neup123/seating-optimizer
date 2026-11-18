@@ -19,6 +19,17 @@ function storedJSON(key, fallback) {
   } catch (_) { return fallback; }
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+function syncDrawingMetadata(tables, layout) {
+  // The solver table is authoritative. Layout drawings only own shape and position.
+  const byId = new Map(tables.map(table => [table.id, table]));
+  for (const floor of layout.floors || []) for (const drawing of floor.tables || []) {
+    const table = byId.get(drawing.table_id);
+    if (!table) continue;
+    drawing.properties = [...(table.properties || [])];
+    drawing.small_group_priority = Boolean(table.small_group_priority);
+  }
+}
+
 
 function partyName(assignment) {
   const names = assignment.guest_names || [];
@@ -323,6 +334,7 @@ export function createApp(root, api = createGateway()) {
       throw Error("Add a floor and at least one table before saving a configuration.");
     if (configuredTables().length !== state.tables.length)
       throw Error("All configured tables need a positive chair capacity.");
+    syncDrawingMetadata(state.tables, state.layout);
     return deepCopy({
       version: 2, name, zones: state.zones, tables: state.tables,
       layout: state.layout, rules: state.rules
@@ -336,12 +348,7 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
-    for (const floor of state.layout.floors) for (const drawing of floor.tables) {
-      const table = state.tables.find(t => t.id === drawing.table_id);
-      if (table && (Object.hasOwn(table, "small_group_priority") ||
-          Object.hasOwn(drawing, "small_group_priority")))
-        drawing.small_group_priority = Boolean(table.small_group_priority);
-    }
+    syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
       if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
