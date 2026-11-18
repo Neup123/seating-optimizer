@@ -508,3 +508,30 @@ test("F2: network failure retains the last successful plan after edited inputs i
   assert.match($("#notice").textContent,/503/);
   assert.ok($(".plan-entry"));
 });
+
+test("hard-rule infeasibility explains requirements in plain language and keeps raw diagnostics secondary",async()=>{
+  const {app,root,$}=await setup();
+  seed(app);
+  app.state.rules=[{
+    id:"hard-rule-123",name:"Quiet floor for Alice",
+    description:"Alice needs a quiet floor on ground level.",
+    engine:"venue",mechanism:"placement_by_criterion",
+    mode:"hard",enabled:true,
+    criterion:{subject:"guest",field:"mobility",op:"==",value:"wheelchair"},
+    zones:["ground"]
+  }];
+  app.state.plan={...structuredClone(plan),status:"infeasible",total_score:null,
+    assignments:[],score_breakdown:[],
+    message:"Hard rules conflict with table capacities and party placement.",
+    conflicting_constraints:["rule:hard-rule-123 (Quiet floor for Alice)"]};
+  app.show("plan");
+  assert.match(root.textContent,/Why no seating plan fits/);
+  assert.match(root.textContent,/Quiet floor for Alice/);
+  assert.match(root.textContent,/Alice needs a quiet floor on ground level/);
+  assert.match(root.textContent,/not necessarily.*minimal/);
+  assert.equal($(".rule-diagnostics")?.querySelector("summary")?.textContent,"Technical reference");
+  assert.match($(".rule-diagnostics").textContent,/rule:hard-rule-123/);
+  click($(".conflict-row button"));
+  assert.equal(app.state.screen,"rules");
+  assert.equal(app.state.expandedRuleId,"hard-rule-123");
+});
