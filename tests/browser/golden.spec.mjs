@@ -296,7 +296,7 @@ test("rule property preferences share venue vocabulary and solve through v2 only
   const response=await res;expect(response.status()).toBe(200);
   const plan=await response.json();
   expect(["optimal","feasible"]).toContain(plan.status);
-  const family=plan.assignments.find(a=>a.group_id==="registration:2");
+  const family=plan.assignments.find(a=>a.group_name==="Family");
   expect(family.table_id).toBe("A");
   expect(response.request().postDataJSON().rules[0].mechanism).toBe("property_need");
   await shot(page,info,"22-table-property-score");
