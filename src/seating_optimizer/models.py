@@ -155,6 +155,7 @@ class Guest(Model):
     name: str
     group_id: str | None = None
     group_name: str | None = None  # Human-readable registration/party name.
+    requires_chair: bool = Field(default=True, strict=True)  # False: lap infant, still a person.
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
