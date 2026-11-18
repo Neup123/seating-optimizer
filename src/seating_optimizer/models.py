@@ -317,7 +317,15 @@ class Problem(Model):
             raise ValueError("Every table must reference an existing zone")
         if not all(g.id.strip() and g.name.strip() for g in self.guests):
             raise ValueError("Guests need nonempty IDs and names")
-        groups = {g.group_id or "guest:" + g.id for g in self.guests}
+        grouped_guests: dict[str, list[Guest]] = {}
+        for guest in self.guests:
+            grouped_guests.setdefault(guest.group_id or "guest:" + guest.id, []).append(guest)
+        groups = set(grouped_guests)
+        # Every lap infant must have at least one guardian in their actual
+        # party. A zero-chair party is not a standalone seating assignment.
+        for group_id, members in grouped_guests.items():
+            if not any(guest.requires_chair for guest in members):
+                raise ValueError(f"Party {group_id} has only lap infants and no chair-using guardian")
         table_ids = {t.id for t in self.tables}
         if len({i.id for i in self.manual_instructions}) != len(self.manual_instructions):
             raise ValueError("Duplicate manual instruction ID")
