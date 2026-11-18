@@ -32,17 +32,45 @@ class Build:
         self.ids = list(groups)
         self.split = set(problem.splittable_groups)
         self.split.update(i.group_id for i in problem.manual_instructions if i.allow_split)
-        max_capacity = max(t.capacity for t in self.tables)
         linked = {
             lookup[target] for rule in problem.rules
             if rule.enabled and (rule.engine, rule.mechanism) == ("inter", "pair_relation")
             and rule.relation == "together"
             for target in (rule.targets or [])
         }
-        # Match the legacy atomicity exception: a linked family is NOT
-        # silently split merely because its own size exceeds one table.
-        self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity and gid not in linked)
+        # A large family must be compared only with tables that satisfy its
+        # HARD venue rules. The unrestricted largest table may be on a floor
+        # which is prohibited for that family (same contract as v1).
+        for gid, members in groups.items():
+            if gid in linked or gid in self.split:
+                continue
+            admissible = set(range(self.n))
+            for rule in problem.rules:
+                if not rule.enabled or rule.mode != "hard":
+                    continue
+                if (rule.engine, rule.mechanism) in {
+                        ("venue", "placement_by_criterion"), ("venue", "property_need")}:
+                    criterion = Criterion.model_validate(rule.criterion)
+                    applies = (match_family(members, criterion) if criterion.subject == "family"
+                               else any(match_guest(guest, criterion) for guest in members))
+                    if not applies:
+                        continue
+                    if rule.mechanism == "placement_by_criterion":
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if table.zone_id in rule.zones}
+                    else:
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if (rule.property == "small_group_priority" and table.small_group_priority)
+                                   or rule.property.casefold() in
+                                   {tag.casefold() for tag in table.properties}}
+                    admissible &= allowed
+                elif (rule.engine, rule.mechanism) == ("venue", "locked_assignment") and (
+                        lookup[rule.target] == gid):
+                    admissible &= {j for j, table in enumerate(self.tables)
+                                   if table.id == rule.table}
+            largest = max((self.tables[j].capacity for j in admissible), default=0)
+            if len(members) > largest:
+                self.split.add(gid)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
