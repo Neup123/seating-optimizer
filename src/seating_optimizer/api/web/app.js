@@ -1426,7 +1426,7 @@ export function createApp(root, api = createGateway()) {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
         status.append(element("h3", "", "Why no seating plan fits"));
-        status.append(element("p", "muted", "These requirements are sufficient to explain the conflict, but the list may not be minimal. Edit the requirement or adjust table capacity, then solve again."));
+        status.append(element("p", "muted", "These requirements explain the conflict but are not necessarily a minimal set. Edit a requirement or adjust table capacity, then solve again."));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
           const line = element("div","problem conflict-row");
