@@ -38,7 +38,7 @@ jobs:
       - name: Install backend and test dependencies
         run: python -m pip install -e ".[api,test]"
       - name: Install browser test dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Run DOM tests for all four UI screens
         run: npm run test:ui
       - name: Install Chromium for true end-to-end tests
