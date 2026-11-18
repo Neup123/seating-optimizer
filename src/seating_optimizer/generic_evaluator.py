@@ -172,7 +172,7 @@ def _property_fit(r: GenericRule, c: FixedContext) -> int:
 
 def _holes_term(r: GenericRule, c: FixedContext) -> int:
     return -r.weight * sum(
-        t.capacity - len(c.at_table[t.id])
+        t.capacity - sum(g.requires_chair for g in c.at_table[t.id])
         for t in c.tables if c.at_table[t.id]
     )
 
@@ -221,7 +221,7 @@ def hard_violations(guests: Sequence[Any], tables: Sequence[Any],
     c = FixedContext(guests, tables, guest_tables)
     errors = []
     for t in tables:
-        if len(c.at_table[t.id]) > t.capacity:
+        if sum(g.requires_chair for g in c.at_table[t.id]) > t.capacity:
             errors.append(f"capacity:{t.id}")
     for rule in rules:
         if not rule.enabled or rule.mode != "hard":
