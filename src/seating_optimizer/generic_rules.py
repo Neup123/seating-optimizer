@@ -14,6 +14,7 @@ from itertools import combinations
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .chairs import chair_count
 
 
 ENGINES = {
@@ -238,10 +239,11 @@ def match_table_pattern(conditions: Sequence[Mapping[str, Any]],
     table = next(t for t in tables if t.id == table_id)
     present = [g for g in guests if guest_tables.get(g.id) == table_id]
     groups = {g.group_id or "guest:" + g.id for g in present}
+    taken = chair_count(present)
     facts = {
         "groups_at_table": len(groups),
-        "occupied_seats": len(present),
-        "empty_seats": table.capacity - len(present),
+        "occupied_seats": taken,
+        "empty_seats": table.capacity - taken,
     }
     for condition in conditions:
         fact = condition["fact"]
