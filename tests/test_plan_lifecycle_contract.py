@@ -57,3 +57,16 @@ def test_transition_contract_contains_required_states():
         assert state in PLAN_TRANSITIONS
     assert "solving" in PLAN_TRANSITIONS["dirty_after_edit"]
     assert "applied_manual_decision" in PLAN_TRANSITIONS["needs_review"]
+
+
+def test_api_exposes_same_status_capabilities_as_python_contract():
+    from fastapi.testclient import TestClient
+    from seating_optimizer.api.app import app
+    from seating_optimizer.models import PLAN_SOLVE_STATUSES, status_capabilities
+    response = TestClient(app).get("/v2/plan/status-capabilities")
+    assert response.status_code == 200
+    assert response.json() == {
+        status: status_capabilities(status) for status in PLAN_SOLVE_STATUSES
+    }
+    assert response.json()["needs_review"]["reviewable"] is True
+    assert response.json()["infeasible"]["printable"] is False
