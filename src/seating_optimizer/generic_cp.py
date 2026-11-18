@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from ortools.sat.python import cp_model
 
+from .chairs import chair_count, chair_weight
 from .adjacency import neighbouring_tables
 from .generic_rules import Criterion, GenericRule, compare_value, guest_value, match_family, match_guest
 from .pattern_rules import add_comparison
@@ -42,7 +43,7 @@ class Build:
         # Match the legacy atomicity exception: a linked family is NOT
         # silently split merely because its own size exceeds one table.
         self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity and gid not in linked)
+                          if chair_count(members) > max_capacity and gid not in linked)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
@@ -57,6 +58,15 @@ class Build:
                     count = sum(self.guest_at[g.id, j] for g in members)
                     self.model.Add(count >= self.x[gid, j])
                     self.model.Add(count <= len(members) * self.x[gid, j])
+                # A lap infant assigned within a split party must accompany a
+                # chair-using guardian rather than occupying an empty table alone.
+                guardians=[g for g in members if g.requires_chair]
+                if guardians:
+                    for baby in members:
+                        if not baby.requires_chair:
+                            for j in range(self.n):
+                                self.model.Add(self.guest_at[baby.id,j] <=
+                                    sum(self.guest_at[adult.id,j] for adult in guardians))
             else:
                 self.model.Add(sum(self.x[gid, j] for j in range(self.n)) == 1)
                 self.loc[gid] = self.model.NewIntVar(0, self.n - 1, f"v2:loc:{gid}")
@@ -66,7 +76,7 @@ class Build:
                         self.guest_at[guest.id, j] = self.x[gid, j]
         self.seats = {}
         for j, table in enumerate(self.tables):
-            self.seats[j] = sum(self.guest_at[g.id, j] for g in problem.guests)
+            self.seats[j] = sum(chair_weight(g)*self.guest_at[g.id, j] for g in problem.guests)
             self.model.Add(self.seats[j] <= table.capacity)
         self.assumptions = {}
         self.terms = []
