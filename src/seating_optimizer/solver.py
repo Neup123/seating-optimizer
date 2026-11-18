@@ -405,7 +405,8 @@ def _solve_core(problem: Problem) -> Plan:
                     [f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
                      "no single table fits, and no connected adjacent-table "
                      "set on one drawn floor has sufficient permitted capacity." + detail]),
-                message="The oversized group cannot be seated at adjacent tables.",
+                message=("These hard rules cannot all be satisfied: the group exceeds the capacity of permitted adjacent tables." if blockers else
+                         "The oversized group cannot be seated at adjacent tables."),
                 solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
             )
     proven_obstruction = _capacity_obstruction(groups, tables, split_groups)
