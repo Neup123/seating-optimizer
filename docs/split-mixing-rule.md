@@ -20,3 +20,7 @@ Both rules are ordinary editable consideration records, not new special-case con
 `tests/test_split_mixing_quality.py` checks unrestricted v1/v2 search for a clean three-table case and an unavoidable two-table mixing case with exact score parity. It also asserts zero mixing penalty for ordinary whole families sharing a table.
 
 **Coverage/exclusions:** splittable families and every other party that shares their table, even if the other party is also split. This is not a ban on mixing, not a proof that the operator always remembers to enable a template rule, and not a quality guarantee for all feasible-but-not-optimal runs. Score reporting remains aligned with actual objective terms.
+
+## CI verification boundary
+
+The regression suite must verify both objective arithmetic and the CP-SAT-selected final arrangement, not just score a pair of hand-authored candidate plans. Passing this branch alone does not prove compatibility with other open solver branches; repeat acceptance on the eventual integration commit.
