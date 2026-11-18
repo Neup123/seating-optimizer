@@ -34,6 +34,19 @@ export function displayRuleName(rule) {
   if (rule.property) return title + ": " + rule.property.replaceAll("_", " ");
   return title;
 }
+/** Human explanation for the operator; machine fields stay in advanced diagnostics. */
+export function describeRuleEffect(rule) {
+  if (rule?.description?.trim()) return rule.description.trim();
+  if (!rule) return "No saved rule details are available.";
+  const effect = rule.mode === "hard" ? "Required" :
+    rule.mode === "staged" ? "Placement priority" :
+    rule.polarity === "penalty" ? "Avoid" : "Prefer";
+  const label = LABELS[rule.mechanism] || String(rule.mechanism || "consideration").replaceAll("_", " ");
+  const c = rule.criterion;
+  const when = c?.field ? " when " + c.field.replaceAll("_", " ") +
+    " " + (c.op || "matches") + " " + (Array.isArray(c.value) ? c.value.join(", ") : String(c.value ?? "any value")) : "";
+  return effect + ": " + label + when + ".";
+}
 const NEEDS_CRITERION = new Set(["own_attribute_grouping","criterion_pairs",
   "placement_by_criterion","property_need","property_fit"]);
 const NUMERIC = value => value !== null && value !== "" && value !== undefined &&
@@ -183,8 +196,8 @@ function valuePicker(criterion, field, changed, key) {
     const chosen=Array.isArray(criterion.value)?criterion.value:[];
     const holder=node("fieldset","value-set");
     holder.append(node("legend","","Values"));
-    if (!available.length) holder.append(node("span","muted","Import guest data to choose values"));
-    for (const value of available) {
+    if (!available.length) holder.append(node("span","muted","Import guest data or add a custom value"));
+    for (const value of unique([...available, ...chosen])) {
       const label=node("label","check-inline");
       const box=node("input");box.type="checkbox";box.checked=chosen.some(v=>String(v)===String(value));
       box.addEventListener("change",()=>{
@@ -194,22 +207,37 @@ function valuePicker(criterion, field, changed, key) {
       });
       label.append(box,node("span","",String(value)));holder.append(label);
     }
+    const advanced=node("details","advanced-value");
+    advanced.append(node("summary","","Add custom value"));
+    const custom=node("input");custom.type=field?.numeric?"number":"text";
+    custom.setAttribute("aria-label","New custom criterion value");
+    advanced.append(line(custom,button("+","Add custom criterion value",()=>{
+      const raw=custom.value.trim();
+      if(!raw) return;
+      const next=field?.numeric?Number(raw):raw;
+      if(field?.numeric && !Number.isFinite(next)) return;
+      changed("value",unique([...chosen,next]));
+    },"icon-button")));
+    holder.append(advanced);
     return holder;
   }
   const options=available.map(v=>[JSON.stringify(v),String(v)]);
   // Operators with a strict numeric domain permit an advanced threshold, with explicit marking.
   const threshold=field?.numeric && ["<","<=",">",">="].includes(criterion.op);
   const current=JSON.stringify(criterion.value);
-  if (threshold && !options.some(([v])=>v===current)) options.push([current,String(criterion.value)]);
+  if (current !== undefined && current !== "null" && !options.some(([v])=>v===current))
+    options.push([current,"Custom: "+String(criterion.value)]);
   const choices=options.length?options:[["null","No imported values"]];
   const selected=pick("Value",choices,current||choices[0][0],value=>changed("value",JSON.parse(value)),key);
-  if (!threshold) return selected;
-  const holder=line(selected);
+  const holder=node("div","value-picker");
+  holder.append(selected);
   const advanced=node("details","advanced-value");
-  advanced.append(node("summary","","Advanced threshold"));
-  advanced.append(edit("Numeric threshold",criterion.value,value=>{
-    if (NUMERIC(value)) changed("value",Number(value));
-  },"number"));
+  advanced.append(node("summary","",threshold?"Advanced threshold":"Add custom value"));
+  advanced.append(edit(threshold?"Numeric threshold":"Custom value",criterion.value,value=>{
+    if (threshold || field?.numeric) {
+      if (NUMERIC(value)) changed("value",Number(value));
+    } else if (value.trim()) changed("value",value.trim());
+  },threshold || field?.numeric?"number":"text"));
   holder.append(advanced);
   return holder;
 }
@@ -241,10 +269,18 @@ function criterionEditor(criterion, state, changed, options={}) {
     row.append(pick("Pair scope",[["within","Within families"],["across","Across families"]],
       criterion.scope || "across",value=>set("scope",value),"criterion-scope"));
   const valueControl=valuePicker(criterion,field,(key,value)=>set(key,value),"criterion-value");
+  const advancedField=node("details","advanced-value");
+  advancedField.append(node("summary","","Add custom criterion field"));
+  advancedField.append(edit("Attribute key",criterion.field,value=>{
+    const fieldName=value.trim();
+    if (!fieldName) return;
+    changed({...criterion,field:fieldName,subject:"guest",value:null,op:"=="});
+  }));
   // A single scalar value belongs on the same baseline as field and operator.
   // Multi-value pickers have an independent row for their checkbox series.
   if (criterion.op === "in") control.append(row,valueControl);
   else { row.append(valueControl); control.append(row); }
+  control.append(advancedField);
   return control;
 }
 function multi(label,choices,values,change) {
@@ -375,8 +411,25 @@ export function renderGenericRules(state, actions) {
   builder.append(frame);outer.append(builder);
   const list=node("section","rules-list");
   list.append(line(node("h2","","Considerations"),node("span","pill",state.rules.length+" "+(state.rules.length===1?"instance":"instances"))));
+  if (state.rules.length >= 5) {
+    const search=node("input");search.type="search";search.id="rule-search";
+    search.placeholder="Filter considerations";search.setAttribute("aria-label","Filter considerations");
+    search.value=state.ruleQuery || "";
+    search.addEventListener("input",()=>{
+      const caret=search.selectionStart;
+      state.ruleQuery=search.value;changed(false);
+      const next=document.getElementById("rule-search");
+      next?.focus();if(next && caret!==null)next.setSelectionRange(caret,caret);
+    });
+    list.append(search);
+  }
   if(!state.rules.length)list.append(node("p","empty","No considerations yet."));
+  const filter=(state.ruleQuery || "").trim().toLocaleLowerCase();
+  let visibleCount=0;
   state.rules.forEach((rule,index)=>{
+    if(filter && ![rule.name,rule.description,rule.mechanism,summary(rule)]
+      .some(value=>String(value||"").toLocaleLowerCase().includes(filter))) return;
+    visibleCount++;
     // Existing v2 sessions may already contain migrated instances with empty names.
     if (!rule.name?.trim()) rule.name = displayRuleName(rule);
     const spec=catalog.find(c=>c.engine===rule.engine&&c.mechanism===rule.mechanism);
@@ -388,6 +441,21 @@ export function renderGenericRules(state, actions) {
       state.expandedRuleId=open?null:rule.id;changed(false);
     },"icon-button expand-rule");
     expander.setAttribute("aria-expanded",String(open));
+    expander.addEventListener("keydown",event=>{
+      if(event.key==="ArrowDown" || event.key==="ArrowUp"){
+        event.preventDefault();
+        const expanders=[...document.querySelectorAll(".expand-rule")];
+        const index=expanders.indexOf(expander);
+        expanders[index+(event.key==="ArrowDown"?1:-1)]?.focus();
+      }else if(event.key==="Escape" && open){
+        event.preventDefault();
+        state.expandedRuleId=null;
+        changed(false);
+        const restored=[...document.querySelectorAll(".rule-accordion")].find(
+          node=>node.dataset.ruleId===rule.id);
+        restored?.querySelector(".expand-rule")?.focus();
+      }
+    });
     const headline=node("div","rule-headline");
     headline.append(node("strong","",rule.name || "Unnamed consideration"),
       node("span","rule-summary",summary(rule)));
@@ -399,10 +467,34 @@ export function renderGenericRules(state, actions) {
     checkbox.addEventListener("change",()=>{rule.enabled=checkbox.checked;changed();});
     switchLabel.append(checkbox);
     const remove=button("🗑","Remove "+rule.name,()=>{
-      state.rules.splice(index,1);if(open)state.expandedRuleId=null;changed();
+      if(state.pendingRuleDeleteId!==rule.id){
+        state.pendingRuleDeleteId=rule.id;changed(false);return;
+      }
+      state.rules.splice(index,1);state.pendingRuleDeleteId=null;
+      if(open)state.expandedRuleId=null;changed();
     },"icon-button danger-icon","delete-rule-"+index);
+    remove.addEventListener("keydown",event=>{
+      if(event.key==="Escape" && state.pendingRuleDeleteId===rule.id){
+        event.preventDefault();state.pendingRuleDeleteId=null;changed(false);
+      }
+    });
     head.append(expander,headline,badge,weight,switchLabel,remove);
     item.append(head);
+    if(state.pendingRuleDeleteId===rule.id){
+      const confirm=line(
+        node("span","problem","Remove "+rule.name+"? This cannot be undone."),
+        button("✓","Confirm removal",()=>{
+          state.rules.splice(index,1);
+          state.pendingRuleDeleteId=null;
+          if(open)state.expandedRuleId=null;
+          changed();
+        },"danger small icon-button","confirm-rule-delete-"+index),
+        button("×","Cancel removal",()=>{
+          state.pendingRuleDeleteId=null;changed(false);
+        },"quiet small icon-button","cancel-rule-delete-"+index)
+      );
+      item.append(confirm);
+    }
     if(open){
       const body=node("div","rule-accordion-body");
       if (!state.guests.length && NEEDS_CRITERION.has(rule.mechanism))
@@ -444,5 +536,6 @@ export function renderGenericRules(state, actions) {
     }
     list.append(item);
   });
+  if (state.rules.length && !visibleCount) list.append(node("p","empty","No matching considerations."));
   outer.append(list);return outer;
 }
