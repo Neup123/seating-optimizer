@@ -1,7 +1,7 @@
 /* Interactive v2 working surfaces. All placement data comes from the solved API Plan. */
 import { assignmentMatchesSelection, selectedPlanAssignments, togglePlanSelection,
   partyTotals, portionLabel } from "./plan-selection.js";
-import { displayRuleName } from "./v2-rules.js";
+import { displayRuleName, describeRuleEffect } from "./v2-rules.js";
 
 function el(tag, css = "", text) {
   const node = document.createElement(tag);
@@ -320,7 +320,19 @@ export function renderPlanWorkspace(state, {
     details.append(el("h4", "", "Rules for this assignment"));
     if (related.length) {
       const rules = el("ul");
-      for (const rule of related) rules.append(el("li", "", displayRuleName(rule)));
+      for (const rule of related) {
+        const item = el("li", "related-rule");
+        item.append(el("strong", "", displayRuleName(rule)),
+          el("span", "muted", " — " + describeRuleEffect(rule)));
+        const technical = el("details", "rule-diagnostics");
+        technical.append(el("summary", "", "Technical details"));
+        technical.append(el("code", "", "ID: " + rule.id +
+          " · Engine: " + (rule.engine || "legacy") +
+          " · Mechanism: " + (rule.mechanism || rule.shape || "unknown") +
+          " · Mode: " + (rule.mode || "unknown")));
+        item.append(technical);
+        rules.append(item);
+      }
       details.append(rules);
     } else details.append(el("p", "muted", "No assignment-specific rule references returned."));
     // Score breakdown is a property of the full plan, not of any single family.

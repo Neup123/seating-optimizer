@@ -9,7 +9,7 @@ const LEGACY_SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
-  "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
+  "guests", "ruleEngine", "ruleMechanism", "ruleQuery", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
   "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
@@ -233,7 +233,7 @@ export function createApp(root, api = createGateway()) {
     return {
       screen: "import", view: "table", viewContent: null, viewError: "",
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
+      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
