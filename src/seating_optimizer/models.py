@@ -370,6 +370,7 @@ class Assignment(Model):
     table_id: str
     guest_ids: list[str]
     guest_names: list[str]
+    guest_chair_requirements: list[bool] = Field(default_factory=list)
     guest_attributes: list[dict[str, str | int | float | bool]] = Field(default_factory=list)
     reasons: list[Reason] = Field(default_factory=list)
     points: float = 0
