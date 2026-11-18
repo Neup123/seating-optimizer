@@ -7,7 +7,7 @@ from time import perf_counter
 
 from ortools.sat.python import cp_model
 
-from .objective_priority import optimize_with_split_priority
+from .objective_priority import optimize_with_split_priority, split_mixing_terms
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
@@ -751,6 +751,9 @@ def _solve_core(problem: Problem) -> Plan:
             # No constant penalty exists outside an operator's rule instance.
             for gid in split_groups:
                 terms.append(-rule.weight * (sum(x[gid, j] for j in range(n)) - 1))
+        elif rule.shape == "split_mixing_penalty":
+            for mixed in split_mixing_terms(model, split_groups, ids, n, x, rule.id):
+                terms.append(-rule.weight * mixed)
         elif rule.shape == "zone_companionship":
             for lone in _zone_companionship_penalties(model, rule, ids, tables, x):
                 terms.append(-rule.weight * lone)
@@ -865,6 +868,22 @@ def _solve_core(problem: Problem) -> Plan:
                                if tier is not None else
                                "No single tier could contain the existing authorized split.")
                 reasons[gid].append(Reason(rule_id=rule.id, description=explanation, points=0))
+        elif rule.shape == "split_mixing_penalty":
+            for gid in split_groups:
+                if len(group_tables[gid]) <= 1:
+                    continue
+                for j in group_tables[gid]:
+                    others=[other for other in ids if other!=gid and j in group_tables[other]]
+                    if not others:
+                        continue
+                    loss=rule.weight*len(others)
+                    points-=loss
+                    detail=(f"Split family {group_name(gid)} shares table {tables[j].id} "
+                            f"with {counted(len(others),'other party','other parties')}.")
+                    compromises.append(Compromise(rule_id=rule.id,
+                        description=detail,lost_points=loss))
+                    table_reasons[gid,j].append(Reason(rule_id=rule.id,
+                        description=detail,points=-loss))
         elif rule.shape == "zone_companionship":
             zone_groups = defaultdict(set)
             for gid, occupied_tables in group_tables.items():
