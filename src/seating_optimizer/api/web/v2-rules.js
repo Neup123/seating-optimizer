@@ -229,7 +229,8 @@ function valuePicker(criterion, field, changed, key) {
     options.push([current,"Custom: "+String(criterion.value)]);
   const choices=options.length?options:[["null","No imported values"]];
   const selected=pick("Value",choices,current||choices[0][0],value=>changed("value",JSON.parse(value)),key);
-  const holder=line(selected);
+  const holder=node("div","value-picker");
+  holder.append(selected);
   const advanced=node("details","advanced-value");
   advanced.append(node("summary","",threshold?"Advanced threshold":"Add custom value"));
   advanced.append(edit(threshold?"Numeric threshold":"Custom value",criterion.value,value=>{
