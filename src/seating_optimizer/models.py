@@ -408,6 +408,24 @@ class NotSeatedGroup(Model):
     grade: int | None = None
 
 
+PLAN_SOLVE_STATUSES = frozenset({"optimal", "feasible", "infeasible", "unknown", "needs_review"})
+PLAN_COMPLETE_STATUSES = frozenset({"optimal", "feasible"})
+PLAN_UNSOLVED_STATUSES = frozenset({"infeasible", "unknown"})
+PLAN_PRINTABLE_STATUSES = PLAN_COMPLETE_STATUSES
+# UI draft/solving/dirty states are client lifecycle states, not serialized Plan statuses.
+PLAN_TRANSITIONS = {
+    "input_ready": frozenset({"solving", "dirty_after_edit"}),
+    "solving": frozenset(PLAN_SOLVE_STATUSES),
+    "optimal": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
+    "feasible": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
+    "needs_review": frozenset({"applied_manual_decision", "solving", "dirty_after_edit"}),
+    "infeasible": frozenset({"solving", "dirty_after_edit", "applied_manual_decision"}),
+    "unknown": frozenset({"solving", "dirty_after_edit"}),
+    "applied_manual_decision": frozenset({"solving", "dirty_after_edit"}),
+    "dirty_after_edit": frozenset({"input_ready", "solving"}),
+}
+
+
 class Plan(Model):
     session_id: str
     manual_instructions: list[ManualInstruction] = Field(default_factory=list)
@@ -425,3 +443,31 @@ class Plan(Model):
     solve_seconds: float = 0
     message: str = ""
     layout: VenueLayout | None = None
+
+    @model_validator(mode="after")
+    def valid_lifecycle(self) -> "Plan":
+        if self.status in PLAN_COMPLETE_STATUSES and self.pending_groups:
+            raise ValueError("A completed plan cannot have pending groups")
+        if self.status == "needs_review" and not self.pending_groups:
+            raise ValueError("A plan needing review must identify pending groups")
+        if self.status in PLAN_UNSOLVED_STATUSES and self.assignments:
+            raise ValueError("An infeasible or unknown plan cannot claim confirmed assignments")
+        if self.status in PLAN_UNSOLVED_STATUSES and self.total_score is not None:
+            raise ValueError("An infeasible or unknown plan cannot claim an objective score")
+        return self
+
+
+def validate_plan_lifecycle(plan: Plan) -> Plan:
+    """Revalidate even after staged solver metadata changes to a created plan."""
+    return type(plan).model_validate(plan.model_dump(mode="json"))
+
+
+def plan_capabilities(plan: Plan) -> dict[str, bool]:
+    """Shared, explicit semantics for API clients and exported plan views."""
+    return {
+        "printable": plan.status in PLAN_PRINTABLE_STATUSES,
+        "reviewable": plan.status == "needs_review",
+        "retryable": plan.status in {"unknown", "infeasible", "needs_review"},
+        "complete": plan.status in PLAN_COMPLETE_STATUSES,
+    }
+
