@@ -316,7 +316,7 @@ export function createApp(root, api = createGateway()) {
       if (data.importFile?.content_base64) {
         data.importFile = { filename: data.importFile.filename };
         try {
-          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, saved_at: Date.now(), data }));
           state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
           return;
         } catch (_) { /* even the smaller snapshot did not fit */ }
