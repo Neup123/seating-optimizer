@@ -1053,6 +1053,18 @@ export function createApp(root, api = createGateway()) {
           }))
         };
         const candidateTables=state.tables.map(old=>old.id===table.id?proposedTable:old);
+        // A freshly imported map can contain many tables whose chair counts
+        // have not yet been assigned. Validate only when the whole venue can
+        // satisfy the server schema; do not block incremental initial setup.
+        const awaitingCapacities=candidateTables.some(t=>
+          !Number.isInteger(Number(t.capacity)) || Number(t.capacity)<1);
+        if (awaitingCapacities) {
+          Object.assign(table,proposedTable);
+          Object.assign(drawing,proposedDrawing);
+          delete state.validatedTables[drawing.table_id];
+          invalidate();announce("Saved locally. Finish chair counts for all tables, then validate layout.");
+          return;
+        }
         indicator.textContent="Validating changes…";
         indicator.classList.add("unsaved");
         try {
