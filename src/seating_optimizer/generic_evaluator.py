@@ -10,6 +10,7 @@ from collections import defaultdict
 from itertools import combinations
 from typing import Any, Callable, Mapping, Sequence
 
+from .chairs import chair_count
 from .generic_rules import (
     Criterion, GenericRule, compare_value, guest_value, match_family,
     match_guest, match_table_pattern,
@@ -172,7 +173,7 @@ def _property_fit(r: GenericRule, c: FixedContext) -> int:
 
 def _holes_term(r: GenericRule, c: FixedContext) -> int:
     return -r.weight * sum(
-        t.capacity - len(c.at_table[t.id])
+        t.capacity - chair_count(c.at_table[t.id])
         for t in c.tables if c.at_table[t.id]
     )
 
@@ -221,7 +222,7 @@ def hard_violations(guests: Sequence[Any], tables: Sequence[Any],
     c = FixedContext(guests, tables, guest_tables)
     errors = []
     for t in tables:
-        if len(c.at_table[t.id]) > t.capacity:
+        if chair_count(c.at_table[t.id]) > t.capacity:
             errors.append(f"capacity:{t.id}")
     for rule in rules:
         if not rule.enabled or rule.mode != "hard":
