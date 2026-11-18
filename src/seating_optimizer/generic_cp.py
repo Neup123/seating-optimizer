@@ -531,7 +531,7 @@ def resolve_tiers(build, rules):
         locked = False
         for rank, permitted in enumerate(ranked, 1):
             viable = {j for j in permitted
-                      if build.tables[j].capacity >= len(build.groups[gid])}
+                      if build.tables[j].capacity >= chair_count(build.groups[gid])}
             if not viable:
                 continue
             # Probe candidate under every hard assumption.
@@ -559,7 +559,7 @@ def resolve_tiers(build, rules):
             continue
         # The split was already explicitly permitted or structurally unavoidable.
         for rank, permitted in enumerate(ranked, 1):
-            if sum(build.tables[j].capacity for j in permitted) < len(build.groups[gid]):
+            if sum(build.tables[j].capacity for j in permitted) < chair_count(build.groups[gid]):
                 continue
             probe = build.model.NewBoolVar(f"v2:tier:split:{rule.id}:{rank}")
             build.model.Add(sum(build.x[gid, j] for j in range(build.n) if j not in permitted) == 0).OnlyEnforceIf(probe)
