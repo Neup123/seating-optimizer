@@ -15,6 +15,7 @@ from .adjacency import neighbouring_tables
 from .generic_rules import Criterion, GenericRule, compare_value, guest_value, match_family, match_guest
 from .pattern_rules import add_comparison
 from .solver import _zone_companionship_penalties
+from .models import chairs_needed
 
 
 def group_id(guest):
@@ -42,7 +43,7 @@ class Build:
         # Match the legacy atomicity exception: a linked family is NOT
         # silently split merely because its own size exceeds one table.
         self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity and gid not in linked)
+                          if chairs_needed(members) > max_capacity and gid not in linked)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
@@ -53,6 +54,13 @@ class Build:
                     for j in range(self.n):
                         self.guest_at[guest.id, j] = self.model.NewBoolVar(f"v2:g:{guest.id}:{j}")
                     self.model.Add(sum(self.guest_at[guest.id, j] for j in range(self.n)) == 1)
+                # Infants occupying no chair must not become independent split portions.
+                anchor = next((g for g in members if g.requires_chair), None)
+                if anchor is not None:
+                    for infant in (g for g in members if not g.requires_chair):
+                        for j in range(self.n):
+                            self.model.Add(self.guest_at[infant.id, j] ==
+                                           self.guest_at[anchor.id, j])
                 for j in range(self.n):
                     count = sum(self.guest_at[g.id, j] for g in members)
                     self.model.Add(count >= self.x[gid, j])
@@ -66,7 +74,7 @@ class Build:
                         self.guest_at[guest.id, j] = self.x[gid, j]
         self.seats = {}
         for j, table in enumerate(self.tables):
-            self.seats[j] = sum(self.guest_at[g.id, j] for g in problem.guests)
+            self.seats[j] = sum(self.guest_at[g.id, j] for g in problem.guests if g.requires_chair)
             self.model.Add(self.seats[j] <= table.capacity)
         self.assumptions = {}
         self.terms = []
@@ -201,7 +209,7 @@ class Build:
             matching = [r for r in together_rules
                         if self.lookup[r.targets[0]] in members
                         and self.lookup[r.targets[1]] in members]
-            combined = sum(len(self.groups[gid]) for gid in members)
+            combined = sum(chairs_needed(self.groups[gid]) for gid in members)
             if len(members) < 2 or combined <= max_table or not matching:
                 continue
             active = self.model.NewBoolVar(f"v2:linked:{cluster_index}:active")
@@ -521,7 +529,7 @@ def resolve_tiers(build, rules):
         locked = False
         for rank, permitted in enumerate(ranked, 1):
             viable = {j for j in permitted
-                      if build.tables[j].capacity >= len(build.groups[gid])}
+                      if build.tables[j].capacity >= chairs_needed(build.groups[gid])}
             if not viable:
                 continue
             # Probe candidate under every hard assumption.
@@ -549,7 +557,7 @@ def resolve_tiers(build, rules):
             continue
         # The split was already explicitly permitted or structurally unavoidable.
         for rank, permitted in enumerate(ranked, 1):
-            if sum(build.tables[j].capacity for j in permitted) < len(build.groups[gid]):
+            if sum(build.tables[j].capacity for j in permitted) < chairs_needed(build.groups[gid]):
                 continue
             probe = build.model.NewBoolVar(f"v2:tier:split:{rule.id}:{rank}")
             build.model.Add(sum(build.x[gid, j] for j in range(build.n) if j not in permitted) == 0).OnlyEnforceIf(probe)
