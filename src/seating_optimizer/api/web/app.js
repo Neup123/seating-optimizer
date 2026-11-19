@@ -1068,7 +1068,9 @@ export function createApp(root, api = createGateway()) {
     const tableForm = element("form", "stack");
     tableForm.id = "table-form";
     tableForm.append(element("h3", "", "Add numbered table"));
-    const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
+    let nextId = state.tables.length + 1;
+    while (state.tables.some(t => t.id === "T" + nextId)) nextId++;
+    const idInput = textField("Table ID", "T" + nextId, () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
     const propertyInput = propertyControl("Table properties", [], "new-table-properties");
@@ -1076,7 +1078,10 @@ export function createApp(root, api = createGateway()) {
     const priorityInput = document.createElement("input");
     priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
     priorityLabel.append(priorityInput, element("span", "", "Priority for couples and singles (soft)"));
-    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput, priorityLabel);
+    const tableAdvanced = element("details", "table-advanced");
+    tableAdvanced.append(element("summary", "", "Shape and preferences"),
+      shapeInput, propertyInput, priorityLabel);
+    tableForm.append(grid(idInput, capacityInput), tableAdvanced);
     const create = element("button", "secondary icon-button", "＋");
     create.type = "submit"; create.id = "add-table";
     create.title = "Add table to floor"; create.setAttribute("aria-label", create.title);
@@ -1106,6 +1111,16 @@ export function createApp(root, api = createGateway()) {
     controls.append(tableForm);
     const list = element("div", "stack");
     list.append(element("h3", "", "Tables on this floor"));
+    const tableSearch = textField("Find table", "", () => {}, {
+      id: "table-search", placeholder: "Search by name or ID"
+    });
+    list.append(tableSearch);
+    tableSearch.querySelector("input").addEventListener("input", event => {
+      for (const details of list.querySelectorAll(".table-row-details")) {
+        const text = (details.dataset.tableName || "").toLowerCase();
+        details.hidden = !text.includes(event.target.value.toLowerCase().trim());
+      }
+    });
     for (const drawing of layout.tables) {
       const table = state.tables.find(t => t.id === drawing.table_id);
       const editor = element("form", "table-editor");
@@ -1222,7 +1237,23 @@ export function createApp(root, api = createGateway()) {
         state.validatedTables[drawing.table_id]=true;
         invalidate();announce("Saved and validated table " + drawing.table_id + ".");
       });
-      list.append(editor);
+      const compact = element("details", "table-row-details");
+      compact.dataset.tableName = [drawing.table_id, table?.name || ""].join(" ");
+      compact.open = state.focusedTableId === drawing.table_id ||
+        (!state.focusedTableId && layout.tables[0]?.table_id === drawing.table_id);
+      const heading = element("summary", "table-row-heading");
+      heading.append(
+        element("strong", "", table?.name || drawing.table_id),
+        element("span", "muted", drawing.table_id + " · " +
+          (table?.capacity ?? "Set chairs") + " chairs · " + drawing.shape)
+      );
+      compact.append(heading, editor);
+      heading.addEventListener("click", () => {
+        state.focusedTableId = drawing.table_id;
+        for (const sibling of list.querySelectorAll(".table-row-details"))
+          if (sibling !== compact) sibling.open = false;
+      });
+      list.append(compact);
     }
     controls.append(list);
     split.append(controls); panel.append(split); area.append(panel);
@@ -1242,7 +1273,9 @@ export function createApp(root, api = createGateway()) {
       const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
       g.setAttribute("tabindex","0");
       g.setAttribute("role","button");
-      g.setAttribute("aria-label","Move table "+drawing.table_id+" using arrow keys");
+      g.setAttribute("aria-label","Move table "+
+        (state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id) +
+        " using arrow keys");
       g.setAttribute("data-table-id", drawing.table_id);
       const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
       if (drawing.shape === "rectangle") {
