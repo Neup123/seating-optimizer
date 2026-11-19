@@ -692,7 +692,24 @@ export function createApp(root, api = createGateway()) {
         // Keep the mapping and file name but not raw base64 source data in localStorage.
         if (state.importFile) state.importFile = { filename: state.importFile.filename };
         invalidate();
-        announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
+        const currentTargets=new Set(result.guests.flatMap(g=>[g.id,g.group_id || "guest:"+g.id,g.name]));
+        const staleRules=state.rules.filter(rule=>{
+          const targets=[
+            ...(Array.isArray(rule.targets)?rule.targets:[]),
+            ...(rule.target?[rule.target]:[]),
+            ...((rule.engine===undefined && rule.shape==="pair")?
+              [rule.parameters?.left,rule.parameters?.right]:[]),
+            ...((rule.engine===undefined && rule.shape==="pin")?[rule.parameters?.target]:[])
+          ].filter(Boolean);
+          return targets.some(target=>!currentTargets.has(target));
+        });
+        const staleInstructions=state.manualInstructions.filter(i=>!currentTargets.has(i.group_id));
+        announce("Imported " + result.guests.length + " guests from " + result.rows_imported +
+          " registrations." +
+          (staleRules.length || staleInstructions.length ?
+            " Warning: " + staleRules.length + " consideration(s) and " +
+            staleInstructions.length + " manual direction(s) refer to missing registrations. Rebind them before solving." : ""),
+          Boolean(staleRules.length || staleInstructions.length));
       }
     }), "primary icon-button", "import-guests"));
     buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;
