@@ -618,3 +618,77 @@ test("table edits are validated before commit and rejected drafts stay visible",
   assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
   assert.match(root.textContent,/Server validated/);
 });
+
+test("venue editor uses compact searchable rows and stable readable table names", async () => {
+  const {app,dom,$,$$,root,calls}=await setup(async()=>({}));
+  seed(app);app.show("map");
+  assert.equal($$(".table-row-details").length,1);
+  assert.ok($(".table-row-details summary").textContent.includes("G1"));
+  assert.equal($("#new-table-id").value,"T3");
+  assert.ok($(".table-advanced"),"rare attributes are under an advanced disclosure");
+  setValue($("#table-G1-name"),"Near entrance",dom.window);
+  await until(()=>app.state.tables.find(t=>t.id==="G1")?.name==="Near entrance");
+  assert.equal(app.state.tables[0].id,"G1","display rename never breaks linked table ID");
+  assert.match(root.textContent,/Near entrance/);
+  assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
+  setValue($("#table-search"),"does-not-exist",dom.window);
+  $("#table-search").dispatchEvent(new dom.window.Event("input",{bubbles:true}));
+  assert.ok($(".table-row-details").hidden);
+  setValue($("#table-search"),"Near entrance",dom.window);
+  $("#table-search").dispatchEvent(new dom.window.Event("input",{bubbles:true}));
+  assert.equal($(".table-row-details").hidden,false);
+  click($("#add-table"));
+  assert.equal(app.state.tables.length,3);
+  assert.equal(app.state.tables[2].id,"T3");
+  assert.equal(app.state.tables[2].name,"T3");
+});
+
+test("room outline stays a draft until backend accepts it; room can be reset", async () => {
+  let accept=false;
+  const {app,dom,$,root,calls}=await setup(async(path)=>{
+    if(path==="/v1/layouts/import" && !accept) throw Error("Room outline outside allowed area");
+    return {};
+  });
+  seed(app);app.show("map");
+  click($("#start-room-outline"));
+  const bg=$("#map-editor-svg rect");
+  $("#map-editor-svg").getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+  for(const [x,y] of [[0,0],[390,0],[390,290],[0,290]]){
+    const currentBg=root.querySelector("#map-editor-svg rect");
+    root.querySelector("#map-editor-svg").getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+    currentBg.dispatchEvent(new dom.window.MouseEvent("click",{bubbles:true,clientX:x,clientY:y}));
+  }
+  assert.equal(app.state.roomDraft.length,4);
+  assert.equal(app.state.layout.floors[0].room_outline,undefined);
+  click($("#save-room-outline"));
+  await until(()=>root.textContent.includes("Room outline outside allowed area"));
+  assert.equal(app.state.layout.floors[0].room_outline,undefined);
+  assert.equal(app.state.editingRoomOutline,true);
+  accept=true;
+  click($("#save-room-outline"));
+  await until(()=>Array.isArray(app.state.layout.floors[0].room_outline));
+  assert.equal(app.state.layout.floors[0].room_outline.length,4);
+  assert.equal(app.state.editingRoomOutline,false);
+  assert.ok(calls.filter(([path])=>path==="/v1/layouts/import").length>=2);
+  click($("#clear-room-outline"));
+  await until(()=>app.state.layout.floors[0].room_outline===null);
+});
+
+test("map resize handle changes dimensions without changing chair capacity", async () => {
+  const {app,dom,$,root}=await setup();
+  seed(app);app.state.focusedTableId="G1";app.show("map");
+  const map=$("#map-editor-svg");
+  map.getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+  const handle=$(".map-resize-handle");
+  assert.ok(handle);
+  const old=app.state.layout.floors[0].tables[0];
+  const originalWidth=old.width;
+  handle.dispatchEvent(new dom.window.MouseEvent("pointerdown",
+    {bubbles:true,clientX:180,clientY:160}));
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointermove",
+    {bubbles:true,clientX:200,clientY:170}));
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointerup",{bubbles:true}));
+  await until(()=>app.state.layout.floors[0].tables[0].width>originalWidth);
+  assert.equal(app.state.tables.find(t=>t.id==="G1").capacity,4);
+  assert.equal(app.state.plan,null);
+});
