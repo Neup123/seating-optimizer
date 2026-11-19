@@ -82,3 +82,15 @@ def test_lap_infant_appears_on_both_printable_lists(engine):
         assert "Father" in page
         assert "Baby" in page
     assert plan.tables[0].occupied == 2  # exported table capacity is physical chairs
+
+
+@pytest.mark.parametrize("engine", ["v1", "v2"])
+def test_human_table_name_survives_solve_without_changing_hard_table_id(engine):
+    problem = baby_problem()
+    problem.tables[0].name = "Near entrance"
+    plan = solve(problem) if engine == "v1" else solve_generic(GenericProblem.from_v1(problem))
+    assert plan.status in ("optimal", "feasible")
+    assert plan.tables[0].table_id == "T"
+    assert plan.tables[0].name == "Near entrance"
+    assert plan.assignments[0].table_id == "T"
+    assert plan.model_dump()["tables"][0]["name"] == "Near entrance"
