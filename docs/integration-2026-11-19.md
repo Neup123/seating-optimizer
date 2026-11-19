@@ -4,6 +4,8 @@ This branch is a test assembly only; it does not merge or close source PRs or de
 No conflicting changes were resolved by choosing ours/theirs.
 
 ## Cleanly incorporated
+
+## Already included by ancestor
 #105
 #101
 #100
@@ -16,8 +18,6 @@ No conflicting changes were resolved by choosing ours/theirs.
 #107
 #113
 #118
-
-## Already included by ancestor
 
 ## Not incorporated — conflict or fetch error
 PR #114 conflicts in: tests/ui/visual.test.mjs 
