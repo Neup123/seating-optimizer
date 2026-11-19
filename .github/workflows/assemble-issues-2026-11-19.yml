@@ -45,6 +45,11 @@ jobs:
               echo "Merged cleanly in integration candidate"
             else
               echo "PR #${pr} conflicts in: $(git diff --name-only --diff-filter=U | tr '\n' ' ')" | tee -a /tmp/conflicted
+              for file in $(git diff --name-only --diff-filter=U); do
+                echo "::group::Conflict details: PR #${pr} — ${file}"
+                awk '/^<<<<<<< /{show=1} show{print NR ": " $0} /^>>>>>>> /{show=0}' "$file" | head -n 180
+                echo "::endgroup::"
+              done
               git merge --abort
             fi
             echo "::endgroup::"
