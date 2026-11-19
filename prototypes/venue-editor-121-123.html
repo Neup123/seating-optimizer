@@ -52,7 +52,7 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
 <div class="summary"><div><h2>Arrange the venue</h2><div class="muted">Add tables, drag to move, resize by the corner and edit the room outline.</div></div><div class="controls"><span class="pill" id="stats">5 tables · 48 chairs</span><button class="btn primary" id="add">＋ Add table</button></div></div>
 <div class="workspace">
 <section class="card" aria-label="Interactive venue map">
- <div class="card-head"><strong>Ground floor</strong><div class="controls"><button class="btn" id="move-mode" aria-pressed="true">Move tables</button><button class="btn" id="room-mode" aria-pressed="false">Edit room outline</button><button class="btn quiet" id="reset-room">Reset outline</button></div></div>
+ <div class="card-head"><strong>Ground floor</strong><div class="controls"><button class="btn" id="move-mode" aria-pressed="true">Move tables</button><button class="btn" id="room-mode" aria-pressed="false">Edit room outline</button><button class="btn primary" id="save-room" hidden>Save outline</button><button class="btn quiet" id="reset-room">Reset outline</button></div></div>
  <div class="map-wrap"><svg id="canvas" viewBox="0 0 800 520" role="group" aria-label="Tables and room outline. Use arrow keys after selecting a table."></svg></div>
  <div class="hint">Tip: click a table to select it. Drag to move; drag the corner square to resize. Use <kbd>Arrow keys</kbd> to nudge tables by 5 units.</div>
 </section>
@@ -122,6 +122,7 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
     const target=$('editor');if(focus)target.replaceChildren();else return;
     const t=tables.find(x=>x.id===selected);if(!t){target.textContent='Select a table to edit.';return;}
     const h=document.createElement('h3');h.textContent='Edit '+t.id;target.append(h);
+    const idField=field('Table ID',t.id,v=>{const cleaned=v.trim();if(!cleaned||tables.some(row=>row!==t&&row.id===cleaned)){toast('ID must be unique and nonempty.');render();return;}t.id=cleaned;selected=cleaned;render();toast('Table ID renamed. Production rule references must be migrated.');});target.append(idField.label);
     const name=field('Display name',t.name,v=>{t.name=v.trim()||t.id;render();toast('Table renamed.');});name.input.id='editor-name';target.append(name.label);
     const chairs=field('Chair count',String(t.chairs),v=>{t.chairs=Math.max(1,Math.floor(Number(v)||1));render();},'number');
     const shapeLabel=document.createElement('label');shapeLabel.textContent='Shape';const shape=document.createElement('select');
@@ -133,11 +134,12 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
     const priority=document.createElement('label');priority.textContent='Priority for couples and singles';const check=document.createElement('input');check.type='checkbox';check.checked=t.priority;check.style.width='20px';check.onchange=()=>{t.priority=check.checked;toast('Preference updated.');};priority.append(check);advanced.append(grid,priority);target.append(advanced);
     const actions=document.createElement('div');actions.className='controls';const remove=document.createElement('button');remove.className='btn danger';remove.textContent='Remove table';remove.onclick=()=>{if(!window.confirm('Remove '+t.name+' from the demo venue?'))return;tables.splice(tables.indexOf(t),1);selected=tables[0]?.id||null;render();};actions.append(remove);target.append(actions);
   }
-  function render(){renderCanvas();renderList();renderEditor();$('stats').textContent=tables.length+' tables · '+tables.reduce((n,t)=>n+t.chairs,0)+' chairs';$('move-mode').setAttribute('aria-pressed',String(mode==='move'));$('room-mode').setAttribute('aria-pressed',String(mode==='room'));}
+  function render(){renderCanvas();renderList();renderEditor();$('save-room').hidden=mode!=='room';$('stats').textContent=tables.length+' tables · '+tables.reduce((n,t)=>n+t.chairs,0)+' chairs';$('move-mode').setAttribute('aria-pressed',String(mode==='move'));$('room-mode').setAttribute('aria-pressed',String(mode==='room'));}
   $('add').onclick=()=>{const n=1+Math.max(0,...tables.map(t=>Number(t.id.slice(1))||0));const row=Math.floor((tables.length%9)/3),col=tables.length%3;const id='T'+n;tables.push({id,name:'Table '+n,chairs:10,x:110+col*180,y:90+row*130,w:115,h:74,shape:'rect',priority:false});selected=id;render();$('editor-name').focus();toast(id+' added with sensible defaults.');};
   $('search').oninput=renderList;
   $('move-mode').onclick=()=>{mode='move';render();toast('Drag a table or its resize corner.');};
   $('room-mode').onclick=()=>{mode='room';room=[];render();toast('Click room corners on the map to trace the outline.');};
+  $('save-room').onclick=()=>{if(room.length<3){toast('Add at least three corners before saving the room outline.');return;}mode='move';render();toast('Room outline saved in prototype.');};
   $('reset-room').onclick=()=>{room=initialRoom.map(x=>x.slice());mode='move';render();toast('Original outline restored.');};
   render();
 })();
