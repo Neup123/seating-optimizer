@@ -11,7 +11,8 @@ from .objective_priority import optimize_with_split_priority, split_mixing_terms
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
-                     PriorityMark, Problem, Reason, ScoreItem, TableUsage)
+                     PriorityMark, Problem, Reason, ScoreItem, TableUsage,
+                     validate_plan_lifecycle)
 from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
 
@@ -1438,7 +1439,7 @@ def solve(problem: Problem) -> Plan:
         plan.pending_groups = pending or []
         plan.not_seated = not_seated
         plan.solve_seconds = perf_counter() - start
-        return plan
+        return validate_plan_lifecycle(plan)
 
     if not active_ids:
         return result_with_metadata(_empty_stage(problem))

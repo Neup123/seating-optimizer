@@ -84,6 +84,26 @@ paths:
                     engine: {type: string, enum: [intra, inter, venue, stage]}
                     mechanism: {type: string}
                     modes: {type: array, items: {type: string}}
+  /v2/plan/status-capabilities:
+    get:
+      operationId: listPlanStatusCapabilities
+      summary: Shared lifecycle semantics for plan statuses
+      description: Returns the backend's single definition of printable, reviewable, retryable and complete for each serialized Plan status.
+      responses:
+        '200':
+          description: Capability map keyed by solver status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  required: [printable, reviewable, retryable, complete]
+                  properties:
+                    printable: {type: boolean}
+                    reviewable: {type: boolean}
+                    retryable: {type: boolean}
+                    complete: {type: boolean}
   /v2/configurations/migrate:
     post:
       operationId: migrateLegacyConfiguration
