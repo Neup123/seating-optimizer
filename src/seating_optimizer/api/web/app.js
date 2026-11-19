@@ -995,13 +995,13 @@ export function createApp(root, api = createGateway()) {
     }));
     intro.append(fileControl("Import venue layout files (JSON or SVG)", file));
     intro.append(row(
-      action("✓", () => attempt(validateLayout), "primary icon-button", "validate-layout"),
-      action("↓", () => attempt(async () => {
+      action("✓ Validate layout", () => attempt(validateLayout), "primary small", "validate-layout"),
+      action("↓ Export layout", () => attempt(async () => {
         const validated = await api.post("/v1/layouts/import", {
           files: [{ filename: "layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }]
         });
         downloadBlob(JSON.stringify(validated, null, 2), "venue-layout.json", "application/json");
-      }), "secondary icon-button", "export-layout")
+      }), "secondary small", "export-layout")
     ));
     for (const [id,title] of [["validate-layout","Validate layout"],["export-layout","Export layout JSON"]]) {
       const b=intro.querySelector("#"+id);b.title=title;b.setAttribute("aria-label",title);
@@ -1021,7 +1021,7 @@ export function createApp(root, api = createGateway()) {
       inputs[key] = input;
       addFloor.append(append(element("label"), element("span", "", label), input));
     });
-    const submit = element("button", "primary icon-button", "＋");
+    const submit = element("button", "primary small", "＋ Create floor");
     submit.title = "Create floor"; submit.setAttribute("aria-label", "Create floor");
     submit.type = "submit"; submit.id = "add-floor";
     addFloor.append(submit);
@@ -1125,7 +1125,7 @@ export function createApp(root, api = createGateway()) {
     tableAdvanced.append(element("summary", "", "Shape and preferences"),
       shapeInput, propertyInput, priorityLabel);
     tableForm.append(grid(idInput, capacityInput), tableAdvanced);
-    const create = element("button", "secondary icon-button", "＋");
+    const create = element("button", "secondary small", "＋ Add table");
     create.type = "submit"; create.id = "add-table";
     create.title = "Add table to floor"; create.setAttribute("aria-label", create.title);
     tableForm.append(create);
@@ -1207,11 +1207,11 @@ export function createApp(root, api = createGateway()) {
       editor.addEventListener("change",e=>{
         if(e.target.matches('input,select'))editor.requestSubmit();
       });
-      const remove = action("⌫", () => {
+      const remove = action("Remove", () => {
         layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
         state.tables = state.tables.filter(t => t.id !== drawing.table_id);
         invalidate(); announce("Removed table " + drawing.table_id + ".");
-      }, "danger small icon-button");
+      }, "danger small");
       remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
       editor.addEventListener("submit", async event => {
