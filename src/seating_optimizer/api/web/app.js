@@ -1005,17 +1005,20 @@ export function createApp(root, api = createGateway()) {
       applyConfiguration(validated);
       announce("Imported complete configuration " + validated.name + ".");
     }));
-    templatesCard.append(fileControl("Import full configuration JSON", configFile));
+    const configurationPicker = fileControl("Import full configuration JSON", configFile);
+    configurationPicker.querySelector("button")?.append(element("span","", "Import configuration"));
+    templatesCard.append(configurationPicker);
     const templateActions = [
-      ["save-template","Save or update venue template","✓"],
-      ["export-configuration","Download full configuration JSON","⤓"],
-      ["load-template","Load selected venue template","↥"],
-      ["duplicate-template","Duplicate selected venue template","⧉"],
-      ["delete-template","Delete selected venue template","🗑"]
+      ["save-template","Save template","Save or update venue template"],
+      ["export-configuration","Export JSON","Download full configuration JSON"],
+      ["load-template","Load template","Load selected venue template"],
+      ["duplicate-template","Duplicate","Duplicate selected venue template"],
+      ["delete-template","Delete template","Delete selected venue template"]
     ];
-    for (const [id,title,glyph] of templateActions) {
+    for (const [id,label,title] of templateActions) {
       const b=templatesCard.querySelector("#"+id);
-      b.textContent=glyph;b.classList.add("icon-button");
+      b.textContent=label;
+      b.classList.remove("icon-button");
       b.title=title;b.setAttribute("aria-label",title);
     }
     const templateDrawer=element("details","card form-measure template-drawer");
@@ -1040,7 +1043,9 @@ export function createApp(root, api = createGateway()) {
     file.addEventListener("change", () => attempt(async () => {
       if (file.files?.length) await loadLayoutFiles(Array.from(file.files));
     }));
-    intro.append(fileControl("Import venue layout files (JSON or SVG)", file));
+    const layoutPicker = fileControl("Import venue layout files (JSON or SVG)", file);
+    layoutPicker.querySelector("button")?.append(element("span","", "Import layout"));
+    intro.append(layoutPicker);
     intro.append(row(
       action("✓ Validate layout", () => attempt(validateLayout), "primary small", "validate-layout"),
       action("↓ Export layout", () => attempt(async () => {
