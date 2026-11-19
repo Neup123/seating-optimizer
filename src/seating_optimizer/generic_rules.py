@@ -242,8 +242,8 @@ def match_table_pattern(conditions: Sequence[Mapping[str, Any]],
     groups = {g.group_id or "guest:" + g.id for g in present}
     facts = {
         "groups_at_table": len(groups),
-        "occupied_seats": len(present),
-        "empty_seats": table.capacity - len(present),
+        "occupied_seats": sum(g.requires_chair for g in present),
+        "empty_seats": table.capacity - sum(g.requires_chair for g in present),
     }
     for condition in conditions:
         fact = condition["fact"]

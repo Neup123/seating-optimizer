@@ -145,7 +145,7 @@ def import_registrations(
     """Each source row is one registration. Size N expands to N atomic-group guests.
 
     Mapping direction is source header -> canonical target. Canonical fields are
-    name, size, group_id, group_name or attribute.<user-defined-kind>. Unmapped source data
+    name, size, lap_infants, group_id, group_name or attribute.<user-defined-kind>. Unmapped source data
     is retained as a free-form guest attribute, never silently discarded.
     """
     result = ImportResult()
@@ -168,7 +168,7 @@ def import_registrations(
         if source not in headers:
             result.issues.append(ImportIssue(row=1, column=source, severity="error",
                                               message="Mapped source column not found"))
-        if target not in {"name", "size", "group_id", "group_name"} and (
+        if target not in {"name", "size", "lap_infants", "group_id", "group_name"} and (
             not target.startswith("attribute.") or not target.removeprefix("attribute.")
         ):
             result.issues.append(ImportIssue(row=1, column=source, severity="error",
@@ -226,6 +226,21 @@ def import_registrations(
             result.issues.append(ImportIssue(row=row_number, column="size", severity="error",
                                     message=f"Invalid or missing group size {size!r}"))
             continue
+        lap_value = mapped.get("lap_infants")
+        try:
+            if lap_value is None or str(lap_value).strip() == "":
+                lap_count = 0
+            else:
+                if isinstance(lap_value, bool):
+                    raise ValueError
+                lap_count = int(lap_value)
+                if float(lap_value) != lap_count or not 0 <= lap_count <= n:
+                    raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            result.issues.append(ImportIssue(
+                row=row_number, column="lap_infants", severity="error",
+                message=f"Lap infants must be a whole number from 0 to party size {n}; received {lap_value!r}"))
+            continue
         registration_id = _stable_registration_identity(name)
         group_id = str(mapped.get("group_id") or f"registration:stable:{registration_id}").strip()
         mapped_group_name = str(mapped.get("group_name") or "").strip() or None
@@ -236,7 +251,7 @@ def import_registrations(
             if value is None or (isinstance(value, str) and not value.strip()):
                 continue
             target = mapping_out.get(source)
-            if target in ("name", "size", "group_id", "group_name"):
+            if target in ("name", "size", "lap_infants", "group_id", "group_name"):
                 continue
             key = target.removeprefix("attribute.") if target else source
             if isinstance(value, (str, int, float, bool)):
@@ -246,7 +261,8 @@ def import_registrations(
         for i in range(n):
             result.guests.append(Guest(id=f"member:{registration_id}:{i+1}",
                    name=name if n == 1 else f"{name} ({i+1}/{n})",
-                   group_id=group_id, group_name=None, attributes=attrs))
+                   group_id=group_id, group_name=None,
+                   requires_chair=i < n - lap_count, attributes=attrs))
         result.rows_imported += 1
 
     grouped: dict[str, list[Guest]] = {}
