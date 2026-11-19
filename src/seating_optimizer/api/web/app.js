@@ -334,7 +334,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", editingRoomOutline: false, roomDraft: null, cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", editingRoomOutline: false, roomDraft: null, pendingTableRename: {}, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -443,6 +443,7 @@ export function createApp(root, api = createGateway()) {
     state.layout = copy.layout;
     state.editingRoomOutline = false;
     state.roomDraft = null;
+    state.pendingTableRename = {};
     syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
@@ -1220,7 +1221,11 @@ export function createApp(root, api = createGateway()) {
         { id: "table-" + drawing.table_id + "-name" }));
       const renameLine = element("div", "row table-rename-row");
       const renameField = textField("Table ID (changes rule references)",
-        drawing.table_id, () => {}, { id: "table-" + drawing.table_id + "-id" });
+        state.pendingTableRename[drawing.table_id] ?? drawing.table_id, () => {},
+        { id: "table-" + drawing.table_id + "-id" });
+      renameField.querySelector("input").addEventListener("input", event => {
+        state.pendingTableRename[drawing.table_id] = event.target.value;
+      });
       const renameButton = action("Change table ID", () => attempt(async () => {
         const requested = renameField.querySelector("input").value;
         const changed = renamedTableState(state.tables, state.layout,
@@ -1236,6 +1241,7 @@ export function createApp(root, api = createGateway()) {
         state.rules=changed.rules;
         state.manualInstructions=changed.instructions;
         delete state.validatedTables[drawing.table_id];
+        delete state.pendingTableRename[drawing.table_id];
         if (previousValidated) state.validatedTables[nextId]=true;
         state.focusedTableId=nextId;
         if(state.reassignPlaceType==="table"&&state.reassignPlaceId===drawing.table_id)
