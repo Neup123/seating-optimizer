@@ -738,6 +738,7 @@ components:
         id: {type: string}
         zone_id: {type: string}
         capacity: {type: integer, minimum: 1}
+        name: {type: [string, 'null'], minLength: 1, description: Human-readable label; renaming does not alter stable Table.id references.}
         small_group_priority:
           type: boolean
           default: false
