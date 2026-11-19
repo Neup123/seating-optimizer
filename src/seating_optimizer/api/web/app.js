@@ -1354,6 +1354,7 @@ export function createApp(root, api = createGateway()) {
         (state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id) +
         " using arrow keys");
       g.setAttribute("data-table-id", drawing.table_id);
+      g.setAttribute("data-focused", String(state.focusedTableId === drawing.table_id));
       const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
       if (drawing.shape === "rectangle") {
         ["x", "y", "width", "height"].forEach(k => shape.setAttribute(k, String(drawing[k])));
