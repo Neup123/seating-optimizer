@@ -1365,42 +1365,103 @@ export function createApp(root, api = createGateway()) {
       label.setAttribute("font-size", "15");
       label.setAttribute("font-weight", "700");
       label.textContent = state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id;
-      g.append(shape,label); svg.append(g);
-      g.addEventListener("keydown", event => {
-        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
-        if (!delta) return;
-        event.preventDefault();
-        drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
-        drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+      const handle = document.createElementNS(SVG_NS, "rect");
+      handle.setAttribute("width", "14");handle.setAttribute("height", "14");
+      handle.setAttribute("class", "map-resize-handle");
+      handle.setAttribute("data-resize", "true");
+      const paint = () => {
+        if (drawing.shape === "rectangle") {
+          for (const key of ["x","y","width","height"]) shape.setAttribute(key, String(drawing[key]));
+        } else {
+          shape.setAttribute("cx", String(drawing.x + drawing.width / 2));
+          shape.setAttribute("cy", String(drawing.y + drawing.height / 2));
+          shape.setAttribute("rx", String(drawing.width / 2));
+          shape.setAttribute("ry", String(drawing.height / 2));
+        }
+        label.setAttribute("x", String(drawing.x + drawing.width / 2));
+        label.setAttribute("y", String(drawing.y + drawing.height / 2));
+        handle.setAttribute("x", String(drawing.x + drawing.width - 7));
+        handle.setAttribute("y", String(drawing.y + drawing.height - 7));
+      };
+      g.append(shape,label,handle); svg.append(g);paint();
+      const validatePosition = async () => {
+        if (!floor.room_outline) return;
+        const candidate = {floors: state.layout.floors.map(other => ({
+          ...other, tables: other.tables.map(item => item.table_id === drawing.table_id ?
+            {...drawing} : item)
+        }))};
+        await api.post("/v1/layouts/import", {
+          files:[{filename:"layout.json",content_base64:encodeText(JSON.stringify(candidate))}],
+          zones:state.zones,tables:state.tables
+        });
+      };
+      const committed = () => {
         delete state.validatedTables[drawing.table_id];
+        state.focusedTableId = drawing.table_id;
         invalidate();render();
         const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
         active?.focus();
+      };
+      g.addEventListener("keydown", event => {
+        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
+        if (!delta || state.editingRoomOutline) return;
+        event.preventDefault();
+        const before = {...drawing};
+        if (event.shiftKey) {
+          drawing.width=Math.max(20,Math.min(floor.width-drawing.x,drawing.width+delta[0]));
+          drawing.height=Math.max(20,Math.min(floor.height-drawing.y,drawing.height+delta[1]));
+          if (drawing.shape==="circle") {
+            const diameter=Math.min(drawing.width,drawing.height);
+            drawing.width=diameter;drawing.height=diameter;
+          }
+        } else {
+          drawing.x=Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
+          drawing.y=Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        }
+        if (floor.room_outline) void attempt(async()=>{
+          try { await validatePosition(); }
+          catch(error){Object.assign(drawing,before);throw error;}
+          committed();
+        });
+        else committed();
       });
       g.addEventListener("pointerdown", event => {
+        if (state.editingRoomOutline) return;
         event.preventDefault();
         const rect = svg.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const startX = event.clientX, startY = event.clientY;
-        const oldX = drawing.x, oldY = drawing.y;
+        const before = {...drawing};
+        const resizing = event.target.getAttribute("data-resize")==="true";
+        let changed=false;
         function move(e) {
-          const dx = (e.clientX - startX) * floor.width / rect.width;
-          const dy = (e.clientY - startY) * floor.height / rect.height;
-          drawing.x = Math.round(Math.max(0, Math.min(floor.width - drawing.width, oldX + dx)));
-          drawing.y = Math.round(Math.max(0, Math.min(floor.height - drawing.height, oldY + dy)));
-          if (drawing.shape === "rectangle") { shape.setAttribute("x", drawing.x); shape.setAttribute("y", drawing.y); }
-          else { shape.setAttribute("cx", drawing.x + drawing.width / 2); shape.setAttribute("cy", drawing.y + drawing.height / 2); }
-          label.setAttribute("x", drawing.x + drawing.width / 2);
-          label.setAttribute("y", drawing.y + drawing.height / 2);
+          const dx=(e.clientX-startX)*floor.width/rect.width;
+          const dy=(e.clientY-startY)*floor.height/rect.height;
+          if (resizing) {
+            drawing.width=Math.max(20,Math.min(floor.width-before.x,Math.round(before.width+dx)));
+            drawing.height=Math.max(20,Math.min(floor.height-before.y,Math.round(before.height+dy)));
+            if (drawing.shape==="circle") {
+              const diameter=Math.min(drawing.width,drawing.height);
+              drawing.width=diameter;drawing.height=diameter;
+            }
+          } else {
+            drawing.x=Math.round(Math.max(0,Math.min(floor.width-drawing.width,before.x+dx)));
+            drawing.y=Math.round(Math.max(0,Math.min(floor.height-drawing.height,before.y+dy)));
+          }
+          changed=true;paint();
         }
         function stop() {
-          document.removeEventListener("pointermove", move);
-          document.removeEventListener("pointerup", stop);
-          delete state.validatedTables[drawing.table_id];
-          invalidate(); render();
+          document.removeEventListener("pointermove",move);
+          document.removeEventListener("pointerup",stop);
+          if (!changed){state.focusedTableId=drawing.table_id;render();return;}
+          void attempt(async()=>{
+            try{await validatePosition();}
+            catch(error){Object.assign(drawing,before);paint();throw error;}
+            committed();
+          });
         }
-        document.addEventListener("pointermove", move);
-        document.addEventListener("pointerup", stop);
+        document.addEventListener("pointermove",move);
+        document.addEventListener("pointerup",stop);
       });
     }
     return svg;
