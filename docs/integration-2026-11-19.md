@@ -4,8 +4,6 @@ This branch is a test assembly only; it does not merge or close source PRs or de
 Only documented, file-and-hunk-specific conflicts were resolved; unknown conflicts are rejected. No generic ours/theirs resolution was used.
 
 ## Cleanly incorporated
-#119 (reviewed conflict resolution)
-#116 (reviewed conflict resolution)
 
 ## Already included by ancestor
 #105
@@ -21,6 +19,8 @@ Only documented, file-and-hunk-specific conflicts were resolved; unknown conflic
 #107
 #113
 #118
+#119
+#116
 #124
 
 ## Not incorporated — conflict or fetch error
