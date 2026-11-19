@@ -15,6 +15,20 @@ For the implemented component/data flow, browser persistence, local-only API tru
 - [Architecture decision record: fork-first solver selection](docs/adr-001-solver-selection.md)
 - [Architecture and trust boundaries](docs/orientation.md) (introduced in PR #100; merge that PR before relying on this link).
 
+## Working browser interface
+
+Screenshots were captured from the running FastAPI browser client with synthetic event registrations. They illustrate the current flow; no guest-identifying production data is included.
+
+| Guest import | Venue editor |
+| --- | --- |
+| ![Guest column mapping](docs/screenshots/guest-import.jpg) | ![Populated table map](docs/screenshots/venue-editor.jpg) |
+
+| Rule configuration | Working seating plan |
+| --- | --- |
+| ![Rule editor](docs/screenshots/rules.jpg) | ![Solver plan](docs/screenshots/working-plan.jpg) |
+
+![Print-preview from the solved plan](docs/screenshots/print-preview.jpg)
+
 ## Installation
 
 Python 3.11+ is required.
