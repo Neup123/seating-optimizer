@@ -22,6 +22,7 @@ async function floor(page,tableId,chairs,tag) {
   await page.locator("#new-table-id").fill(tableId);
   await page.locator("#new-table-capacity").fill(String(chairs));
   if(tag) {
+    await page.locator(".table-advanced summary").click();
     await page.locator(".property-picker").first()
       .locator('input[aria-label="New table property"]').fill(tag);
     await page.locator(".property-picker").first()
@@ -68,10 +69,12 @@ test("golden 120 guest registrations: v2 criteria, API solve, selection, print a
   await page.locator("#layout-file").setInputFiles({
     name:"golden-layout.json",mimeType:"application/json",buffer:Buffer.from(JSON.stringify({floors}))
   });
-  await expect(page.locator("#table-G-0-capacity")).toBeVisible();
+  await expect(page.locator(".table-row-details").first()).toBeVisible();
   for(const [zone,prefix] of [["ground","G"],["first","F"]]) {
     await page.locator("#floor-select").selectOption(zone);
     for(let i=0;i<6;i++){
+      const tableRow=page.locator('form[data-table-id="'+prefix+"-"+i+'"]').locator("..");
+      if(!(await tableRow.evaluate(node=>node.open))) await tableRow.locator("summary").click();
       const input=page.locator('form[data-table-id="'+prefix+"-"+i+'"] input[id="table-'+prefix+"-"+i+'-capacity"]');
       await input.fill("10");await input.blur();
       await expect(page.locator('form[data-table-id="'+prefix+"-"+i+'"] .save-state'))
