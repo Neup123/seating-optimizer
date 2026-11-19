@@ -1,0 +1,72 @@
+name: Assemble open issue PRs without touching main
+on:
+  push:
+    branches: [integration/issues-2026-11-19]
+permissions:
+  contents: write
+jobs:
+  assemble:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Merge issue branches only into this integration branch
+        shell: bash
+        env:
+          TARGET_BRANCH: integration/issues-2026-11-19
+        run: |
+          set -uo pipefail
+          git config user.name "seating-integration-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p docs
+          : > /tmp/integrated
+          : > /tmp/conflicted
+          : > /tmp/contained
+          # Superset branches #111 includes #106 and #113 includes #112.
+          # A clean merge preserves all original commits; never use -X ours/theirs.
+          for pr in 109 117 105 101 100 103 108 104 102 110 111 115 114 107 113 118 119 116 124; do
+            echo "::group::Integrate PR #${pr}"
+            if ! git fetch --no-tags origin "refs/pull/${pr}/head:refs/remotes/issue-pr/${pr}"; then
+              echo "PR #${pr}: fetch failed" | tee -a /tmp/conflicted
+              echo "::endgroup::"
+              continue
+            fi
+            head="refs/remotes/issue-pr/${pr}"
+            if git merge-base --is-ancestor "${head}" HEAD; then
+              echo "#${pr}" >> /tmp/contained
+              echo "Already contained"; echo "::endgroup::"; continue
+            fi
+            if git merge --no-edit --no-ff -m "Integration candidate: PR #${pr}" "${head}"; then
+              echo "#${pr}" >> /tmp/integrated
+              echo "Merged cleanly in integration candidate"
+            else
+              echo "PR #${pr} conflicts in: $(git diff --name-only --diff-filter=U | tr '\n' ' ')" | tee -a /tmp/conflicted
+              git merge --abort
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo "# Integration candidate — 2026-11-19"
+            echo
+            echo "This branch is a test assembly only; it does not merge or close source PRs or deploy."
+            echo "No conflicting changes were resolved by choosing ours/theirs."
+            echo
+            echo "## Cleanly incorporated"
+            cat /tmp/integrated
+            echo
+            echo "## Already included by ancestor"
+            cat /tmp/contained
+            echo
+            echo "## Not incorporated — conflict or fetch error"
+            cat /tmp/conflicted
+            echo
+            echo "The full Python and browser checks must pass on this combined branch before any release merge."
+          } > docs/integration-2026-11-19.md
+          git add docs/integration-2026-11-19.md
+          git commit -m "docs: capture issue integration and unresolved conflicts" || true
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          cat docs/integration-2026-11-19.md | tee -a "${GITHUB_STEP_SUMMARY}"
