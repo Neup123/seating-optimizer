@@ -6,6 +6,11 @@ on:
     branches: [main]
 permissions:
   contents: read
+# Only the latest push for each PR needs the expensive live-browser acceptance.
+# Keep different PRs and protected main runs independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
