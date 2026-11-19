@@ -1215,6 +1215,34 @@ export function createApp(root, api = createGateway()) {
       editor.dataset.tableId = drawing.table_id;
       editor.append(textField("Table name", table?.name || drawing.table_id, () => {},
         { id: "table-" + drawing.table_id + "-name" }));
+      const renameLine = element("div", "row table-rename-row");
+      const renameField = textField("Table ID (changes rule references)",
+        drawing.table_id, () => {}, { id: "table-" + drawing.table_id + "-id" });
+      const renameButton = action("Change table ID", () => attempt(async () => {
+        const requested = renameField.querySelector("input").value;
+        const changed = renamedTableState(state.tables, state.layout,
+          state.rules, state.manualInstructions, drawing.table_id, requested);
+        await api.post("/v2/configurations/validate", {
+          version:2, name:"Renamed venue", zones:state.zones,
+          tables:changed.tables, layout:changed.layout, rules:changed.rules
+        });
+        const nextId = requested.trim();
+        const previousValidated = state.validatedTables[drawing.table_id];
+        state.tables=changed.tables;
+        state.layout=changed.layout;
+        state.rules=changed.rules;
+        state.manualInstructions=changed.instructions;
+        delete state.validatedTables[drawing.table_id];
+        if (previousValidated) state.validatedTables[nextId]=true;
+        state.focusedTableId=nextId;
+        if(state.reassignPlaceType==="table"&&state.reassignPlaceId===drawing.table_id)
+          state.reassignPlaceId=nextId;
+        invalidate();
+        announce("Renamed table ID " + drawing.table_id + " to " + nextId +
+          ". Linked rules and manual directions were updated.");
+      }), "secondary small", "rename-table-" + drawing.table_id);
+      renameLine.append(renameField, renameButton);
+      editor.append(renameLine);
       const fields = element("div", "grid three");
       const definitions = [
         ["capacity", "Chairs", table?.capacity, 1],
@@ -1250,6 +1278,8 @@ export function createApp(root, api = createGateway()) {
         indicator.textContent="Editing draft";indicator.classList.add("unsaved");
       });
       editor.addEventListener("change",e=>{
+        // Stable table-ID renames are an explicit, validated transaction.
+        if(e.target.id==="table-"+drawing.table_id+"-id")return;
         if(e.target.matches('input,select'))editor.requestSubmit();
       });
       const remove = action("Remove", () => {
