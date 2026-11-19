@@ -118,6 +118,15 @@ def _split_term(r: GenericRule, c: FixedContext) -> int:
                            for places in c.group_tables.values())
 
 
+def _split_mixing_term(r: GenericRule, c: FixedContext) -> int:
+    return -r.weight * sum(
+        sum(other!=gid and table_id in other_tables
+            for other,other_tables in c.group_tables.items())
+        for gid,places in c.group_tables.items() if len(places)>1
+        for table_id in places
+    )
+
+
 def _table_pattern(r: GenericRule, c: FixedContext) -> int:
     sign = 1 if r.polarity == "reward" else -1
     return sign * r.weight * sum(
@@ -184,6 +193,7 @@ def _no_points(r: GenericRule, c: FixedContext) -> int:
 
 SCORERS: dict[tuple[str, str], Callable[[GenericRule, FixedContext], int]] = {
     ("intra", "split_term"): _split_term,
+    ("intra", "split_mixing_term"): _split_mixing_term,
     ("intra", "own_attribute_grouping"): _own_attribute_grouping,
     ("inter", "pair_relation"): _pair_relation,
     ("inter", "criterion_pairs"): _criterion_pairs,

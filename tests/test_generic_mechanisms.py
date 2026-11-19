@@ -40,7 +40,7 @@ def test_registry_catalog_and_cp_builders_are_exhaustive():
     catalog = mechanism_catalog()
     identities = {(x["engine"], x["mechanism"]) for x in catalog}
     assert identities == set(BUILDERS) == set(SCORERS)
-    assert len(identities) == 13
+    assert len(identities) == 14
 
 
 @pytest.mark.parametrize("polarity,expected", [("reward", 105), ("penalty", -35)])
