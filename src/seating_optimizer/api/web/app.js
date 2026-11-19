@@ -495,7 +495,7 @@ export function createApp(root, api = createGateway()) {
       session_id: state.sessionId,
       zones: state.zones.map(z => ({ id: z.id, name: z.name })),
       tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id,
-        capacity: Number(t.capacity), properties: [...(t.properties || [])],
+        capacity: Number(t.capacity), name: t.name || null, properties: [...(t.properties || [])],
         small_group_priority: Boolean(t.small_group_priority) })),
       guests: state.guests,
       rules: state.rules,
@@ -1097,9 +1097,10 @@ export function createApp(root, api = createGateway()) {
       if (!place) return announce("No non-overlapping space for this table. Move or resize an existing table, or enlarge the floor.", true);
       const { x, y } = place;
       const small_group_priority = priorityInput.checked;
-      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
+      state.tables.push({ id, zone_id: layout.zone_id, capacity, name: id, properties, small_group_priority });
       layout.tables.push({ table_id: id, x, y, width, height, shape });
       syncDrawingMetadata(state.tables, state.layout);
+      state.focusedTableId = id;
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -1109,7 +1110,8 @@ export function createApp(root, api = createGateway()) {
       const table = state.tables.find(t => t.id === drawing.table_id);
       const editor = element("form", "table-editor");
       editor.dataset.tableId = drawing.table_id;
-      editor.append(element("h3", "", drawing.table_id));
+      editor.append(textField("Table name", table?.name || drawing.table_id, () => {},
+        { id: "table-" + drawing.table_id + "-name" }));
       const fields = element("div", "grid three");
       const definitions = [
         ["capacity", "Chairs", table?.capacity, 1],
@@ -1178,7 +1180,9 @@ export function createApp(root, api = createGateway()) {
         const {capacity: _tableCapacity, ...drawingFields}=next;
         const proposedDrawing = {...drawing,...drawingFields,shape,properties:[...properties],
           small_group_priority:priorityInput.checked};
-        const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
+        const proposedTable = {...table,capacity:next.capacity,
+          name: editor.querySelector('[id="table-' + drawing.table_id + '-name"]').value.trim() || drawing.table_id,
+          properties:[...properties],
           small_group_priority:priorityInput.checked};
         const candidate = {
           floors:state.layout.floors.map(floor=>({
@@ -1259,7 +1263,7 @@ export function createApp(root, api = createGateway()) {
       label.setAttribute("fill", "#154b5a");
       label.setAttribute("font-size", "15");
       label.setAttribute("font-weight", "700");
-      label.textContent = drawing.table_id;
+      label.textContent = state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id;
       g.append(shape,label); svg.append(g);
       g.addEventListener("keydown", event => {
         const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
