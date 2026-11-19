@@ -4,6 +4,8 @@
 
 The approved [build brief](docs/build-plan.md) is the authoritative project plan across all phases.
 
+For the implemented component/data flow, browser persistence, local-only API trust boundary, and verification workflow, see the [architecture and operational boundaries](docs/orientation.md).
+
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
 ## Installation
