@@ -59,6 +59,44 @@ export function nextFreeTablePosition(floor, width, height, gap = 8) {
   return null;
 }
 
+/** Atomically rekey only fields whose schema represents a TABLE reference.
+ * Do not replace arbitrary strings: labels and criteria may coincidentally
+ * contain the same text, and must not be silently altered.
+ */
+export function renamedTableState(tables, layout, rules, instructions, oldId, newId) {
+  const nextId = String(newId || "").trim();
+  if (!nextId || nextId === oldId || tables.some(t => t.id === nextId))
+    throw Error("Choose a new, unique table ID.");
+  if (!tables.some(t => t.id === oldId))
+    throw Error("The table to rename no longer exists.");
+  const copy = {
+    tables: deepCopy(tables), layout: deepCopy(layout),
+    rules: deepCopy(rules), instructions: deepCopy(instructions || [])
+  };
+  for (const t of copy.tables) if (t.id === oldId) t.id = nextId;
+  for (const floor of copy.layout.floors || [])
+    for (const drawing of floor.tables || [])
+      if (drawing.table_id === oldId) drawing.table_id = nextId;
+  for (const rule of copy.rules) {
+    if (rule.table === oldId) rule.table = nextId;
+    if (rule.parameters?.table === oldId) rule.parameters.table = nextId;
+    if (rule.legacy_source?.parameters?.table === oldId)
+      rule.legacy_source.parameters.table = nextId;
+    for (const tier of rule.tiers || []) {
+      if (Array.isArray(tier.tables))
+        tier.tables = tier.tables.map(id => id === oldId ? nextId : id);
+    }
+  }
+  for (const instruction of copy.instructions) {
+    if (instruction.place_type === "table" && instruction.place_id === oldId)
+      instruction.place_id = nextId;
+    if (instruction.guest_tables) for (const [guestId, tableId]
+      of Object.entries(instruction.guest_tables))
+      if (tableId === oldId) instruction.guest_tables[guestId] = nextId;
+  }
+  return copy;
+}
+
 function syncDrawingMetadata(tables, layout, from = "table") {
   // One metadata mapping for import, edits, templates and solver submissions.
   // Table owns scoring metadata. A new portable layout is the only input
