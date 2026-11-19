@@ -719,3 +719,17 @@ test("rename table ID requires explicit server validation and updates the linked
     payload.tables.some(t=>t.id==="Welcome")));
   assert.ok($("#table-Welcome-capacity"),"editor selectors rebind to new ID");
 });
+
+test("custom table labels remain consistent between venue and solved workspace",async()=>{
+  const {app,$,root}=await setup();
+  seed(app);
+  app.state.tables[0].name="Near entrance";
+  app.show("map");
+  assert.match($("#map-editor-svg").textContent,/Near entrance/);
+  app.state.plan={...structuredClone(plan),
+    tables:[{...plan.tables[0],name:"Near entrance"}]};
+  app.show("plan");
+  assert.match(root.textContent,/Near entrance \(Table G1\)/);
+  assert.ok($(".working-table-section"),"table still uses the original stable ID");
+  assert.equal($(".working-table-section").dataset.tableId,"G1");
+});
