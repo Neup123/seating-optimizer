@@ -461,7 +461,7 @@ test("F1/U14: 43 guests, seven tables and six migrated rules show the +6 named p
   assert.doesNotMatch($(".plan-details").textContent,/No matching rule records/);
 });
 
-test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mobile panes", async () => {
+test("U4/U19/F3/U38: venue actions have visible names or icon tooltips and focused mobile panes", async () => {
   const {app,$,root}=await setup();
   app.show("import");
   assert.ok($("#guest-file").classList.contains("visually-hidden-file"));
@@ -477,11 +477,12 @@ test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mob
     "delete-template","validate-layout","export-layout","add-floor","add-table"]) {
     const action=$("#"+id);
     assert.ok(action,id+" must exist");
-    assert.ok(action.classList.contains("icon-button"),id+" must be an icon action");
+    assert.ok(action.classList.contains("icon-button") ||
+      action.textContent.trim().length>3,id+" needs a visible name or a recognizable icon");
     assert.ok(action.title.length>4,id+" requires complete tooltip");
     assert.equal(action.getAttribute("aria-label"),action.title);
   }
-  assert.equal($("#add-table").textContent.trim(),"＋");
+  assert.match($("#add-table").textContent,/Add table/);
   assert.equal($("#new-table-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($("#table-G1-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($(".map-layout").dataset.mobilePane,"map");
