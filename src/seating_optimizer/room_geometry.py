@@ -68,6 +68,8 @@ def validate_outline(points: list[Point], width: float, height: float) -> None:
         b = points[(i + 1) % len(points)]
         if abs(a[0] - b[0]) < EPS and abs(a[1] - b[1]) < EPS:
             raise ValueError("Room outline contains a repeated consecutive corner")
+    for i, a in enumerate(points):
+        b = points[(i + 1) % len(points)]
         for j in range(i + 1, len(points)):
             if j == i + 1 or (i == 0 and j == len(points) - 1):
                 continue
