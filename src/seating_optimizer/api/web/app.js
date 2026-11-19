@@ -55,6 +55,7 @@ export function nextFreeTablePosition(floor, width, height, gap = 8) {
     if (!(floor.tables || []).some(other => overlaps(x, y, other))) return { x, y };
   }
   return null;
+}
 
 function syncDrawingMetadata(tables, layout, from = "table") {
   // One metadata mapping for import, edits, templates and solver submissions.
