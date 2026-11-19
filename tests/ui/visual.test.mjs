@@ -693,3 +693,29 @@ test("map resize handle changes dimensions without changing chair capacity", asy
   assert.equal(app.state.tables.find(t=>t.id==="G1").capacity,4);
   assert.equal(app.state.plan,null);
 });
+
+test("rename table ID requires explicit server validation and updates the linked plan inputs",async()=>{
+  let accept=false;
+  const {app,dom,$,root,calls}=await setup(async(path)=>{
+    if(path==="/v2/configurations/validate"&&!accept)throw Error("Rejected table ID change");
+    return {};
+  });
+  seed(app);
+  app.state.rules=[{id:"p1",table:"G1",engine:"venue",mechanism:"locked_assignment"}];
+  app.state.manualInstructions=[{id:"m1",action:"pin",place_type:"table",place_id:"G1"}];
+  app.show("map");
+  setValue($("#table-G1-id"),"Welcome",dom.window);
+  assert.ok(app.state.tables.some(t=>t.id==="G1"),"typing does not rekey");
+  click($("#rename-table-G1"));
+  await until(()=>root.textContent.includes("Rejected table ID change"));
+  assert.ok(app.state.tables.some(t=>t.id==="G1"),"failed validation preserves original ID");
+  accept=true;
+  click($("#rename-table-G1"));
+  await until(()=>app.state.tables.some(t=>t.id==="Welcome"));
+  assert.equal(app.state.layout.floors[0].tables[0].table_id,"Welcome");
+  assert.equal(app.state.rules[0].table,"Welcome");
+  assert.equal(app.state.manualInstructions[0].place_id,"Welcome");
+  assert.ok(calls.some(([path,payload])=>path==="/v2/configurations/validate" &&
+    payload.tables.some(t=>t.id==="Welcome")));
+  assert.ok($("#table-Welcome-capacity"),"editor selectors rebind to new ID");
+});
