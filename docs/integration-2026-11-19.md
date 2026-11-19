@@ -1,9 +1,11 @@
 # Integration candidate — 2026-11-19
 
 This branch is a test assembly only; it does not merge or close source PRs or deploy.
-No conflicting changes were resolved by choosing ours/theirs.
+Only documented, file-and-hunk-specific conflicts were resolved; unknown conflicts are rejected. No generic ours/theirs resolution was used.
 
 ## Cleanly incorporated
+#114 (reviewed conflict resolution)
+#124 (reviewed conflict resolution)
 
 ## Already included by ancestor
 #105
@@ -20,9 +22,7 @@ No conflicting changes were resolved by choosing ours/theirs.
 #118
 
 ## Not incorporated — conflict or fetch error
-PR #114 conflicts in: tests/ui/visual.test.mjs 
-PR #119 conflicts in: src/seating_optimizer/api/web/app.js src/seating_optimizer/generic_cp.py src/seating_optimizer/generic_solver.py src/seating_optimizer/importer.py src/seating_optimizer/models.py src/seating_optimizer/solver.py 
+PR #119 conflicts in: src/seating_optimizer/solver.py 
 PR #116 conflicts in: src/seating_optimizer/api/web/app.js 
-PR #124 conflicts in: src/seating_optimizer/api/web/app.js 
 
 The full Python and browser checks must pass on this combined branch before any release merge.
