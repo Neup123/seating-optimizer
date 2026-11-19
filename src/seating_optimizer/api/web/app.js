@@ -1223,9 +1223,11 @@ export function createApp(root, api = createGateway()) {
       const renameField = textField("Table ID (changes rule references)",
         state.pendingTableRename[drawing.table_id] ?? drawing.table_id, () => {},
         { id: "table-" + drawing.table_id + "-id" });
-      renameField.querySelector("input").addEventListener("input", event => {
+      const preserveRenameDraft = event => {
         state.pendingTableRename[drawing.table_id] = event.target.value;
-      });
+      };
+      renameField.querySelector("input").addEventListener("input", preserveRenameDraft);
+      renameField.querySelector("input").addEventListener("change", preserveRenameDraft);
       const renameButton = action("Change table ID", () => attempt(async () => {
         const requested = renameField.querySelector("input").value;
         const changed = renamedTableState(state.tables, state.layout,
