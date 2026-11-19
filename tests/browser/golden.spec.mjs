@@ -356,6 +356,7 @@ test("U38/F3: mobile venue, rules and plan use focused panes with aligned contro
   await expect(page.locator(".venue-table-settings")).toBeVisible();
   await page.locator("#new-table-id").fill("M1");
   await page.locator("#new-table-capacity").fill("4");
+  await page.locator(".table-advanced summary").click();
   const checkbox=page.locator("#new-table-small-priority");
   const priorityText=page.locator(".priority-checkbox").first().locator("span");
   const [checkBox,labelBox]=await Promise.all([checkbox.boundingBox(),priorityText.boundingBox()]);
