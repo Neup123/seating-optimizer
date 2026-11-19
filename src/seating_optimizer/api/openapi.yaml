@@ -1042,6 +1042,7 @@ components:
       required: [table_id, zone_id, capacity, occupied, empty_seats]
       properties:
         table_id: {type: string}
+        name: {type: [string, 'null'], description: Human-readable table label; table_id remains the immutable solve reference.}
         zone_id: {type: string}
         capacity: {type: integer}
         occupied: {type: integer}
