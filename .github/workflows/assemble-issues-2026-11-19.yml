@@ -44,13 +44,19 @@ jobs:
               echo "#${pr}" >> /tmp/integrated
               echo "Merged cleanly in integration candidate"
             else
-              echo "PR #${pr} conflicts in: $(git diff --name-only --diff-filter=U | tr '\n' ' ')" | tee -a /tmp/conflicted
-              for file in $(git diff --name-only --diff-filter=U); do
-                echo "::group::Conflict details: PR #${pr} — ${file}"
-                awk '/^<<<<<<< /{show=1} show{print NR ": " $0} /^>>>>>>> /{show=0}' "$file" | head -n 180
-                echo "::endgroup::"
-              done
-              git merge --abort
+              if python scripts/resolve_issue_merges.py "${pr}"; then
+                git commit --no-edit
+                echo "#${pr} (reviewed conflict resolution)" >> /tmp/integrated
+                echo "Resolved only explicitly whitelisted semantic conflicts"
+              else
+                echo "PR #${pr} conflicts in: $(git diff --name-only --diff-filter=U | tr '\n' ' ')" | tee -a /tmp/conflicted
+                for file in $(git diff --name-only --diff-filter=U); do
+                  echo "::group::Conflict details: PR #${pr} — ${file}"
+                  awk '/^<<<<<<< /{show=1} show{print NR ": " $0} /^>>>>>>> /{show=0}' "$file" | head -n 180
+                  echo "::endgroup::"
+                done
+                git merge --abort
+              fi
             fi
             echo "::endgroup::"
           done
@@ -58,7 +64,7 @@ jobs:
             echo "# Integration candidate — 2026-11-19"
             echo
             echo "This branch is a test assembly only; it does not merge or close source PRs or deploy."
-            echo "No conflicting changes were resolved by choosing ours/theirs."
+            echo "Only documented, file-and-hunk-specific conflicts were resolved; unknown conflicts are rejected. No generic ours/theirs resolution was used."
             echo
             echo "## Cleanly incorporated"
             cat /tmp/integrated
