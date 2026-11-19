@@ -483,6 +483,13 @@ test("U4/U19/F3/U38: venue actions have visible names or icon tooltips and focus
     assert.equal(action.getAttribute("aria-label"),action.title);
   }
   assert.match($("#add-table").textContent,/Add table/);
+  for(const [id,label] of [["save-template","Save template"],
+    ["load-template","Load template"],["export-layout","Export layout"],
+    ["configuration-file-trigger","Import configuration"],
+    ["layout-file-trigger","Import layout"]]){
+    assert.match($("#"+id).textContent,new RegExp(label),
+      id+" must explain its venue action without requiring a tooltip");
+  }
   assert.equal($("#new-table-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($("#table-G1-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($(".map-layout").dataset.mobilePane,"map");
