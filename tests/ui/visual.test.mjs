@@ -247,6 +247,9 @@ test("rule card name is the only label; delete and toggles are compact icon acti
   checkbox.checked=false;checkbox.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
   assert.equal(app.state.rules[0].enabled,false);
   click($("#delete-rule-0"));
+  assert.equal(app.state.rules.length,1);
+  assert.ok($("#confirm-rule-delete-0"),"Removing a rule requires confirmation");
+  click($("#confirm-rule-delete-0"));
   assert.equal(app.state.rules.length,0);
 });
 test("priority mark is mode mark and tiered preferences use same accordion workflow",async()=>{

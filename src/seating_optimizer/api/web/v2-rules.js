@@ -441,6 +441,21 @@ export function renderGenericRules(state, actions) {
       state.expandedRuleId=open?null:rule.id;changed(false);
     },"icon-button expand-rule");
     expander.setAttribute("aria-expanded",String(open));
+    expander.addEventListener("keydown",event=>{
+      if(event.key==="ArrowDown" || event.key==="ArrowUp"){
+        event.preventDefault();
+        const expanders=[...document.querySelectorAll(".expand-rule")];
+        const index=expanders.indexOf(expander);
+        expanders[index+(event.key==="ArrowDown"?1:-1)]?.focus();
+      }else if(event.key==="Escape" && open){
+        event.preventDefault();
+        state.expandedRuleId=null;
+        changed(false);
+        const restored=[...document.querySelectorAll(".rule-accordion")].find(
+          node=>node.dataset.ruleId===rule.id);
+        restored?.querySelector(".expand-rule")?.focus();
+      }
+    });
     const headline=node("div","rule-headline");
     headline.append(node("strong","",rule.name || "Unnamed consideration"),
       node("span","rule-summary",summary(rule)));
@@ -452,10 +467,34 @@ export function renderGenericRules(state, actions) {
     checkbox.addEventListener("change",()=>{rule.enabled=checkbox.checked;changed();});
     switchLabel.append(checkbox);
     const remove=button("🗑","Remove "+rule.name,()=>{
-      state.rules.splice(index,1);if(open)state.expandedRuleId=null;changed();
+      if(state.pendingRuleDeleteId!==rule.id){
+        state.pendingRuleDeleteId=rule.id;changed(false);return;
+      }
+      state.rules.splice(index,1);state.pendingRuleDeleteId=null;
+      if(open)state.expandedRuleId=null;changed();
     },"icon-button danger-icon","delete-rule-"+index);
+    remove.addEventListener("keydown",event=>{
+      if(event.key==="Escape" && state.pendingRuleDeleteId===rule.id){
+        event.preventDefault();state.pendingRuleDeleteId=null;changed(false);
+      }
+    });
     head.append(expander,headline,badge,weight,switchLabel,remove);
     item.append(head);
+    if(state.pendingRuleDeleteId===rule.id){
+      const confirm=line(
+        node("span","problem","Remove "+rule.name+"? This cannot be undone."),
+        button("✓","Confirm removal",()=>{
+          state.rules.splice(index,1);
+          state.pendingRuleDeleteId=null;
+          if(open)state.expandedRuleId=null;
+          changed();
+        },"danger small icon-button","confirm-rule-delete-"+index),
+        button("×","Cancel removal",()=>{
+          state.pendingRuleDeleteId=null;changed(false);
+        },"quiet small icon-button","cancel-rule-delete-"+index)
+      );
+      item.append(confirm);
+    }
     if(open){
       const body=node("div","rule-accordion-body");
       if (!state.guests.length && NEEDS_CRITERION.has(rule.mechanism))
