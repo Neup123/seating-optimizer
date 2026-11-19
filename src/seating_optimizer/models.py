@@ -38,6 +38,8 @@ class Table(Model):
     id: str
     zone_id: str
     capacity: int = Field(gt=0)
+    # Rename the display without changing stable IDs referenced by rules/exports.
+    name: str | None = Field(default=None, min_length=1)
     properties: list[str] = Field(default_factory=list)
     small_group_priority: bool = False
 
