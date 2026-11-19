@@ -400,6 +400,8 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
+    state.editingRoomOutline = false;
+    state.roomDraft = null;
     syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
@@ -1048,7 +1050,12 @@ export function createApp(root, api = createGateway()) {
     const panel = card("Tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id));
     panel.append(selectField("Floor", state.layout.floors.map(f => [f.zone_id,
       state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
-      state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
+      state.focusedFloor, value => {
+        state.focusedFloor = value;
+        state.editingRoomOutline = false;
+        state.roomDraft = null;
+        render();
+      }, { id: "floor-select" }));
 
     const mobileTabs = element("div", "venue-mobile-tabs segmented");
     mobileTabs.setAttribute("role", "group");
