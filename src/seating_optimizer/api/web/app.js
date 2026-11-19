@@ -1264,7 +1264,7 @@ export function createApp(root, api = createGateway()) {
     if (state.advancedSolver) advanced.open = true;
     advanced.addEventListener("toggle", () => { state.advancedSolver = advanced.open; saveSession(); });
     advanced.append(element("summary", "", "Advanced solver settings"),
-      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
+      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); render(); },
         { id: "time-limit", type: "number", min: 0.1, step: 0.1 }));
     controls.append(row(
       action("Optimize seating", () => attempt(async () => {
