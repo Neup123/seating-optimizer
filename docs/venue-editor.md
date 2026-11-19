@@ -4,7 +4,9 @@
 
 Open **Venue map**, create or select the floor, and click **Add table to floor**. The form starts with a proposed unused ID (editable) and ten chairs; the shape and scoring preferences are under **Shape and preferences**. New tables are assigned a non-overlapping location automatically, including within an optional room polygon. If no free position can fit their full footprint, adjust the layout rather than allowing an overlapping/out-of-room table.
 
-The table list is compact and searchable. Click a row to expand its editor. **Table name** is a human-facing label shown in the map and table list. Renaming it **never changes the stable Table ID** used by hard pins, rules, manual instructions, imports, and exports. The old ID continues to work.
+The table list is compact and searchable. Click a row to expand its editor. **Table name** is a human-facing label shown in the map and table list. Editing this name never changes the stable Table ID used by pins, rules, manual instructions, imports, and exports.
+
+An advanced **Change table ID** action is also available when the actual identifier must change. It is deliberately an explicit transaction, not a background autosave: the server validates a candidate configuration before any change is committed. All schema-defined table references (locked assignments, table-tier preferences, legacy pin rules, manual place IDs and guest-table mappings) are rewritten to the new ID together with the drawing and table object. If validation fails, the old ID and references remain intact. Saved independent venue templates are snapshots and are not silently overwritten by renaming an active session.
 
 ## Move or resize a table
 
