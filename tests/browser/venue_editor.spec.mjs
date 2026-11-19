@@ -40,4 +40,9 @@ test("real venue editor: compact defaults, rename, resize and persisted room out
   await expect(page.locator("#clear-room-outline")).toBeVisible();
   await expect(page.locator(".room-boundary")).toHaveCount(1);
   await expect(page.locator(".table-row-heading")).toContainText("Near windows");
+  await page.locator("#table-T1-id").fill("Main");
+  await page.locator("#rename-table-T1").click();
+  await expect(page.locator("#table-Main-capacity")).toBeVisible();
+  await expect(page.locator(".table-row-heading")).toContainText("Near windows");
+  await expect(page.locator('[data-table-id="Main"]')).toHaveCount(2);
 });
