@@ -1,5 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
+import { tableFitsRoom } from "./room-outline.js";
 import { renderGenericRules, tablePropertyVocabulary, displayRuleName, describeRuleEffect } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
@@ -52,7 +53,8 @@ export function nextFreeTablePosition(floor, width, height, gap = 8) {
       y < oy + oh + gap && y + height + gap > oy;
   };
   for (const y of axis(maxY)) for (const x of axis(maxX)) {
-    if (!(floor.tables || []).some(other => overlaps(x, y, other))) return { x, y };
+    if (!(floor.tables || []).some(other => overlaps(x, y, other)) &&
+        tableFitsRoom(floor.room_outline, x, y, width, height)) return { x, y };
   }
   return null;
 }
