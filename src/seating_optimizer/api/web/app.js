@@ -73,7 +73,10 @@ export function renamedTableState(tables, layout, rules, instructions, oldId, ne
     tables: deepCopy(tables), layout: deepCopy(layout),
     rules: deepCopy(rules), instructions: deepCopy(instructions || [])
   };
-  for (const t of copy.tables) if (t.id === oldId) t.id = nextId;
+  for (const t of copy.tables) if (t.id === oldId) {
+    t.id = nextId;
+    if (!t.name || t.name === oldId) t.name = nextId;
+  }
   for (const floor of copy.layout.floors || [])
     for (const drawing of floor.tables || [])
       if (drawing.table_id === oldId) drawing.table_id = nextId;
