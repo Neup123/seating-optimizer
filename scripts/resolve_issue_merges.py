@@ -75,7 +75,8 @@ def reconcile(pr: int, path: str, ours: str, theirs: str, ordinal: int) -> str:
     if pr == 116 and path.endswith("/api/web/app.js"):
         if ordinal == 1:
             assert "nextFreeTablePosition" in ours and "syncDrawingMetadata" in theirs
-            return ours + "\n" + theirs
+            # The original closing brace was outside the conflict hunk.
+            return ours + "}\n\n" + theirs
         assert ordinal == 2 and "validatedTables" in ours and "syncDrawingMetadata" in theirs
         # Keep server-validated autosave; re-synchronize canonical metadata only
         # after the table/drawing pair has been accepted.
