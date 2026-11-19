@@ -1,6 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
-import { renderGenericRules, tablePropertyVocabulary, displayRuleName } from "./v2-rules.js";
+import { renderGenericRules, tablePropertyVocabulary, displayRuleName, describeRuleEffect } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
@@ -10,7 +10,7 @@ const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Seven days since last saved change.
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
-  "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
+  "guests", "ruleEngine", "ruleMechanism", "ruleQuery", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
   "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
@@ -271,7 +271,7 @@ export function createApp(root, api = createGateway()) {
     return {
       screen: "import", view: "table", viewContent: null, viewError: "",
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
+      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
@@ -1300,15 +1300,38 @@ export function createApp(root, api = createGateway()) {
     });
   }
 
+  function operatorConflictRule(rule) {
+    // The v2 rule formatter is shared with the assignment details panel.
+    if (rule.mechanism) return displayRuleName(rule) + " — " + describeRuleEffect(rule);
+    const p=rule.parameters || {};
+    const name=rule.name?.trim() || ({
+      pin:"Fixed table",zone_restriction:"Floor restriction",
+      table_property_need:"Table requirement",pair:"Together/apart requirement",
+      capacity:"Chair capacity"
+    }[rule.shape] || "Mandatory seating requirement");
+    let effect="";
+    if (rule.shape==="pin") effect="Keep " + p.target + " at table " + p.table;
+    else if (rule.shape==="zone_restriction") effect="Seat matching guests (" +
+      [p.attribute,p.value].filter(Boolean).join(" = ") + ") only on " +
+      (p.zone || (p.allowed_zones || []).join(", "));
+    else if (rule.shape==="table_property_need") effect="Provide table property " + p.property;
+    else if (rule.shape==="pair") effect="Keep " + p.left + " and " + p.right +
+      (p.relation==="apart" ? " apart" : " together");
+    return name + (rule.description?.trim() ? " — " + rule.description.trim() :
+      effect ? " — " + effect : "");
+  }
   function explainRuleRefs(value) {
-    // Keep the server's machine identifiers intact in Plan/JSON, but show
-    // the operator's name next to them in human-facing diagnostics.
-    let output = String(value);
-    for (const rule of state.rules) {
-      if (!rule?.name) continue;
-      output = output.replaceAll("rule:" + rule.id, rule.name);
+    // Machine IDs remain in API/JSON; only the UI is interpreted.
+    let output=String(value);
+    const ordered=[...state.rules].sort((a,b)=>String(b.id).length-String(a.id).length);
+    for (const rule of ordered) {
+      const ref="rule:"+rule.id;
+      if (!output.includes(ref)) continue;
+      const friendly=operatorConflictRule(rule);
+      output=output.replaceAll(ref+" ("+(rule.name || "")+")",friendly);
+      output=output.replaceAll(ref,friendly);
     }
-    return output.replace(/rule:[\w.-]+/g, "an unnamed consideration");
+    return output.replace(/rule:[\w.-]+/g,"An unidentified required consideration");
   }
   function renderPlan() {
     const area = element("div");
@@ -1490,10 +1513,15 @@ export function createApp(root, api = createGateway()) {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
         status.append(element("h3", "", "Why no seating plan fits"));
+        status.append(element("p", "muted", "These requirements explain the conflict but are not necessarily a minimal set. Edit a requirement or adjust table capacity, then solve again."));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
           const line = element("div","problem conflict-row");
           line.append(element("span","",explainRuleRefs(explanation)));
+          const diagnostics=element("details","rule-diagnostics");
+          diagnostics.append(element("summary","","Technical reference"),
+            element("code","",String(explanation)));
+          line.append(diagnostics);
           const match = state.rules.find(rule => explanation.includes(rule.id) ||
             (rule.name && explanation.includes(rule.name)));
           if (match) {
