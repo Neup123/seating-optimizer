@@ -291,7 +291,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", editingRoomOutline: false, roomDraft: null, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -1059,6 +1059,47 @@ export function createApp(root, api = createGateway()) {
       mobileTabs.append(tab);
     }
     panel.append(mobileTabs);
+    const roomTools = element("div", "venue-outline-tools");
+    const saveOutline = async outline => {
+      const candidate = {floors: state.layout.floors.map(floor =>
+        floor.zone_id === layout.zone_id ? {...floor, room_outline: outline} : floor)};
+      // The same backend schema checks polygons, walls and whole table footprints
+      // for API imports, saved templates, and direct UI edits.
+      await api.post("/v1/layouts/import", {
+        files: [{filename:"layout.json", content_base64:encodeText(JSON.stringify(candidate))}],
+        zones:state.zones, tables:state.tables
+      });
+      layout.room_outline = outline;
+      state.editingRoomOutline = false;
+      state.roomDraft = null;
+      invalidate();
+      announce(outline ? "Room outline validated and saved." : "Rectangular room restored.");
+    };
+    if (state.editingRoomOutline) {
+      roomTools.append(
+        element("span", "muted", "Click room corners in order; at least three are required."),
+        action("Undo corner", () => { state.roomDraft?.pop(); render(); },
+          "secondary small", "undo-room-corner"),
+        action("Save outline", () => attempt(async () => {
+          if (!state.roomDraft || state.roomDraft.length < 3)
+            throw Error("Draw at least three room corners before saving.");
+          await saveOutline([...state.roomDraft]);
+        }), "primary small", "save-room-outline"),
+        action("Cancel", () => { state.editingRoomOutline=false;state.roomDraft=null;render(); },
+          "quiet small", "cancel-room-outline")
+      );
+    } else {
+      roomTools.append(
+        action("Draw room outline", () => {
+          state.editingRoomOutline=true;state.roomDraft=[];render();
+        }, "secondary small", "start-room-outline")
+      );
+      if (layout.room_outline) roomTools.append(
+        action("Use rectangular floor", () => attempt(() => saveOutline(null)),
+          "quiet small", "clear-room-outline")
+      );
+    }
+    panel.append(roomTools);
     const split = element("div", "map-layout");
     split.dataset.mobilePane = state.mobileVenuePane || "map";
     const canvas = element("div", "map-canvas");
@@ -1269,6 +1310,33 @@ export function createApp(root, api = createGateway()) {
     const bg = document.createElementNS(SVG_NS, "rect");
     bg.setAttribute("width", String(floor.width)); bg.setAttribute("height", String(floor.height));
     bg.setAttribute("fill", "#f5f8fa"); svg.append(bg);
+    const outline = state.editingRoomOutline ? state.roomDraft : floor.room_outline;
+    if (outline?.length) {
+      const polygon = document.createElementNS(SVG_NS,
+        outline.length >= 3 ? "polygon" : "polyline");
+      polygon.setAttribute("points", outline.map(point => point.join(",")).join(" "));
+      polygon.setAttribute("class", "room-boundary");
+      polygon.setAttribute("fill", outline.length >= 3 ? "white" : "none");
+      polygon.setAttribute("pointer-events", "none");
+      svg.append(polygon);
+      for (const [x,y] of outline) {
+        const corner=document.createElementNS(SVG_NS,"circle");
+        corner.setAttribute("cx", String(x));corner.setAttribute("cy",String(y));
+        corner.setAttribute("r", "4");corner.setAttribute("class","room-corner");
+        svg.append(corner);
+      }
+    }
+    bg.addEventListener("click", event => {
+      if (!state.editingRoomOutline) return;
+      const bounds = svg.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const x = Math.max(0, Math.min(floor.width,
+        Math.round((event.clientX - bounds.left) * floor.width / bounds.width)));
+      const y = Math.max(0, Math.min(floor.height,
+        Math.round((event.clientY - bounds.top) * floor.height / bounds.height)));
+      state.roomDraft.push([x, y]);
+      render();
+    });
     for (const drawing of floor.tables) {
       const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
       g.setAttribute("tabindex","0");
