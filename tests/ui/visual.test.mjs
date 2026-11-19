@@ -506,7 +506,7 @@ test("F2: network failure retains the last successful plan after edited inputs i
   assert.equal(app.state.planStale,true);
   assert.match(root.textContent,/Previous seating plan — needs recalculation/);
   assert.match(root.textContent,/Table G1/);
-  assert.match(root.textContent,/Family One/);
+  assert.match(root.textContent,/Table G1 — Party \(2\)/);
   assert.match($("#notice").textContent,/503/);
   assert.equal($("#download-json"),null);
   assert.equal($(".plan-entry"),null);
@@ -547,7 +547,7 @@ test("stale seating remains visible but read-only after changing inputs and relo
   assert.equal(app.state.plan,null);
   assert.equal(app.state.planStale,true);
   assert.ok($("#stale-plan-preview"));
-  assert.match($("#stale-plan-preview").textContent,/Alice|Family One/);
+  assert.match($("#stale-plan-preview").textContent,/Table G1 — Party \(2\)/);
   assert.equal($("#download-json"),null);
   app.show("rules");app.show("plan");
   assert.ok($("#stale-plan-preview"),"navigating cannot silently discard the preview");
