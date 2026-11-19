@@ -73,8 +73,16 @@ def reconcile(pr: int, path: str, ours: str, theirs: str, ordinal: int) -> str:
             )
 
     if pr == 116 and path.endswith("/api/web/app.js"):
-        assert "nextFreeTablePosition" in ours and "syncDrawingMetadata" in theirs
-        return ours + "\n" + theirs
+        if ordinal == 1:
+            assert "nextFreeTablePosition" in ours and "syncDrawingMetadata" in theirs
+            return ours + "\n" + theirs
+        assert ordinal == 2 and "validatedTables" in ours and "syncDrawingMetadata" in theirs
+        # Keep server-validated autosave; re-synchronize canonical metadata only
+        # after the table/drawing pair has been accepted.
+        return ours.replace(
+            "Object.assign(drawing,proposedDrawing);",
+            "Object.assign(drawing,proposedDrawing);\n          syncDrawingMetadata(state.tables, state.layout);"
+        )
 
     if pr == 124 and path.endswith("/api/web/app.js"):
         assert "ruleQuery" in ours and "planStale" in theirs
@@ -103,6 +111,11 @@ def main() -> int:
             return reconcile(pr, path, match["ours"], match["theirs"], count)
 
         rewritten = CONFLICT.sub(resolve_match, original)
+        if pr == 119 and path.endswith("/solver.py"):
+            rewritten = rewritten.replace(
+                "len(members) > max(tables[j].capacity for j in admissible_by_group[gid])",
+                "chairs_needed(members) > max(tables[j].capacity for j in admissible_by_group[gid])"
+            )
         assert count >= 1, f"No recognized conflict markers in {path}"
         assert not re.search(r"(?m)^(<<<<<<< |=======|>>>>>>> )", rewritten), (
             f"Conflict markers remain in {path}"
