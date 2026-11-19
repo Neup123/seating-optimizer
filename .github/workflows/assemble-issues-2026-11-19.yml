@@ -26,9 +26,9 @@ jobs:
           : > /tmp/integrated
           : > /tmp/conflicted
           : > /tmp/contained
-          # Superset branches #111 includes #106 and #113 includes #112.
+          # Workflow-changing PRs #108/#109/#117 cannot be merged by GITHUB_TOKEN\n          # (missing workflows permission). Integrate those via an owner-authorized path.\n          # Superset branches #111 includes #106 and #113 includes #112.
           # A clean merge preserves all original commits; never use -X ours/theirs.
-          for pr in 109 117 105 101 100 103 108 104 102 110 111 115 114 107 113 118 119 116 124; do
+          for pr in 105 101 100 103 104 102 110 111 115 114 107 113 118 119 116 124; do
             echo "::group::Integrate PR #${pr}"
             if ! git fetch --no-tags origin "refs/pull/${pr}/head:refs/remotes/issue-pr/${pr}"; then
               echo "PR #${pr}: fetch failed" | tee -a /tmp/conflicted
