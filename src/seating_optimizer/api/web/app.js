@@ -280,7 +280,7 @@ export function createApp(root, api = createGateway()) {
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "", error: false, retryAction: null,
-      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: ""
+      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: "", validatedTables: {}
     };
   }
   const state = emptySession();
@@ -1092,7 +1092,8 @@ export function createApp(root, api = createGateway()) {
       const save = element("button", "secondary small icon-button", "✓");
       save.type = "submit"; save.title="Save table";save.setAttribute("aria-label",save.title);
       save.hidden=true;
-      const indicator=element("span","save-state","✓ Saved locally");
+      const indicator=element("span","save-state",
+        state.validatedTables[drawing.table_id] ? "✓ Server validated" : "✓ Saved locally");
       editor.addEventListener("input",e=>{
         if(e.target.type==="hidden")return;
         indicator.textContent="Editing draft";indicator.classList.add("unsaved");
@@ -1107,30 +1108,67 @@ export function createApp(root, api = createGateway()) {
       }, "danger small icon-button");
       remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
-      editor.addEventListener("submit", event => {
+      editor.addEventListener("submit", async event => {
         event.preventDefault();
         const next = {};
         for (const [key] of definitions) {
           const val = editor.querySelector('[id="table-' + drawing.table_id + "-" + key + '"]').value;
           next[key] = Number(val);
         }
+        const invalid = message => {
+          indicator.textContent="Not saved — "+message;
+          indicator.classList.add("unsaved");
+        };
         if (["x","y","width","height"].some(k => !Number.isFinite(next[k])))
-          return announce("Table drawing coordinates must be finite numbers.", true);
+          return invalid("Table drawing coordinates must be finite numbers.");
         if (!Number.isInteger(next.capacity) || next.capacity < 1)
-          return announce("Chair capacity must be a positive integer.", true);
+          return invalid("Chair capacity must be a positive integer.");
         let properties;
         try {
           properties = parseTableProperties(editor.querySelector(
             '[id="table-' + drawing.table_id + '-properties"]').value);
-        } catch (error) { return announce(error.message, true); }
-        table.capacity = next.capacity;
-        table.properties = properties;
-        table.small_group_priority = priorityInput.checked;
-        drawing.properties = [...properties];
-        drawing.small_group_priority = priorityInput.checked;
-        ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
-        drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");
+        } catch (error) { return invalid(error.message); }
+        const shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
+        const {capacity: _tableCapacity, ...drawingFields}=next;
+        const proposedDrawing = {...drawing,...drawingFields,shape,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const candidate = {
+          floors:state.layout.floors.map(floor=>({
+            ...floor,tables:floor.tables.map(old=>old.table_id===drawing.table_id?
+              proposedDrawing:old)
+          }))
+        };
+        const candidateTables=state.tables.map(old=>old.id===table.id?proposedTable:old);
+        // A freshly imported map can contain many tables whose chair counts
+        // have not yet been assigned. Validate only when the whole venue can
+        // satisfy the server schema; do not block incremental initial setup.
+        const awaitingCapacities=candidateTables.some(t=>
+          !Number.isInteger(Number(t.capacity)) || Number(t.capacity)<1);
+        if (awaitingCapacities) {
+          Object.assign(table,proposedTable);
+          Object.assign(drawing,proposedDrawing);
+          delete state.validatedTables[drawing.table_id];
+          invalidate();announce("Saved locally. Finish chair counts for all tables, then validate layout.");
+          return;
+        }
+        indicator.textContent="Validating changes…";
+        indicator.classList.add("unsaved");
+        try {
+          await api.post("/v1/layouts/import",{
+            files:[{filename:"layout.json",content_base64:encodeText(JSON.stringify(candidate))}],
+            zones:state.zones,tables:candidateTables
+          });
+        } catch (error) {
+          indicator.textContent="Not saved — "+friendlyApiError(error);
+          indicator.classList.add("unsaved");
+          return; // Retain the draft fields so the operator can correct them.
+        }
+        Object.assign(table,proposedTable);
+        Object.assign(drawing,proposedDrawing);
+        state.validatedTables[drawing.table_id]=true;
+        invalidate();announce("Saved and validated table " + drawing.table_id + ".");
       });
       list.append(editor);
     }
@@ -1181,6 +1219,7 @@ export function createApp(root, api = createGateway()) {
         event.preventDefault();
         drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
         drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        delete state.validatedTables[drawing.table_id];
         invalidate();render();
         const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
         active?.focus();
@@ -1204,6 +1243,7 @@ export function createApp(root, api = createGateway()) {
         function stop() {
           document.removeEventListener("pointermove", move);
           document.removeEventListener("pointerup", stop);
+          delete state.validatedTables[drawing.table_id];
           invalidate(); render();
         }
         document.addEventListener("pointermove", move);

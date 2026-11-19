@@ -75,7 +75,7 @@ test("golden 120 guest registrations: v2 criteria, API solve, selection, print a
       const input=page.locator('form[data-table-id="'+prefix+"-"+i+'"] input[id="table-'+prefix+"-"+i+'-capacity"]');
       await input.fill("10");await input.blur();
       await expect(page.locator('form[data-table-id="'+prefix+"-"+i+'"] .save-state'))
-        .toContainText("Saved locally");
+        .toContainText(/Saved locally|Server validated/);
     }
   }
   await page.locator("#validate-layout").click();
