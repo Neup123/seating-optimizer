@@ -517,6 +517,9 @@ export function createApp(root, api = createGateway()) {
     }
     catch (error) {
       state.retryAction = task;
+      // The retry/error controls render synchronously. Release the gate first
+      // so an immediate correction click cannot be silently discarded.
+      working = false;
       announce(friendlyApiError(error), true);
     }
     finally { working = false; }
