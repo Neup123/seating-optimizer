@@ -423,6 +423,7 @@ class Compromise(Model):
 
 class TableUsage(Model):
     table_id: str
+    name: str | None = None
     zone_id: str
     capacity: int
     occupied: int
