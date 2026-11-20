@@ -502,9 +502,60 @@ test("F2: network failure retains the last successful plan after edited inputs i
   assert.equal(app.state.plan,null);
   click($("#solve-plan"));
   await until(()=>!!$("#retry-action"));
-  assert.equal(app.state.plan.total_score,8);
-  assert.match(root.textContent,/Solution · FEASIBLE/);
-  assert.match(root.textContent,/Showing the last successful plan/);
+  assert.equal(app.state.plan,null);
+  assert.equal(app.state.planStale,true);
+  assert.match(root.textContent,/Previous seating plan — needs recalculation/);
+  assert.match(root.textContent,/Table G1/);
+  assert.match(root.textContent,/Table G1 — Party \(2\)/);
   assert.match($("#notice").textContent,/503/);
-  assert.ok($(".plan-entry"));
+  assert.equal($("#download-json"),null);
+  assert.equal($(".plan-entry"),null);
+});
+
+test("starting a new session requires a second explicit destructive action; Escape cancels", async () => {
+  const {app,dom,$,root,storage}=await setup();
+  seed(app);app.state.plan=structuredClone(plan);app.show("plan");
+  const original=app.state.sessionId;
+  const reset=$("#new-session");
+  reset.dispatchEvent(new dom.window.KeyboardEvent("keydown",{key:"Enter",bubbles:true}));
+  click(reset);
+  assert.equal(app.state.guests.length,3);
+  assert.equal(app.state.sessionId,original);
+  assert.ok($("#confirm-new-session"));
+  assert.equal(dom.window.document.activeElement.id,"cancel-new-session");
+  assert.ok(storage.getItem("seating-optimizer:session:v2").includes("Alice"));
+  $("#new-session-confirmation").dispatchEvent(new dom.window.KeyboardEvent(
+    "keydown",{key:"Escape",bubbles:true}));
+  assert.equal($("#confirm-new-session"),null);
+  assert.equal(app.state.guests.length,3);
+  click($("#new-session"));
+  click($("#cancel-new-session"));
+  assert.equal(app.state.plan.status,"feasible");
+  click($("#new-session"));
+  click($("#confirm-new-session"));
+  assert.equal(app.state.guests.length,0);
+  assert.equal(app.state.plan,null);
+  assert.equal(app.state.lastGoodPlan,null);
+  assert.equal($("#confirm-new-session"),null);
+  assert.match(root.textContent,/New empty session started/);
+});
+
+test("stale seating remains visible but read-only after changing inputs and reload", async () => {
+  const {app,dom,$,root,storage}=await setup();
+  seed(app);app.state.plan=structuredClone(plan);app.show("plan");
+  setValue($("#time-limit"),"4",dom.window);
+  assert.equal(app.state.plan,null);
+  assert.equal(app.state.planStale,true);
+  assert.ok($("#stale-plan-preview"));
+  assert.match($("#stale-plan-preview").textContent,/Table G1 — Party \(2\)/);
+  assert.equal($("#download-json"),null);
+  app.show("rules");app.show("plan");
+  assert.ok($("#stale-plan-preview"),"navigating cannot silently discard the preview");
+  const saved=storage.getItem("seating-optimizer:session:v2");
+  assert.match(saved,/"planStale":true/);
+  const later=await setup(async()=>({}),{"seating-optimizer:session:v2":saved});
+  later.app.show("plan");
+  assert.ok(later.$("#stale-plan-preview"));
+  assert.equal(later.app.state.plan,null);
+  assert.match(later.root.textContent,/Re-optimize before using or printing/);
 });

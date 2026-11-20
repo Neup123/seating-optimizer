@@ -10,7 +10,7 @@ const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
-  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
+  "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "lastGoodPlan", "planStale", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
   try {
@@ -235,7 +235,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -267,6 +267,7 @@ export function createApp(root, api = createGateway()) {
     if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
   }
   if (["optimal", "feasible"].includes(state.plan?.status)) state.lastGoodPlan = deepCopy(state.plan);
+  if (!state.plan && state.lastGoodPlan) state.planStale = true;
   let viewObjectUrl = null;
   let listContentEndpoint = null;
   let viewRequest = 0;
@@ -358,8 +359,22 @@ export function createApp(root, api = createGateway()) {
     const catalog = state.catalog;
     clearObjectUrl();
     Object.assign(state, emptySession(), { catalog });
-    if (Array.isArray(catalog) && catalog.length) { state.ruleEngine = catalog[0].engine; state.ruleMechanism = catalog[0].mechanism; }
+    if (Array.isArray(catalog) && catalog.length) {
+      state.ruleEngine = catalog[0].engine;
+      state.ruleMechanism = catalog[0].mechanism;
+    }
     announce("New empty session started. Saved configuration templates are still available.");
+  }
+  function requestNewSession() {
+    state.pendingNewSession = true;
+    render();
+    // An accidental Enter can only open this confirmation. Focus the safe choice.
+    root.querySelector("#cancel-new-session")?.focus();
+  }
+  function cancelNewSession() {
+    state.pendingNewSession = false;
+    render();
+    root.querySelector("#new-session")?.focus();
   }
   // Change handlers on inputs sometimes update state without re-rendering.
   root.addEventListener("change", saveSession);
@@ -392,6 +407,7 @@ export function createApp(root, api = createGateway()) {
   function invalidate() {
     if (["optimal", "feasible"].includes(state.plan?.status))
       state.lastGoodPlan = deepCopy(state.plan);
+    if (state.lastGoodPlan) state.planStale = true;
     state.plan = null; state.viewContent = null; state.selectedPlanItem = null;
     state.reassignMode = null; state.reassignResponse = null;
     state.pendingUnseatGroupId = null;
@@ -503,11 +519,29 @@ export function createApp(root, api = createGateway()) {
       element("span", "pill", state.rules.length + " rules"));
     header.append(text, stats);
     main.append(header);
-    const newButton = action("＋", newSession, "quiet small icon-button", "new-session");
+    const newButton = action("＋", requestNewSession, "quiet small icon-button", "new-session");
     newButton.title = "Start a new empty session";
     newButton.setAttribute("aria-label", newButton.title);
     main.append(row(newButton, element("span", "save-state", state.storageWarning
       ? "Changes could not be saved" : "✓ Saved locally")));
+    if (state.pendingNewSession) {
+      const confirmation = element("section", "card reset-confirmation");
+      confirmation.id = "new-session-confirmation";
+      confirmation.setAttribute("role", "group");
+      confirmation.setAttribute("aria-label", "Confirm starting a new empty session");
+      confirmation.append(
+        element("h2", "", "Discard this planning session?"),
+        element("p", "problem", "Starting over removes the guests, tables, rules and current seating plan saved in this browser. This cannot be undone."),
+        row(
+          action("Keep current session", cancelNewSession, "secondary small", "cancel-new-session"),
+          action("Discard session and start new", newSession, "danger small", "confirm-new-session")
+        )
+      );
+      confirmation.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.preventDefault(); cancelNewSession(); }
+      });
+      main.append(confirmation);
+    }
     if (state.storageWarning) main.append(element("p", "problem", state.storageWarning));
     const notice = element("div", "notice" + (state.error ? " error" : ""), state.notice);
     notice.setAttribute("role", "status");
@@ -1230,7 +1264,7 @@ export function createApp(root, api = createGateway()) {
     if (state.advancedSolver) advanced.open = true;
     advanced.addEventListener("toggle", () => { state.advancedSolver = advanced.open; saveSession(); });
     advanced.append(element("summary", "", "Advanced solver settings"),
-      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); },
+      textField("Time limit (seconds)", state.seconds, v => { state.seconds = Number(v); invalidate(); render(); },
         { id: "time-limit", type: "number", min: 0.1, step: 0.1 }));
     controls.append(row(
       action("Optimize seating", () => attempt(async () => {
@@ -1240,12 +1274,14 @@ export function createApp(root, api = createGateway()) {
         try { plan = await api.post("/v2/solve", problem); }
         catch (error) {
           // An unsuccessful request is not an instruction to discard the last solved seating.
-          if (!state.plan && state.lastGoodPlan) state.plan = deepCopy(state.lastGoodPlan);
+          if (!state.plan && state.lastGoodPlan && !state.planStale)
+            state.plan = deepCopy(state.lastGoodPlan);
           state.restoredAfterFailure = Boolean(state.plan);
           throw error;
         }
         finally { state.solving = false; render(); }
         state.plan = plan;
+        state.planStale = false;
         state.restoredAfterFailure = false;
         if (["optimal", "feasible"].includes(plan.status))
           state.lastGoodPlan = deepCopy(plan);
@@ -1276,7 +1312,30 @@ export function createApp(root, api = createGateway()) {
     }
     area.append(controls);
     if (!state.plan) {
-      area.append(element("div", "empty", "Import guests, configure the venue, add considerations, then optimize."));
+      if (state.planStale && state.lastGoodPlan) {
+        const previous = state.lastGoodPlan;
+        const stale = card("Previous seating plan — needs recalculation");
+        stale.id = "stale-plan-preview";
+        stale.setAttribute("aria-label", "Read-only outdated seating plan");
+        stale.append(element("p", "problem warning",
+          "Inputs have changed. This is the last solved arrangement, not a valid result for the current guests, rules or venue. Re-optimize before using or printing it."));
+        const byTable = new Map();
+        for (const entry of previous.assignments || []) {
+          const groups = byTable.get(entry.table_id) || [];
+          groups.push(partyName(entry) + " (" + (entry.guest_names || []).length + ")");
+          byTable.set(entry.table_id, groups);
+        }
+        const tableList = element("ul", "stale-table-list");
+        for (const [tableId, groups] of byTable) {
+          tableList.append(element("li", "", "Table " + tableId + " — " + groups.join(", ")));
+        }
+        if (!byTable.size) stale.append(element("p", "muted", "The previous solution contains no assignments."));
+        else stale.append(tableList);
+        area.append(stale);
+      } else {
+        area.append(element("div", "empty",
+          "Import guests, configure the venue, add considerations, then optimize."));
+      }
       if (state.manualInstructions.length) {
         const stored = card("Saved manual directions", "These remain mandatory when seating is re-optimized.");
         for (const instruction of state.manualInstructions) {
