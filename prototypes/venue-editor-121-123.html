@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Venue editor — interaction prototype</title>
+<style>
+:root{font-family:Inter,system-ui,-apple-system,sans-serif;background:#f3f6f8;color:#18313d;font-size:14px}
+*{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button{cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:3px solid #70c3cc;outline-offset:3px}
+header{background:#16333f;color:#fff;padding:19px clamp(20px,4vw,52px);display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+header h1{font-size:21px;margin:0}header small{color:#b5d9e1;display:block;margin-top:3px}
+.container{max-width:1540px;margin:auto;padding:24px clamp(16px,3vw,42px)}
+.summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between;margin-bottom:18px}
+.summary h2{font-size:22px;margin:0}.pill{background:#fff;border:1px solid #d4e3e7;border-radius:30px;padding:7px 12px;font-size:12px}
+.workspace{display:grid;grid-template-columns:minmax(440px,1.6fr) minmax(305px,.9fr);gap:18px}
+.card{border:1px solid #dbe6e9;background:#fff;border-radius:15px;box-shadow:0 3px 12px #17374608;overflow:hidden}
+.card-head{padding:16px 18px;border-bottom:1px solid #e2ecef;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.card-head strong{font-size:15px}.card-body{padding:17px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{border:1px solid #c6dbe0;border-radius:9px;padding:9px 12px;background:#eaf3f5;color:#23515f;font-weight:650}
+.btn.primary{background:#177588;color:#fff;border-color:#177588}.btn.danger{color:#9a3d36;border-color:#edc9bf;background:#fff3f0}
+.btn.quiet{background:#fff}.btn[aria-pressed=true]{background:#bfe0e4;border-color:#6fa5b3}
+.muted{color:#617887;font-size:12px}.map-wrap{padding:12px;background:#f7fafb}
+svg{display:block;width:100%;border:1px solid #c8dbe0;border-radius:10px;background:#eef4f6;touch-action:none}
+.gridline{stroke:#dce8ec;stroke-width:1}.room{fill:#fff;stroke:#2f7180;stroke-width:5;stroke-linejoin:round}
+.room.draft{stroke-dasharray:9 5}.shape{fill:#e0f1f4;stroke:#2c7a8b;stroke-width:2}
+.table-entity{cursor:grab}.table-entity:active{cursor:grabbing}.table-entity[aria-selected=true] .shape{fill:#c4eaf1;stroke:#125d70;stroke-width:3}
+.resize{fill:#fff;stroke:#125d70;stroke-width:2;cursor:nwse-resize}
+.hint{padding:12px 18px;background:#f7fafb;color:#546e7b;border-top:1px solid #e3ecef;font-size:12px}
+label{display:grid;gap:5px;color:#425e6c;font-size:12px;font-weight:650}
+input,select{width:100%;border:1px solid #bfcfd4;border-radius:8px;padding:9px 10px;background:white;color:#18313d}
+.fieldrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.listhead{display:flex;gap:9px;padding:12px 16px;background:#f8fbfc;border-bottom:1px solid #e0ebed}
+.table-list{max-height:398px;overflow:auto}
+.table-row{padding:10px 14px;border-bottom:1px solid #e4ecef;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.table-row[aria-current=true]{background:#eaf7f9}
+.table-row strong{display:block;margin-bottom:3px}.table-row .muted{font-weight:400}
+.editor{border-top:1px solid #e3ecef;padding:17px;display:grid;gap:13px}
+.editor h3{font-size:15px;margin:0}.editor .advanced{border:1px solid #dfebee;border-radius:8px;padding:9px 12px}
+.editor summary{cursor:pointer;font-weight:650}
+.editor .advanced .fieldrow{margin-top:12px}
+.toast{min-height:24px;color:#276b79;padding:5px 0;font-size:13px}
+kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
+@media(max-width:920px){.workspace{grid-template-columns:1fr}.map-wrap{max-width:900px}.container{padding:16px}}
+@media(max-width:520px){.fieldrow{grid-template-columns:1fr}.controls .btn{padding:8px}.card-head{align-items:flex-start}}
+</style>
+</head>
+<body>
+<header><div><h1>Seating Plan Optimizer</h1><small>Venue editor • interactive prototype for Issues #121 and #123</small></div><span class="pill" style="color:#234d5b">Prototype — no data is saved or sent</span></header>
+<main class="container">
+<div class="summary"><div><h2>Arrange the venue</h2><div class="muted">Add tables, drag to move, resize by the corner and edit the room outline.</div></div><div class="controls"><span class="pill" id="stats">5 tables · 48 chairs</span><button class="btn primary" id="add">＋ Add table</button></div></div>
+<div class="workspace">
+<section class="card" aria-label="Interactive venue map">
+ <div class="card-head"><strong>Ground floor</strong><div class="controls"><button class="btn" id="move-mode" aria-pressed="true">Move tables</button><button class="btn" id="room-mode" aria-pressed="false">Edit room outline</button><button class="btn primary" id="save-room" hidden>Save outline</button><button class="btn quiet" id="reset-room">Reset outline</button></div></div>
+ <div class="map-wrap"><svg id="canvas" viewBox="0 0 800 520" role="group" aria-label="Tables and room outline. Use arrow keys after selecting a table."></svg></div>
+ <div class="hint">Tip: click a table to select it. Drag to move; drag the corner square to resize. Use <kbd>Arrow keys</kbd> to nudge tables by 5 units.</div>
+</section>
+<section class="card" aria-label="Compact table list and editor">
+ <div class="card-head"><strong>Tables</strong><span class="muted">Select to edit</span></div>
+ <div class="listhead"><input type="search" id="search" placeholder="Find table by name" aria-label="Search tables"></div>
+ <div class="table-list" id="list"></div>
+ <div class="editor" id="editor"></div>
+</section>
+</div>
+<div class="toast" role="status" id="toast"></div>
+</main>
+<script>
+(function(){
+  'use strict';
+  const S='http://www.w3.org/2000/svg', canvas=document.getElementById('canvas');
+  const tables=[{id:'T1',name:'Window table',chairs:12,x:125,y:125,w:130,h:78,shape:'rect',priority:false},
+    {id:'T2',name:'Family table',chairs:10,x:340,y:120,w:126,h:76,shape:'rect',priority:false},
+    {id:'T3',name:'Couples',chairs:8,x:545,y:135,w:100,h:100,shape:'ellipse',priority:true},
+    {id:'T4',name:'Central table',chairs:10,x:235,y:330,w:140,h:77,shape:'rect',priority:false},
+    {id:'T5',name:'Side table',chairs:8,x:500,y:335,w:110,h:74,shape:'rect',priority:false}];
+  const initialRoom=[[50,50],[710,50],[710,255],[755,255],[755,475],[50,475]];
+  let room=initialRoom.map(x=>x.slice()),mode='move',selected='T3',pointer=null;
+  const $=x=>document.getElementById(x), toast=message=>{$('toast').textContent=message;};
+  function svg(tag,attrs,parent){const el=document.createElementNS(S,tag);for(const[k,v]of Object.entries(attrs||{}))el.setAttribute(k,String(v));if(parent)parent.appendChild(el);return el;}
+  function point(ev){const r=canvas.getBoundingClientRect();return {x:Math.round((ev.clientX-r.left)*800/r.width),y:Math.round((ev.clientY-r.top)*520/r.height)};}
+  function within(v,min,max){return Math.max(min,Math.min(v,max));}
+  function select(id){selected=id;render();$('editor-name').focus();}
+  function renderCanvas(){
+    canvas.replaceChildren();
+    for(let x=0;x<=800;x+=40)svg('line',{x1:x,y1:0,x2:x,y2:520,class:'gridline'},canvas);
+    for(let y=0;y<=520;y+=40)svg('line',{x1:0,y1:y,x2:800,y2:y,class:'gridline'},canvas);
+    svg('polygon',{points:room.map(p=>p.join(',')).join(' '),class:'room'+(mode==='room'?' draft':'')},canvas);
+    if(mode==='room')room.forEach(p=>svg('circle',{cx:p[0],cy:p[1],r:5,fill:'#177588'},canvas));
+    tables.forEach(t=>{
+      const g=svg('g',{'data-id':t.id,tabindex:'0',role:'button','aria-label':t.name+' '+t.chairs+' chairs. Arrow keys move table.', 'aria-selected':String(t.id===selected),class:'table-entity'},canvas);
+      if(t.shape==='ellipse')svg('ellipse',{cx:t.x+t.w/2,cy:t.y+t.h/2,rx:t.w/2,ry:t.h/2,class:'shape'},g);
+      else svg('rect',{x:t.x,y:t.y,width:t.w,height:t.h,rx:10,class:'shape'},g);
+      const text=svg('text',{x:t.x+t.w/2,y:t.y+t.h/2-5,'text-anchor':'middle','font-size':14,'font-weight':700,fill:'#204c5a'},g);text.textContent=t.id;
+      const seats=svg('text',{x:t.x+t.w/2,y:t.y+t.h/2+17,'text-anchor':'middle','font-size':12,fill:'#446775'},g);seats.textContent=t.chairs+' chairs';
+      if(t.id===selected)svg('rect',{x:t.x+t.w-7,y:t.y+t.h-7,width:14,height:14,rx:2,class:'resize','data-resize':'true'},g);
+      g.addEventListener('pointerdown',ev=>{if(mode!=='move')return;ev.stopPropagation();selected=t.id;const p=point(ev);pointer={id:t.id,type:ev.target.hasAttribute('data-resize')?'resize':'move',dx:p.x-t.x,dy:p.y-t.y,oldx:t.x,oldy:t.y,oldw:t.w,oldh:t.h,start:p};canvas.setPointerCapture(ev.pointerId);renderList();renderEditor();});
+      g.addEventListener('click',ev=>{if(mode==='move'&&!pointer)select(t.id);});
+      g.addEventListener('keydown',ev=>{const step=ev.shiftKey?20:5,move={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]}[ev.key];if(move){ev.preventDefault();selected=t.id;t.x=within(t.x+move[0],25,770-t.w);t.y=within(t.y+move[1],25,490-t.h);render();canvas.querySelector('[data-id="'+t.id+'"]')?.focus();}});
+    });
+  }
+  canvas.addEventListener('pointermove',ev=>{
+    if(!pointer)return;const t=tables.find(x=>x.id===pointer.id),p=point(ev);
+    if(pointer.type==='resize'){t.w=within(pointer.oldw+(p.x-pointer.start.x),56,770-t.x);t.h=within(pointer.oldh+(p.y-pointer.start.y),48,490-t.y);}
+    else{t.x=within(p.x-pointer.dx,25,770-t.w);t.y=within(p.y-pointer.dy,25,490-t.h);}
+    renderCanvas();renderEditor(false);
+  });
+  canvas.addEventListener('pointerup',ev=>{if(pointer){pointer=null;render();toast('Table geometry updated in prototype.');}});
+  canvas.addEventListener('click',ev=>{if(mode==='room'&&!ev.target.closest('[data-id]')){const p=point(ev);room.push([p.x,p.y]);renderCanvas();toast('Room corner added. Click Save outline when finished.');}});
+  function renderList(){
+    const target=$('list');target.replaceChildren();const q=$('search').value.trim().toLowerCase();
+    tables.filter(t=>[t.name,t.id].join(' ').toLowerCase().includes(q)).forEach(t=>{
+      const row=document.createElement('div');row.className='table-row';row.setAttribute('aria-current',t.id===selected?'true':'false');
+      const summary=document.createElement('div'),strong=document.createElement('strong'),small=document.createElement('span');
+      strong.textContent=t.id+' · '+t.name;small.className='muted';small.textContent=t.chairs+' chairs · '+(t.shape==='ellipse'?'Round':'Rectangle');summary.append(strong,small);
+      const edit=document.createElement('button');edit.className='btn quiet';edit.textContent=t.id===selected?'Editing':'Edit';edit.setAttribute('aria-label','Edit '+t.name);edit.onclick=()=>select(t.id);
+      row.append(summary,edit);target.append(row);
+    });
+  }
+  function field(title,value,handler,type='text'){const label=document.createElement('label');label.textContent=title;const input=document.createElement('input');input.type=type;input.value=value;input.addEventListener('change',()=>handler(input.value));label.append(input);return{label,input};}
+  function renderEditor(focus=true){
+    const target=$('editor');if(focus)target.replaceChildren();else return;
+    const t=tables.find(x=>x.id===selected);if(!t){target.textContent='Select a table to edit.';return;}
+    const h=document.createElement('h3');h.textContent='Edit '+t.id;target.append(h);
+    const idField=field('Table ID',t.id,v=>{const cleaned=v.trim();if(!cleaned||tables.some(row=>row!==t&&row.id===cleaned)){toast('ID must be unique and nonempty.');render();return;}t.id=cleaned;selected=cleaned;render();toast('Table ID renamed. Production rule references must be migrated.');});target.append(idField.label);
+    const name=field('Display name',t.name,v=>{t.name=v.trim()||t.id;render();toast('Table renamed.');});name.input.id='editor-name';target.append(name.label);
+    const chairs=field('Chair count',String(t.chairs),v=>{t.chairs=Math.max(1,Math.floor(Number(v)||1));render();},'number');
+    const shapeLabel=document.createElement('label');shapeLabel.textContent='Shape';const shape=document.createElement('select');
+    [['rect','Rectangle'],['ellipse','Round / oval']].forEach(([value,label])=>{let opt=document.createElement('option');opt.value=value;opt.textContent=label;shape.append(opt);});shape.value=t.shape;shape.onchange=()=>{t.shape=shape.value;render();};shapeLabel.append(shape);
+    const basics=document.createElement('div');basics.className='fieldrow';basics.append(chairs.label,shapeLabel);target.append(basics);
+    const advanced=document.createElement('details');advanced.className='advanced';const sum=document.createElement('summary');sum.textContent='Advanced size and seating options';advanced.append(sum);
+    const grid=document.createElement('div');grid.className='fieldrow';
+    for(const [key,label]of [['w','Width'],['h','Height']])grid.append(field(label,t[key],v=>{t[key]=within(Number(v)||t[key],48,key==='w'?770-t.x:490-t.y);render();toast('Size updated.');},'number').label);
+    const priority=document.createElement('label');priority.textContent='Priority for couples and singles';const check=document.createElement('input');check.type='checkbox';check.checked=t.priority;check.style.width='20px';check.onchange=()=>{t.priority=check.checked;toast('Preference updated.');};priority.append(check);advanced.append(grid,priority);target.append(advanced);
+    const actions=document.createElement('div');actions.className='controls';const remove=document.createElement('button');remove.className='btn danger';remove.textContent='Remove table';remove.onclick=()=>{if(!window.confirm('Remove '+t.name+' from the demo venue?'))return;tables.splice(tables.indexOf(t),1);selected=tables[0]?.id||null;render();};actions.append(remove);target.append(actions);
+  }
+  function render(){renderCanvas();renderList();renderEditor();$('save-room').hidden=mode!=='room';$('stats').textContent=tables.length+' tables · '+tables.reduce((n,t)=>n+t.chairs,0)+' chairs';$('move-mode').setAttribute('aria-pressed',String(mode==='move'));$('room-mode').setAttribute('aria-pressed',String(mode==='room'));}
+  $('add').onclick=()=>{const n=1+Math.max(0,...tables.map(t=>Number(t.id.slice(1))||0));const row=Math.floor((tables.length%9)/3),col=tables.length%3;const id='T'+n;tables.push({id,name:'Table '+n,chairs:10,x:110+col*180,y:90+row*130,w:115,h:74,shape:'rect',priority:false});selected=id;render();$('editor-name').focus();toast(id+' added with sensible defaults.');};
+  $('search').oninput=renderList;
+  $('move-mode').onclick=()=>{mode='move';render();toast('Drag a table or its resize corner.');};
+  $('room-mode').onclick=()=>{mode='room';room=[];render();toast('Click room corners on the map to trace the outline.');};
+  $('save-room').onclick=()=>{if(room.length<3){toast('Add at least three corners before saving the room outline.');return;}mode='move';render();toast('Room outline saved in prototype.');};
+  $('reset-room').onclick=()=>{room=initialRoom.map(x=>x.slice());mode='move';render();toast('Original outline restored.');};
+  render();
+})();
+</script>
+</body>
+</html>
