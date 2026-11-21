@@ -19,6 +19,24 @@ function storedJSON(key, fallback) {
   } catch (_) { return fallback; }
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+function syncDrawingMetadata(tables, layout, from = "table") {
+  // One metadata mapping for import, edits, templates and solver submissions.
+  // Table owns scoring metadata. A new portable layout is the only input
+  // that intentionally imports drawing metadata into the canonical Table.
+  const byId = new Map(tables.map(table => [table.id, table]));
+  for (const floor of layout.floors || []) for (const drawing of floor.tables || []) {
+    const table = byId.get(drawing.table_id);
+    if (!table) continue;
+    if (from === "drawing") {
+      table.properties = [...(drawing.properties || [])];
+      table.small_group_priority = Boolean(drawing.small_group_priority);
+    } else {
+      drawing.properties = [...(table.properties || [])];
+      drawing.small_group_priority = Boolean(table.small_group_priority);
+    }
+  }
+}
+
 
 function partyName(assignment) {
   const names = assignment.guest_names || [];
@@ -324,6 +342,7 @@ export function createApp(root, api = createGateway()) {
       throw Error("Add a floor and at least one table before saving a configuration.");
     if (configuredTables().length !== state.tables.length)
       throw Error("All configured tables need a positive chair capacity.");
+    syncDrawingMetadata(state.tables, state.layout);
     return deepCopy({
       version: 2, name, zones: state.zones, tables: state.tables,
       layout: state.layout, rules: state.rules
@@ -337,12 +356,7 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
-    for (const floor of state.layout.floors) for (const drawing of floor.tables) {
-      const table = state.tables.find(t => t.id === drawing.table_id);
-      if (table && (Object.hasOwn(table, "small_group_priority") ||
-          Object.hasOwn(drawing, "small_group_priority")))
-        drawing.small_group_priority = Boolean(table.small_group_priority);
-    }
+    syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
       if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
@@ -719,18 +733,13 @@ export function createApp(root, api = createGateway()) {
         const old = state.tables.find(t => t.id === drawing.table_id);
         if (old && old.zone_id !== floor.zone_id)
           throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
-        // Layout JSON carries portable tags; Table.properties is the solver input.
-        // Synchronize both copies without assigning tag weights.
-        if (old) {
-          old.properties = [...(drawing.properties || [])];
-          old.small_group_priority = Boolean(drawing.small_group_priority);
-        } else state.tables.push({
+        if (!old) state.tables.push({
           id: drawing.table_id, zone_id: floor.zone_id, capacity: null,
-          properties: [...(drawing.properties || [])],
-          small_group_priority: Boolean(drawing.small_group_priority)
+          properties: [], small_group_priority: false
         });
       }
     }
+    syncDrawingMetadata(state.tables, state.layout, "drawing");
     state.focusedFloor = imported.floors[0].zone_id;
     invalidate();
     announce("Layout imported. Set chair capacities and validate the venue before solving.");
@@ -999,8 +1008,8 @@ export function createApp(root, api = createGateway()) {
       if (x + width > layout.width || y + height > layout.height) return announce("Canvas too small for a new table.", true);
       const small_group_priority = priorityInput.checked;
       state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
-      layout.tables.push({ table_id: id, x, y, width, height, shape,
-        properties: [...properties], small_group_priority });
+      layout.tables.push({ table_id: id, x, y, width, height, shape });
+      syncDrawingMetadata(state.tables, state.layout);
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -1073,8 +1082,7 @@ export function createApp(root, api = createGateway()) {
         table.capacity = next.capacity;
         table.properties = properties;
         table.small_group_priority = priorityInput.checked;
-        drawing.properties = [...properties];
-        drawing.small_group_priority = priorityInput.checked;
+        syncDrawingMetadata(state.tables, state.layout);
         ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
         drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
         invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");

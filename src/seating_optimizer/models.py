@@ -119,6 +119,26 @@ def validate_layout_references(layout: VenueLayout, zones: list[Zone], tables: l
                 raise ValueError(f"Table {drawing.table_id} belongs to {table_zones[drawing.table_id]}, not {floor.zone_id}")
 
 
+def validate_table_drawing_metadata(layout: VenueLayout, tables: list[Table]) -> None:
+    """At configuration boundaries Table owns scoring tags; drawings mirror them."""
+    by_id = {table.id: table for table in tables}
+    for floor in layout.floors:
+        for drawing in floor.tables:
+            table = by_id.get(drawing.table_id)
+            if table is None:
+                continue  # validate_layout_references reports unknown tables
+            if [value.casefold() for value in drawing.properties] != [
+                value.casefold() for value in table.properties
+            ]:
+                raise ValueError(
+                    f"Table {table.id} property tags differ between solver table and floor drawing"
+                )
+            if drawing.small_group_priority != table.small_group_priority:
+                raise ValueError(
+                    f"Table {table.id} small-group priority differs between solver table and floor drawing"
+                )
+
+
 class VenueConfiguration(Model):
     """Versioned, guest-independent, portable venue/rules configuration."""
     version: Literal[1] = 1
@@ -147,6 +167,7 @@ class VenueConfiguration(Model):
             table.id for table in self.tables
         }:
             raise ValueError("Each configured table must have a layout drawing")
+        validate_table_drawing_metadata(self.layout, self.tables)
         return self
 
 
