@@ -106,9 +106,10 @@ def test_d1_comparison_allows_its_deliberate_partial_plan_difference():
         return Assignment(group_id=group_id, table_id="T",
                           guest_ids=[group_id], guest_names=[group_id],
                           guest_attributes=[{}])
-    old = Plan(session_id="s", status="needs_review",
+    pending = [PriorityMark(group_id="low", group_name="Low priority", grade=1, guest_count=1)]
+    old = Plan(session_id="s", status="needs_review", pending_groups=pending,
                total_score=10, assignments=[item("ordinary")])
-    new = Plan(session_id="s", status="needs_review",
+    new = Plan(session_id="s", status="needs_review", pending_groups=pending,
                total_score=20, assignments=[item("ordinary"), item("low")])
     case = Case("low", "unused.csv", "needs_review", allow_d1_difference=True)
     assert _compare(case, old, new) is None

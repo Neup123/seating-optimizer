@@ -115,7 +115,9 @@ def test_page_works_during_remaining_over_capacity_and_pending_review():
 
 @pytest.mark.parametrize("status", ["optimal", "feasible", "infeasible", "needs_review", "unknown"])
 def test_empty_set_has_explicit_message_and_no_phantom_rows(status):
-    plan = Plan(session_id="Dinner", status=status)
+    pending = ([{"group_id": "pending-family", "group_name": "Pending family",
+                 "guest_count": 1, "grade": 1}] if status == "needs_review" else [])
+    plan = Plan(session_id="Dinner", status=status, pending_groups=pending)
     root = parsed(plan)
     assert root.find(".//h1").text == "Not seated in the main room"
     assert root.findall('.//tr[@data-group-id]') == []

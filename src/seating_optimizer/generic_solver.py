@@ -22,7 +22,7 @@ from .generic_rules import (
 )
 from .models import (
     Assignment, Compromise, Model, NotSeatedGroup, Plan, PriorityMark, Problem,
-    Reason, ScoreItem, TableUsage, VenueConfiguration,
+    Reason, ScoreItem, TableUsage, VenueConfiguration, validate_plan_lifecycle,
 )
 from .rule_migration import migrate_instance
 
@@ -390,7 +390,7 @@ def solve_generic(problem: GenericProblem | Problem) -> GenericPlan:
         plan.validation_warnings = warnings
         plan.criterion_states = states
         plan.solve_seconds = perf_counter() - start
-        return plan
+        return validate_plan_lifecycle(plan)
 
     if guest_count > seats:
         short = guest_count - seats
