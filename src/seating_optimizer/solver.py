@@ -7,6 +7,7 @@ from time import perf_counter
 
 from ortools.sat.python import cp_model
 
+from .objective_priority import optimize_with_split_priority, split_mixing_terms
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
@@ -750,6 +751,9 @@ def _solve_core(problem: Problem) -> Plan:
             # No constant penalty exists outside an operator's rule instance.
             for gid in split_groups:
                 terms.append(-rule.weight * (sum(x[gid, j] for j in range(n)) - 1))
+        elif rule.shape == "split_mixing_penalty":
+            for mixed in split_mixing_terms(model, split_groups, ids, n, x, rule.id):
+                terms.append(-rule.weight * mixed)
         elif rule.shape == "zone_companionship":
             for lone in _zone_companionship_penalties(model, rule, ids, tables, x):
                 terms.append(-rule.weight * lone)
@@ -783,12 +787,11 @@ def _solve_core(problem: Problem) -> Plan:
                      "No lower-priority tier was selected without proof."),
         )
 
-    model.Maximize(sum(terms))
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = problem.config.time_limit_seconds
-    solver.parameters.num_search_workers = problem.config.workers
-    solver.parameters.random_seed = problem.config.random_seed
-    status = solver.Solve(model)
+    split_priority = any(r.shape == "split_penalty" for r in problem.rules)
+    priority_bits = ([x[gid, j] for gid in split_groups for j in range(n)]
+                     if split_priority else [])
+    solver, status, priority_proven, _ = optimize_with_split_priority(
+        model, terms, priority_bits, problem.config)
     elapsed = perf_counter() - start
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         conflicts = []
@@ -865,6 +868,22 @@ def _solve_core(problem: Problem) -> Plan:
                                if tier is not None else
                                "No single tier could contain the existing authorized split.")
                 reasons[gid].append(Reason(rule_id=rule.id, description=explanation, points=0))
+        elif rule.shape == "split_mixing_penalty":
+            for gid in split_groups:
+                if len(group_tables[gid]) <= 1:
+                    continue
+                for j in group_tables[gid]:
+                    others=[other for other in ids if other!=gid and j in group_tables[other]]
+                    if not others:
+                        continue
+                    loss=rule.weight*len(others)
+                    points-=loss
+                    detail=(f"Split family {group_name(gid)} shares table {tables[j].id} "
+                            f"with {counted(len(others),'other party','other parties')}.")
+                    compromises.append(Compromise(rule_id=rule.id,
+                        description=detail,lost_points=loss))
+                    table_reasons[gid,j].append(Reason(rule_id=rule.id,
+                        description=detail,points=-loss))
         elif rule.shape == "zone_companionship":
             zone_groups = defaultdict(set)
             for gid, occupied_tables in group_tables.items():
@@ -1266,12 +1285,15 @@ def _solve_core(problem: Problem) -> Plan:
     if calculated != round(solver.ObjectiveValue()):
         raise RuntimeError(f"Score breakdown mismatch: {calculated} vs {solver.ObjectiveValue()}")
     return Plan(session_id=problem.session_id,
-                status="optimal" if status == cp_model.OPTIMAL else "feasible",
+                status=("optimal" if status == cp_model.OPTIMAL and priority_proven else "feasible"),
                 total_score=calculated, assignments=assignments,
                 tables=table_usage, score_breakdown=breakdown, pattern_matches=matched_tables,
                 compromises=compromises, solve_seconds=elapsed,
                 layout=problem.layout, manual_instructions=problem.manual_instructions,
-                message="All hard constraints satisfied.")
+                message=("All hard constraints satisfied. Split-table count is globally minimal "
+                         "under the active split rule." if split_priority and priority_proven else
+                         "All hard constraints satisfied; split priority is unproven within this time limit."
+                         if split_priority else "All hard constraints satisfied."))
 
 
 def _priority_marks(problem: Problem, groups: dict, lookup: dict) -> list[PriorityMark]:
