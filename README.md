@@ -8,6 +8,22 @@ For the implemented component/data flow, browser persistence, local-only API tru
 
 **License:** [LICENSE](LICENSE) is the owner's Business Source License 1.1, including the Additional Use Grant. Read it before production use.
 
+## Working browser interface
+
+Screenshots below are captured from the **running FastAPI app in Chromium** by
+the golden Playwright test with synthetic event registrations, then resized for
+the README. The original test artifacts remain in GitHub Actions.
+
+| Guest import | Venue editor |
+| --- | --- |
+| ![Source column mapping for synthetic guests](docs/screenshots/guest-import.jpg) | ![Populated venue map with numbered tables](docs/screenshots/venue-editor.jpg) |
+
+| Rule configuration | Working seating plan |
+| --- | --- |
+| ![Compact rule editor with accordion considerations](docs/screenshots/rules.jpg) | ![Solved plan with selected family details](docs/screenshots/working-plan.jpg) |
+
+![Print-preview list from the solved plan](docs/screenshots/print-preview.jpg)
+
 ## Installation
 
 Python 3.11+ is required.
