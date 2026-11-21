@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from difflib import SequenceMatcher
@@ -124,6 +125,17 @@ def _rows(content: bytes, filename: str) -> list[list]:
     raise ValueError("Supported import formats are CSV and XLSX")
 
 
+def _stable_registration_identity(name: str) -> str:
+    """Stable across source row insertions, deletions and sorting.
+
+    A name correction changes the identity instead of silently reassigning
+    existing pair/pin rules to another person. Explicit source group IDs win.
+    """
+    normalized = _normalize(name)
+    digest = hashlib.sha256(("registration:v2:" + normalized).encode("utf-8")).hexdigest()[:20]
+    return digest
+
+
 def import_registrations(
     content: bytes,
     filename: str,
@@ -214,7 +226,8 @@ def import_registrations(
             result.issues.append(ImportIssue(row=row_number, column="size", severity="error",
                                     message=f"Invalid or missing group size {size!r}"))
             continue
-        group_id = str(mapped.get("group_id") or f"registration:{row_number}").strip()
+        registration_id = _stable_registration_identity(name)
+        group_id = str(mapped.get("group_id") or f"registration:stable:{registration_id}").strip()
         mapped_group_name = str(mapped.get("group_name") or "").strip() or None
         party_rows.setdefault(group_id, []).append((name, n, mapped_group_name))
         attrs = {}
@@ -231,7 +244,7 @@ def import_registrations(
             else:
                 attrs[key] = str(value)
         for i in range(n):
-            result.guests.append(Guest(id=f"r{row_number}-m{i+1}",
+            result.guests.append(Guest(id=f"member:{registration_id}:{i+1}",
                    name=name if n == 1 else f"{name} ({i+1}/{n})",
                    group_id=group_id, group_name=None, attributes=attrs))
         result.rows_imported += 1
