@@ -7,10 +7,12 @@ from time import perf_counter
 
 from ortools.sat.python import cp_model
 
+from .objective_priority import optimize_with_split_priority, split_mixing_terms
 from .adjacency import together_clusters, neighbouring_tables, largest_connected_capacity
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
-                     PriorityMark, Problem, Reason, ScoreItem, TableUsage)
+                     PriorityMark, Problem, Reason, ScoreItem, TableUsage,
+                     validate_plan_lifecycle, chairs_needed)
 from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
 
@@ -154,8 +156,8 @@ def _prepare(problem):
 
 def _capacity_obstruction(groups, tables, splittable=frozenset()):
     """A sufficient (not guessed) capacity/party-packing explanation, if available."""
-    sizes = [len(members) for gid, members in groups.items() if gid not in splittable]
-    guests = sum(len(members) for members in groups.values())
+    sizes = [chairs_needed(members) for gid, members in groups.items() if gid not in splittable]
+    guests = sum(chairs_needed(members) for members in groups.values())
     if not guests:
         return None
     chairs = sum(table.capacity for table in tables)
@@ -277,7 +279,7 @@ def _resolve_tiered_stages(model, problem, groups, lookup, tables, x, assumption
     for rule in tier_rules:
         gid = lookup[rule.parameters["target"]]
         ranked = _tier_table_sets(rule, tables)
-        size = len(groups[gid])
+        size = chairs_needed(groups[gid])
         locked = False
         for rank, permitted in enumerate(ranked, 1):
             # No whole group can fit if every table is individually too small.
@@ -350,10 +352,11 @@ def _solve_core(problem: Problem) -> Plan:
         return party_name_for(gid, group_names[gid], [guest.name for guest in members])
 
     tables = problem.tables
-    # The only exception to atomic groups is a lone group that fits no
-    # table. A together-linked group is still handled by the existing
-    # atomic linked-cluster model; its behaviour is unchanged.
+    # Linked clusters retain their original venue-wide atomic fallback threshold.
     maximum_table = max(table.capacity for table in tables)
+    # Eligibility is relative to each party's HARD-ADMISSIBLE tables, not
+    # the single largest table in an unrelated/forbidden floor (issue #56).
+    # Reuse the same candidate set for connected-capacity diagnostics.
     linked = {
         lookup[target] for rule in problem.rules
         if rule.shape == "pair" and rule.parameters["relation"] == "together"
@@ -362,50 +365,50 @@ def _solve_core(problem: Problem) -> Plan:
     explicit_split = set(problem.splittable_groups) | {
         i.group_id for i in problem.manual_instructions if i.allow_split
     }
-    # Explicitly authorized splits may use separate free blocks. Legacy
-    # oversized-party fallback still requires adjacent drawings.
-    adjacent_split = {
-        gid for gid, members in groups.items()
-        if len(members) > maximum_table and gid not in linked and gid not in explicit_split
-    }
-    split_groups = adjacent_split | explicit_split
-    neighbours = neighbouring_tables(problem.layout, tables)
-    for gid in sorted(adjacent_split):
-        # Prune forbidden drawings BEFORE testing connected capacity. A route
-        # through a forbidden or unoccupied intermediary does not qualify.
-        admissible = set(range(len(tables)))
-        blockers = []
+    admissible_by_group, blockers_by_group = {}, {}
+    for gid, members in groups.items():
+        admissible, blockers = set(range(len(tables))), []
         for rule in problem.rules:
-            p = rule.parameters
             if rule.mode != "hard":
                 continue
-            if rule.shape == "zone_restriction" and any(
-                    _matched(guest, rule) for guest in groups[gid]):
+            p = rule.parameters
+            if rule.shape == "zone_restriction" and any(_matched(guest, rule) for guest in members):
                 admissible &= {j for j, table in enumerate(tables)
                                if table.zone_id in _allowed_zones(rule)}
                 blockers.append(rule.id)
-            elif rule.shape == "table_property_need" and any(
-                    _matched(guest, rule) for guest in groups[gid]):
+            elif rule.shape == "table_property_need" and any(_matched(guest, rule) for guest in members):
                 admissible &= {j for j, table in enumerate(tables)
                                if _has_table_property(table, p["property"])}
                 blockers.append(rule.id)
             elif rule.shape == "pin" and lookup[p["target"]] == gid:
-                admissible &= {j for j, table in enumerate(tables)
-                               if table.id == p["table"]}
+                admissible &= {j for j, table in enumerate(tables) if table.id == p["table"]}
                 blockers.append(rule.id)
+        admissible_by_group[gid] = admissible
+        blockers_by_group[gid] = blockers
+    # Explicit operator-authorized splits may use separate free blocks. The
+    # automatic exception requires connected drawings on one permitted floor.
+    adjacent_split = {
+        gid for gid, members in groups.items()
+        if gid not in linked and gid not in explicit_split and admissible_by_group[gid] and
+        chairs_needed(members) > max(tables[j].capacity for j in admissible_by_group[gid])
+    }
+    split_groups = adjacent_split | explicit_split
+    neighbours = neighbouring_tables(problem.layout, tables)
+    for gid in sorted(adjacent_split):
+        admissible = admissible_by_group[gid]
+        blockers = blockers_by_group[gid]
         reachable = {j: neighbours[j] & admissible for j in admissible}
-        if largest_connected_capacity(reachable, tables) < len(groups[gid]):
+        if largest_connected_capacity(reachable, tables) < chairs_needed(groups[gid]):
             detail = (f" Hard rules limiting usable tables: {', '.join(blockers)}."
                       if blockers else "")
             return Plan(
                 session_id=problem.session_id, status="infeasible",
-                conflicting_constraints=[
-                    f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
-                    "no single table fits, and no connected adjacent-table "
-                    "set on one drawn floor has sufficient permitted capacity."
-                    + detail
-                ],
-                message="The oversized group cannot be seated at adjacent tables.",
+                conflicting_constraints=([f"rule:{rule_id}" for rule_id in blockers] +
+                    [f"Party too large — not achievable: group {group_name(gid)} has {counted(len(groups[gid]), 'guest')}; "
+                     "no single table fits, and no connected adjacent-table "
+                     "set on one drawn floor has sufficient permitted capacity." + detail]),
+                message=("These hard rules cannot all be satisfied: the group exceeds the capacity of permitted adjacent tables." if blockers else
+                         "The oversized group cannot be seated at adjacent tables."),
                 solve_seconds=perf_counter() - start, layout=problem.layout, manual_instructions=problem.manual_instructions,
             )
     proven_obstruction = _capacity_obstruction(groups, tables, split_groups)
@@ -431,6 +434,13 @@ def _solve_core(problem: Problem) -> Plan:
                 for j in range(n):
                     guest_at[guest.id, j] = model.NewBoolVar(f"guest:{guest.id}:{tables[j].id}")
                 model.Add(sum(guest_at[guest.id, j] for j in range(n)) == 1)
+            # Lap infants in a split party stay at the same table as a chair-using
+            # member; their presence cannot create an extra table portion.
+            anchor_guest = next((g for g in groups[gid] if g.requires_chair), None)
+            if anchor_guest is not None:
+                for infant in (g for g in groups[gid] if not g.requires_chair):
+                    for j in range(n):
+                        model.Add(guest_at[infant.id, j] == guest_at[anchor_guest.id, j])
             for j in range(n):
                 count = sum(guest_at[guest.id, j] for guest in groups[gid])
                 model.Add(count >= x[gid, j])
@@ -454,7 +464,7 @@ def _solve_core(problem: Problem) -> Plan:
 
     seats = {}
     for j, table in enumerate(tables):
-        seats[j] = sum(guest_at[guest.id, j] for guest in problem.guests)
+        seats[j] = sum(guest_at[guest.id, j] for guest in problem.guests if guest.requires_chair)
         model.Add(seats[j] <= table.capacity)  # Physical limits are unconditional, not diagnostic assumptions.
 
     # Existing linked-cluster exception: distinct groups stay atomic and may
@@ -464,7 +474,7 @@ def _solve_core(problem: Problem) -> Plan:
     fallback_by_rule = {}
     for cluster_index, (members, cluster_rules) in enumerate(
             together_clusters(ids, lookup, problem.rules)):
-        party_size = sum(len(groups[gid]) for gid in members)
+        party_size = sum(chairs_needed(groups[gid]) for gid in members)
         if party_size <= maximum_table:
             continue  # Same table remains the only qualifying together outcome.
         compulsory = [rule for rule in cluster_rules if rule.mode == "hard"]
@@ -737,7 +747,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = [j for j, table in enumerate(tables) if table.small_group_priority]
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 if gid in split_groups:
                     preferred = model.NewBoolVar(f"small-priority:{rule.id}:{gid}")
@@ -750,6 +760,9 @@ def _solve_core(problem: Problem) -> Plan:
             # No constant penalty exists outside an operator's rule instance.
             for gid in split_groups:
                 terms.append(-rule.weight * (sum(x[gid, j] for j in range(n)) - 1))
+        elif rule.shape == "split_mixing_penalty":
+            for mixed in split_mixing_terms(model, split_groups, ids, n, x, rule.id):
+                terms.append(-rule.weight * mixed)
         elif rule.shape == "zone_companionship":
             for lone in _zone_companionship_penalties(model, rule, ids, tables, x):
                 terms.append(-rule.weight * lone)
@@ -783,12 +796,11 @@ def _solve_core(problem: Problem) -> Plan:
                      "No lower-priority tier was selected without proof."),
         )
 
-    model.Maximize(sum(terms))
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = problem.config.time_limit_seconds
-    solver.parameters.num_search_workers = problem.config.workers
-    solver.parameters.random_seed = problem.config.random_seed
-    status = solver.Solve(model)
+    split_priority = any(r.shape == "split_penalty" for r in problem.rules)
+    priority_bits = ([x[gid, j] for gid in split_groups for j in range(n)]
+                     if split_priority else [])
+    solver, status, priority_proven, _ = optimize_with_split_priority(
+        model, terms, priority_bits, problem.config)
     elapsed = perf_counter() - start
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         conflicts = []
@@ -832,7 +844,8 @@ def _solve_core(problem: Problem) -> Plan:
         for gid, members in groups.items()
     }
     placed = {gid: min(group_tables[gid]) for gid in ids}
-    usage = {j: sum(guest_placed[guest.id] == j for guest in problem.guests) for j in range(n)}
+    usage = {j: sum(guest.requires_chair and guest_placed[guest.id] == j
+                    for guest in problem.guests) for j in range(n)}
     reasons = defaultdict(list)
     table_reasons = defaultdict(list)
     breakdown = []
@@ -865,6 +878,22 @@ def _solve_core(problem: Problem) -> Plan:
                                if tier is not None else
                                "No single tier could contain the existing authorized split.")
                 reasons[gid].append(Reason(rule_id=rule.id, description=explanation, points=0))
+        elif rule.shape == "split_mixing_penalty":
+            for gid in split_groups:
+                if len(group_tables[gid]) <= 1:
+                    continue
+                for j in group_tables[gid]:
+                    others=[other for other in ids if other!=gid and j in group_tables[other]]
+                    if not others:
+                        continue
+                    loss=rule.weight*len(others)
+                    points-=loss
+                    detail=(f"Split family {group_name(gid)} shares table {tables[j].id} "
+                            f"with {counted(len(others),'other party','other parties')}.")
+                    compromises.append(Compromise(rule_id=rule.id,
+                        description=detail,lost_points=loss))
+                    table_reasons[gid,j].append(Reason(rule_id=rule.id,
+                        description=detail,points=-loss))
         elif rule.shape == "zone_companionship":
             zone_groups = defaultdict(set)
             for gid, occupied_tables in group_tables.items():
@@ -898,7 +927,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 matched = sorted(group_tables[gid] & priority_tables)
                 if matched:
@@ -939,7 +968,7 @@ def _solve_core(problem: Problem) -> Plan:
         elif rule.shape == "small_group_priority":
             priority_tables = {j for j, table in enumerate(tables) if table.small_group_priority}
             for gid, members in groups.items():
-                if len(members) > 2 or not priority_tables:
+                if chairs_needed(members) > 2 or not priority_tables:
                     continue
                 matched = sorted(group_tables[gid] & priority_tables)
                 if matched:
@@ -1214,7 +1243,8 @@ def _solve_core(problem: Problem) -> Plan:
                         lost_points=rule.weight * holes))
                     for gid in ids:
                         if j in group_tables[gid]:
-                            count = sum(guest_placed[g.id] == j for g in groups[gid])
+                            count = sum(g.requires_chair and guest_placed[g.id] == j
+                                        for g in groups[gid])
                             share = -rule.weight * holes * count / usage[j]
                             reason = Reason(rule_id=rule.id,
                                 description=f"Fill efficiency: {counted(holes, 'empty chair')} at table {table.id}.",
@@ -1258,7 +1288,7 @@ def _solve_core(problem: Problem) -> Plan:
                 reasons=item_reasons, points=round(sum(r.points for r in item_reasons), 5)))
 
     table_usage = [
-        TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+        TableUsage(table_id=t.id, name=t.name, zone_id=t.zone_id, capacity=t.capacity,
                    occupied=usage[j], empty_seats=t.capacity - usage[j])
         for j, t in enumerate(tables)
     ]
@@ -1266,12 +1296,15 @@ def _solve_core(problem: Problem) -> Plan:
     if calculated != round(solver.ObjectiveValue()):
         raise RuntimeError(f"Score breakdown mismatch: {calculated} vs {solver.ObjectiveValue()}")
     return Plan(session_id=problem.session_id,
-                status="optimal" if status == cp_model.OPTIMAL else "feasible",
+                status=("optimal" if status == cp_model.OPTIMAL and priority_proven else "feasible"),
                 total_score=calculated, assignments=assignments,
                 tables=table_usage, score_breakdown=breakdown, pattern_matches=matched_tables,
                 compromises=compromises, solve_seconds=elapsed,
                 layout=problem.layout, manual_instructions=problem.manual_instructions,
-                message="All hard constraints satisfied.")
+                message=("All hard constraints satisfied. Split-table count is globally minimal "
+                         "under the active split rule." if split_priority and priority_proven else
+                         "All hard constraints satisfied; split priority is unproven within this time limit."
+                         if split_priority else "All hard constraints satisfied."))
 
 
 def _priority_marks(problem: Problem, groups: dict, lookup: dict) -> list[PriorityMark]:
@@ -1359,7 +1392,7 @@ def _empty_stage(problem: Problem) -> Plan:
     """A legitimate stage when every family has been deferred."""
     return Plan(
         session_id=problem.session_id, status="optimal", total_score=0,
-        tables=[TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+        tables=[TableUsage(table_id=t.id, name=t.name, zone_id=t.zone_id, capacity=t.capacity,
                            occupied=0, empty_seats=t.capacity)
                 for t in problem.tables],
         manual_instructions=[], layout=problem.layout,
@@ -1395,7 +1428,7 @@ def solve(problem: Problem) -> Plan:
         for gid, members in groups.items() if gid in unseated_ids
     ]
     active_ids = set(groups) - unseated_ids
-    active_count = sum(len(groups[gid]) for gid in active_ids)
+    active_count = sum(chairs_needed(groups[gid]) for gid in active_ids)
     chairs = sum(table.capacity for table in problem.tables)
     if active_count > chairs:
         short = active_count - chairs
@@ -1415,7 +1448,7 @@ def solve(problem: Problem) -> Plan:
         plan.pending_groups = pending or []
         plan.not_seated = not_seated
         plan.solve_seconds = perf_counter() - start
-        return plan
+        return validate_plan_lifecycle(plan)
 
     if not active_ids:
         return result_with_metadata(_empty_stage(problem))

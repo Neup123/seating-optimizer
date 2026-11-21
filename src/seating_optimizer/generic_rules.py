@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ENGINES = {
     "intra": {
         "split_term": ("soft",),
+        "split_mixing_term": ("soft",),
         "own_attribute_grouping": ("soft", "hard"),
     },
     "inter": {
@@ -76,6 +77,7 @@ def family_value(members: Sequence[Any], field: str) -> int | float | list[float
 
 SCORING_POLARITY = {
     ("intra", "split_term"): "penalty",
+    ("intra", "split_mixing_term"): "penalty",
     ("inter", "companionship"): "penalty",
     ("venue", "holes_term"): "penalty",
     ("venue", "property_fit"): "reward",
@@ -240,8 +242,8 @@ def match_table_pattern(conditions: Sequence[Mapping[str, Any]],
     groups = {g.group_id or "guest:" + g.id for g in present}
     facts = {
         "groups_at_table": len(groups),
-        "occupied_seats": len(present),
-        "empty_seats": table.capacity - len(present),
+        "occupied_seats": sum(g.requires_chair for g in present),
+        "empty_seats": table.capacity - sum(g.requires_chair for g in present),
     }
     for condition in conditions:
         fact = condition["fact"]

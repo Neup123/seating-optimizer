@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .pattern_rules import validate_pattern
+from .room_geometry import validate_outline, rectangle_inside
 
 
 class Model(BaseModel):
@@ -37,6 +38,8 @@ class Table(Model):
     id: str
     zone_id: str
     capacity: int = Field(gt=0)
+    # Rename the display without changing stable IDs referenced by rules/exports.
+    name: str | None = Field(default=None, min_length=1)
     properties: list[str] = Field(default_factory=list)
     small_group_priority: bool = False
 
@@ -77,16 +80,23 @@ class FloorLayout(Model):
     zone_id: str
     width: float = Field(gt=0, le=10000)
     height: float = Field(gt=0, le=10000)
+    # Optional polygon in canvas coordinates; omitted for legacy rectangle rooms.
+    room_outline: list[tuple[float, float]] | None = None
     tables: list[TableDrawing] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_positions(self) -> "FloorLayout":
+        if self.room_outline is not None:
+            validate_outline(self.room_outline, self.width, self.height)
         ids = [table.table_id for table in self.tables]
         if len(set(ids)) != len(ids):
             raise ValueError(f"Duplicate table drawing in zone {self.zone_id}")
         for table in self.tables:
             if table.x + table.width > self.width + 0.0001 or table.y + table.height > self.height + 0.0001:
                 raise ValueError(f"Table drawing {table.table_id} exceeds floor bounds in {self.zone_id}")
+            if self.room_outline is not None and not rectangle_inside(
+                    self.room_outline, table.x, table.y, table.width, table.height):
+                raise ValueError(f"Table drawing {table.table_id} is outside room outline in {self.zone_id}")
         return self
 
 
@@ -119,6 +129,26 @@ def validate_layout_references(layout: VenueLayout, zones: list[Zone], tables: l
                 raise ValueError(f"Table {drawing.table_id} belongs to {table_zones[drawing.table_id]}, not {floor.zone_id}")
 
 
+def validate_table_drawing_metadata(layout: VenueLayout, tables: list[Table]) -> None:
+    """At configuration boundaries Table owns scoring tags; drawings mirror them."""
+    by_id = {table.id: table for table in tables}
+    for floor in layout.floors:
+        for drawing in floor.tables:
+            table = by_id.get(drawing.table_id)
+            if table is None:
+                continue  # validate_layout_references reports unknown tables
+            if [value.casefold() for value in drawing.properties] != [
+                value.casefold() for value in table.properties
+            ]:
+                raise ValueError(
+                    f"Table {table.id} property tags differ between solver table and floor drawing"
+                )
+            if drawing.small_group_priority != table.small_group_priority:
+                raise ValueError(
+                    f"Table {table.id} small-group priority differs between solver table and floor drawing"
+                )
+
+
 class VenueConfiguration(Model):
     """Versioned, guest-independent, portable venue/rules configuration."""
     version: Literal[1] = 1
@@ -147,6 +177,7 @@ class VenueConfiguration(Model):
             table.id for table in self.tables
         }:
             raise ValueError("Each configured table must have a layout drawing")
+        validate_table_drawing_metadata(self.layout, self.tables)
         return self
 
 
@@ -155,10 +186,16 @@ class Guest(Model):
     name: str
     group_id: str | None = None
     group_name: str | None = None  # Human-readable registration/party name.
+    requires_chair: bool = Field(default=True, strict=True)  # False for a lap infant.
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
-Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"]
+def chairs_needed(members: list[Guest]) -> int:
+    """Count actual chairs, while retaining every infant in group lists."""
+    return sum(guest.requires_chair for guest in members)
+
+
+Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "split_mixing_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"]
 
 
 class Rule(Model):
@@ -386,6 +423,7 @@ class Compromise(Model):
 
 class TableUsage(Model):
     table_id: str
+    name: str | None = None
     zone_id: str
     capacity: int
     occupied: int
@@ -408,6 +446,24 @@ class NotSeatedGroup(Model):
     grade: int | None = None
 
 
+PLAN_SOLVE_STATUSES = frozenset({"optimal", "feasible", "infeasible", "unknown", "needs_review"})
+PLAN_COMPLETE_STATUSES = frozenset({"optimal", "feasible"})
+PLAN_UNSOLVED_STATUSES = frozenset({"infeasible", "unknown"})
+PLAN_PRINTABLE_STATUSES = PLAN_COMPLETE_STATUSES
+# UI draft/solving/dirty states are client lifecycle states, not serialized Plan statuses.
+PLAN_TRANSITIONS = {
+    "input_ready": frozenset({"solving", "dirty_after_edit"}),
+    "solving": frozenset(PLAN_SOLVE_STATUSES),
+    "optimal": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
+    "feasible": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
+    "needs_review": frozenset({"applied_manual_decision", "solving", "dirty_after_edit"}),
+    "infeasible": frozenset({"solving", "dirty_after_edit", "applied_manual_decision"}),
+    "unknown": frozenset({"solving", "dirty_after_edit"}),
+    "applied_manual_decision": frozenset({"solving", "dirty_after_edit"}),
+    "dirty_after_edit": frozenset({"input_ready", "solving"}),
+}
+
+
 class Plan(Model):
     session_id: str
     manual_instructions: list[ManualInstruction] = Field(default_factory=list)
@@ -425,3 +481,37 @@ class Plan(Model):
     solve_seconds: float = 0
     message: str = ""
     layout: VenueLayout | None = None
+
+    @model_validator(mode="after")
+    def valid_lifecycle(self) -> "Plan":
+        if self.status in PLAN_COMPLETE_STATUSES and self.pending_groups:
+            raise ValueError("A completed plan cannot have pending groups")
+        if self.status == "needs_review" and not self.pending_groups:
+            raise ValueError("A plan needing review must identify pending groups")
+        if self.status in PLAN_UNSOLVED_STATUSES and self.assignments:
+            raise ValueError("An infeasible or unknown plan cannot claim confirmed assignments")
+        if self.status in PLAN_UNSOLVED_STATUSES and self.total_score is not None:
+            raise ValueError("An infeasible or unknown plan cannot claim an objective score")
+        return self
+
+
+def validate_plan_lifecycle(plan: Plan) -> Plan:
+    """Revalidate even after staged solver metadata changes to a created plan."""
+    return type(plan).model_validate(plan.model_dump(mode="json"))
+
+
+def status_capabilities(status: str) -> dict[str, bool]:
+    """One semantic contract for Python and API/browser consumers."""
+    if status not in PLAN_SOLVE_STATUSES:
+        raise ValueError(f"Unknown solve status: {status}")
+    return {
+        "printable": status in PLAN_PRINTABLE_STATUSES,
+        "reviewable": status == "needs_review",
+        "retryable": status in {"unknown", "infeasible", "needs_review"},
+        "complete": status in PLAN_COMPLETE_STATUSES,
+    }
+
+
+def plan_capabilities(plan: Plan) -> dict[str, bool]:
+    return status_capabilities(plan.status)
+
