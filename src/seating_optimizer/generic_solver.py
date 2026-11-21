@@ -15,6 +15,7 @@ from pydantic import Field
 
 from .display import counted, distinct_party_name, party_name_for
 from .generic_cp import Build, add_rule, group_id, resolve_tiers
+from .objective_priority import optimize_with_split_priority
 from .generic_evaluator import score_fixed_plan
 from .generic_rules import (
     Criterion, GenericRule, criterion_field_state, match_family,
@@ -257,9 +258,12 @@ def _core(problem):
             message="Tier feasibility is unproved; no later tier selected.",
             layout=problem.layout, solve_seconds=perf_counter()-start,
         )
-    builder.model.Maximize(sum(builder.terms))
-    optimizer = builder.solver()
-    result = optimizer.Solve(builder.model)
+    split_priority = any(rule.enabled and (rule.engine, rule.mechanism) ==
+                         ("intra", "split_term") for rule in problem.rules)
+    priority_bits = ([builder.x[gid, j] for gid in builder.split for j in range(builder.n)]
+                     if split_priority else [])
+    optimizer, result, priority_proven, _ = optimize_with_split_priority(
+        builder.model, builder.terms, priority_bits, problem.config, builder.solver)
     if result not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         conflicts = []
         if result == cp_model.INFEASIBLE:
@@ -327,14 +331,19 @@ def _core(problem):
                                 empty_seats=table.capacity-occupied))
     return GenericPlan(
         session_id=problem.session_id,
-        status="optimal" if result == cp_model.OPTIMAL else "feasible",
+        status=("optimal" if result == cp_model.OPTIMAL and priority_proven else "feasible"),
+        validation_warnings=(["Minimum split count could not be proved within the time limit."]
+                             if split_priority and not priority_proven else []),
         total_score=score, assignments=assignments, tables=usage,
         score_breakdown=breakdown,
         compromises=[Compromise(rule_id=r, description=f"Penalty from {r}",
                                 lost_points=-points)
                      for r, points in by_rule.items() if points < 0],
         layout=problem.layout, solve_seconds=perf_counter()-start,
-        message="All hard constraints satisfied.",
+        message=("All hard constraints satisfied; split-table count globally minimized."
+                 if split_priority and priority_proven else
+                 "All hard constraints satisfied; minimum split count unproven."
+                 if split_priority else "All hard constraints satisfied."),
     )
 
 
