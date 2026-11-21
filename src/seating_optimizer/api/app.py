@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+from ipaddress import ip_address
 from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response, FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from seating_optimizer import (
@@ -26,6 +28,92 @@ from seating_optimizer.rule_migration import migrate_configuration
 from seating_optimizer.reassignment import ReassignRequest, ReassignResponse, propose_reassignment
 from seating_optimizer.models import ManualInstruction, Model
 from seating_optimizer.reassignment import Movement
+
+
+MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_API_SOLVE_SECONDS = 60.0
+MAX_API_SOLVE_WORKERS = 16
+MAX_API_GUESTS = 2000
+MAX_API_TABLES = 200
+
+
+def _trusted_local_client(host: str) -> bool:
+    # The special ASGI test-client sentinel is never produced by a normal TCP socket.
+    if host == "testclient":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+class LocalApiBoundary:
+    """ASGI guard: no remote TCP peers, size-limited requests, bounded solve jobs.
+
+    It is deliberately installed for all routes, including documentation and health.
+    Forwarded client headers are ignored; access behind an authenticated local reverse
+    proxy is the operator's responsibility, not a trust signal from a request header.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        host = (scope.get("client") or ("", 0))[0]
+        if not _trusted_local_client(host):
+            return await JSONResponse(
+                status_code=403, content={"detail": "Local-only API: connect from the host computer."}
+            )(scope, receive, send)
+        if scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            return await self.app(scope, receive, send)
+        headers = {name.lower(): value for name, value in scope.get("headers", [])}
+        claimed = headers.get(b"content-length")
+        if claimed is not None:
+            try:
+                expected = int(claimed)
+            except ValueError:
+                return await JSONResponse(status_code=400, content={"detail": "Invalid Content-Length."})(scope, receive, send)
+            if expected < 0 or expected > MAX_BODY_BYTES:
+                return await JSONResponse(status_code=413, content={"detail": "Request exceeds the 8 MiB limit."})(scope, receive, send)
+
+        # Buffer at most 8 MiB BEFORE the app parses JSON. This also handles chunked
+        # bodies with no Content-Length and prevents unbounded request-memory use.
+        packets, size = [], 0
+        while True:
+            item = await receive()
+            if item["type"] == "http.disconnect":
+                return
+            if item["type"] != "http.request":
+                return
+            size += len(item.get("body", b""))
+            if size > MAX_BODY_BYTES:
+                return await JSONResponse(status_code=413, content={"detail": "Request exceeds the 8 MiB limit."})(scope, receive, send)
+            packets.append(item)
+            if not item.get("more_body", False):
+                break
+
+        if scope.get("path") in {"/v1/solve", "/v2/solve", "/v1/reassign/options", "/v2/reassign/options"}:
+            try:
+                payload = json.loads(b"".join(item.get("body", b"") for item in packets))
+                problem = payload.get("problem", payload)
+                config = problem.get("config") or {}
+                if (float(config.get("time_limit_seconds", 5)) > MAX_API_SOLVE_SECONDS or
+                    int(config.get("workers", 8)) > MAX_API_SOLVE_WORKERS or
+                    len(problem.get("guests", [])) > MAX_API_GUESTS or
+                    len(problem.get("tables", [])) > MAX_API_TABLES):
+                    return await JSONResponse(status_code=422, content={
+                        "detail": "Solve request exceeds local API limits: at most 60 s, 16 workers, 2000 guests and 200 tables."
+                    })(scope, receive, send)
+            except (ValueError, TypeError, AttributeError, KeyError):
+                pass  # Existing Pydantic validation explains malformed input.
+
+        async def replay():
+            if packets:
+                return packets.pop(0)
+            return await receive()
+        return await self.app(scope, replay, send)
 
 
 class LayoutFile(BaseModel):
@@ -76,6 +164,7 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
+    app.add_middleware(LocalApiBoundary)
 
     @app.get("/healthz")
     def health() -> dict[str, str]:
