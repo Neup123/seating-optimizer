@@ -559,3 +559,31 @@ test("stale seating remains visible but read-only after changing inputs and relo
   assert.equal(later.app.state.plan,null);
   assert.match(later.root.textContent,/Re-optimize before using or printing/);
 });
+
+test("table edits are validated before commit and rejected drafts stay visible",async()=>{
+  let reject=true;
+  const {app,root,$,dom,calls}=await setup(async path=>{
+    if(path==="/v1/layouts/import"){
+      if(reject) throw Error("Table drawing exceeds floor bounds");
+      return {floors:[]};
+    }
+    return {};
+  });
+  seed(app);app.show("map");
+  const editor=$('.table-editor[data-table-id="G1"]');
+  assert.ok(editor);
+  const capacity=$("#table-G1-capacity");
+  assert.ok(capacity);
+  const initial=app.state.tables.find(t=>t.id==="G1").capacity;
+  setValue(capacity,String(initial+1),dom.window);
+  await until(()=>editor.querySelector(".save-state").textContent.includes("Not saved"));
+  assert.equal(app.state.tables.find(t=>t.id==="G1").capacity,initial,
+    "rejected geometry cannot partially commit the table capacity");
+  assert.equal(capacity.value,String(initial+1),"rejected draft remains editable");
+  assert.match(editor.querySelector(".save-state").textContent,/floor bounds/);
+  reject=false;
+  editor.requestSubmit();
+  await until(()=>app.state.tables.find(t=>t.id==="G1").capacity===initial+1);
+  assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
+  assert.match(root.textContent,/Server validated/);
+});
