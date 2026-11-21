@@ -32,17 +32,45 @@ class Build:
         self.ids = list(groups)
         self.split = set(problem.splittable_groups)
         self.split.update(i.group_id for i in problem.manual_instructions if i.allow_split)
-        max_capacity = max(t.capacity for t in self.tables)
         linked = {
             lookup[target] for rule in problem.rules
             if rule.enabled and (rule.engine, rule.mechanism) == ("inter", "pair_relation")
             and rule.relation == "together"
             for target in (rule.targets or [])
         }
-        # Match the legacy atomicity exception: a linked family is NOT
-        # silently split merely because its own size exceeds one table.
-        self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity and gid not in linked)
+        # A large family must be compared only with tables that satisfy its
+        # HARD venue rules. The unrestricted largest table may be on a floor
+        # which is prohibited for that family (same contract as v1).
+        for gid, members in groups.items():
+            if gid in linked or gid in self.split:
+                continue
+            admissible = set(range(self.n))
+            for rule in problem.rules:
+                if not rule.enabled or rule.mode != "hard":
+                    continue
+                if (rule.engine, rule.mechanism) in {
+                        ("venue", "placement_by_criterion"), ("venue", "property_need")}:
+                    criterion = Criterion.model_validate(rule.criterion)
+                    applies = (match_family(members, criterion) if criterion.subject == "family"
+                               else any(match_guest(guest, criterion) for guest in members))
+                    if not applies:
+                        continue
+                    if rule.mechanism == "placement_by_criterion":
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if table.zone_id in rule.zones}
+                    else:
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if (rule.property == "small_group_priority" and table.small_group_priority)
+                                   or rule.property.casefold() in
+                                   {tag.casefold() for tag in table.properties}}
+                    admissible &= allowed
+                elif (rule.engine, rule.mechanism) == ("venue", "locked_assignment") and (
+                        lookup[rule.target] == gid):
+                    admissible &= {j for j, table in enumerate(self.tables)
+                                   if table.id == rule.table}
+            largest = max((self.tables[j].capacity for j in admissible), default=0)
+            if len(members) > largest:
+                self.split.add(gid)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
@@ -402,24 +430,35 @@ def _pair_relation(rule, b):
 
 def _placement_by_criterion(rule, b):
     matches = b.matching(rule.criterion)
+    allowed = set(rule.zones)
+    if rule.mode == "hard":
+        # A need of ONE family member restricts every portion of the family,
+        # including auto-split members (atomic parties previously got this
+        # propagation only implicitly through their shared x variable).
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if table.zone_id not in allowed:
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if table.zone_id in set(rule.zones):
-                if rule.mode == "soft":
-                    b.terms.append(rule.weight * b.guest_at[guest.id, j])
-            elif rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
+            if table.zone_id in allowed:
+                b.terms.append(rule.weight * b.guest_at[guest.id, j])
 
 
 def _property_need(rule, b):
     matches = b.matching(rule.criterion)
+    if rule.mode == "hard":
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if not b.has_property(table, rule.property):
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if b.has_property(table, rule.property):
-                continue
-            if rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
-            else:
+            if not b.has_property(table, rule.property):
                 b.terms.append(-rule.weight * b.guest_at[guest.id, j])
 
 
