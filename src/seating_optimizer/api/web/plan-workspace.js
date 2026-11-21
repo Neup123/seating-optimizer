@@ -1,7 +1,7 @@
 /* Interactive v2 working surfaces. All placement data comes from the solved API Plan. */
 import { assignmentMatchesSelection, selectedPlanAssignments, togglePlanSelection,
   partyTotals, portionLabel } from "./plan-selection.js";
-import { displayRuleName } from "./v2-rules.js";
+import { displayRuleName, describeRuleEffect } from "./v2-rules.js";
 
 function el(tag, css = "", text) {
   const node = document.createElement(tag);
@@ -101,7 +101,7 @@ export function renderPlanWorkspace(state, {
     const chosen = selectedPlanAssignments(plan, state.selectedPlanItem);
     if (chosen.length) {
       const selection = el("section", "plan-selection", "");
-      selection.id = "plan-selection";
+      selection.id = "plan-selection";selection.tabIndex=-1;
       const isPerson = state.selectedPlanItem.kind === "person";
       const name = isPerson
         ? (chosen[0].guest_names || [])[chosen[0].guest_ids.indexOf(state.selectedPlanItem.id)] || "Person"
@@ -161,6 +161,12 @@ export function renderPlanWorkspace(state, {
 
       if (state.reassignMode) {
         const editor = el("div", "reassign-editor");
+        editor.addEventListener("keydown",event=>{
+          if(event.key!=="Escape")return;
+          event.preventDefault();
+          state.reassignMode=null;state.reassignResponse=null;
+          refresh();document.querySelector("#plan-selection")?.focus();
+        });
         const isMove = state.reassignMode === "move_to";
         editor.append(el("h4", "", isMove ? "Move party to a place" : "Exclude party from a place"));
         const kinds = [["table", "Table"], ["floor", "Floor"], ["zone", "Zone"]];
@@ -320,7 +326,19 @@ export function renderPlanWorkspace(state, {
     details.append(el("h4", "", "Rules for this assignment"));
     if (related.length) {
       const rules = el("ul");
-      for (const rule of related) rules.append(el("li", "", displayRuleName(rule)));
+      for (const rule of related) {
+        const item = el("li", "related-rule");
+        item.append(el("strong", "", displayRuleName(rule)),
+          el("span", "muted", " — " + describeRuleEffect(rule)));
+        const technical = el("details", "rule-diagnostics");
+        technical.append(el("summary", "", "Technical details"));
+        technical.append(el("code", "", "ID: " + rule.id +
+          " · Engine: " + (rule.engine || "legacy") +
+          " · Mechanism: " + (rule.mechanism || rule.shape || "unknown") +
+          " · Mode: " + (rule.mode || "unknown")));
+        item.append(technical);
+        rules.append(item);
+      }
       details.append(rules);
     } else details.append(el("p", "muted", "No assignment-specific rule references returned."));
     // Score breakdown is a property of the full plan, not of any single family.
@@ -349,6 +367,36 @@ export function renderPlanWorkspace(state, {
   function assignmentRow(a, withPeople = false) {
     const key = a.group_id + "@" + a.table_id;
     const holder = el("article", "plan-entry");
+    holder.tabIndex=0;
+    holder.setAttribute("role","group");
+    holder.setAttribute("aria-label","Assignment for "+partyName(a)+" at table "+a.table_id);
+    const restoreFocus=()=>{
+      const copy=[...document.querySelectorAll(".plan-entry")].find(item=>
+        item.dataset.groupId===a.group_id && item.dataset.tableId===a.table_id);
+      copy?.focus();
+    };
+    holder.addEventListener("keydown",event=>{
+      if(event.target!==holder)return; // Buttons, checkboxes and inputs retain native keys.
+      const rows=[...document.querySelectorAll(".plan-entry")];
+      const index=rows.indexOf(holder);
+      if(event.key==="ArrowDown"||event.key==="ArrowUp"){
+        event.preventDefault();
+        const next=rows[index+(event.key==="ArrowDown"?1:-1)];
+        next?.focus();
+      }else if(event.key===" "){
+        event.preventDefault();
+        selectItem("party",a.group_id);restoreFocus();
+      }else if(event.key==="Enter"){
+        event.preventDefault();
+        state.expandedPartyKey=state.expandedPartyKey===key?null:key;
+        refresh();restoreFocus();
+      }else if(event.key==="Escape" && (state.expandedPartyKey===key || state.reassignMode)){
+        event.preventDefault();
+        state.expandedPartyKey=null;
+        state.reassignMode=null;state.reassignResponse=null;
+        refresh();restoreFocus();
+      }
+    });
     holder.dataset.groupId = a.group_id;
     holder.dataset.tableId = a.table_id;
     if (assignmentMatchesSelection(a, state.selectedPlanItem)) holder.classList.add("is-selected");
@@ -443,7 +491,22 @@ export function renderPlanWorkspace(state, {
         const focus = () => { state.focusedTableId = drawing.table_id; refresh(); };
         group.addEventListener("click", focus);
         group.addEventListener("keydown", e => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); focus(); }
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();focus();
+            const active=[...document.querySelectorAll(".working-floor-map [data-table-id]")]
+              .find(item=>item.getAttribute("data-table-id")===drawing.table_id);
+            active?.focus();
+          } else if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
+            e.preventDefault();
+            const groups=[...svg.querySelectorAll('[data-table-id]')];
+            const at=groups.indexOf(group);
+            const next=groups[at+(["ArrowLeft","ArrowUp"].includes(e.key)?-1:1)];
+            next?.focus();
+          } else if (e.key==="Escape" && state.focusedTableId) {
+            e.preventDefault();
+            state.focusedTableId="";refresh();
+            document.querySelector("#plan-floor-select")?.focus();
+          }
         });
         svg.append(group);
       }

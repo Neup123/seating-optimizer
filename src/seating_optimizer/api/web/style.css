@@ -426,3 +426,9 @@ pre{padding:17px;white-space:pre-wrap;overflow-wrap:anywhere;background:#162e3b;
  .review-cluster .view-tabs{flex:none}
  .rule-accordion-body{width:100%;min-width:0}
 }
+
+/* Keep the primary criterion value aligned with field and operator.
+ * Optional custom-value UI is beside it, not a nested control-row with margins. */
+.value-picker{display:flex;align-items:end;gap:8px;min-width:0;flex-wrap:wrap}
+.value-picker>.compact-field{flex:0 0 auto}
+.value-picker>.advanced-value{flex:0 1 auto}
