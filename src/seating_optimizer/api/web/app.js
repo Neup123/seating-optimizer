@@ -8,6 +8,7 @@ const SESSION_KEY = "seating-optimizer:session:v2";
 const LEGACY_SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
+const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Seven days since last saved change.
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
   "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
   "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "lastGoodPlan", "planStale", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
@@ -19,6 +20,15 @@ function storedJSON(key, fallback) {
   } catch (_) { return fallback; }
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+function recentSession(key) {
+  const candidate = storedJSON(key, null);
+  if (candidate?.saved_at && (!Number.isFinite(candidate.saved_at) ||
+      Date.now() - candidate.saved_at > SESSION_RETENTION_MS)) {
+    try { window.localStorage.removeItem(key); } catch (_) { /* storage disabled */ }
+    return null;
+  }
+  return candidate;
+}
 
 function partyName(assignment) {
   const names = assignment.guest_names || [];
@@ -250,7 +260,7 @@ export function createApp(root, api = createGateway()) {
   const invalidPatternDrafts = new WeakMap();
   const savedTemplates = storedJSON(TEMPLATES_KEY, storedJSON(LEGACY_TEMPLATES_KEY, []));
   const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
-  const previous = storedJSON(SESSION_KEY, storedJSON(LEGACY_SESSION_KEY, null));
+  const previous = recentSession(SESSION_KEY) || recentSession(LEGACY_SESSION_KEY);
   if ([1, 2].includes(previous?.version) && previous.data && Array.isArray(previous.data.guests) &&
       Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&
       Array.isArray(previous.data.zones) && Array.isArray(previous.data.layout?.floors)) {
@@ -263,6 +273,9 @@ export function createApp(root, api = createGateway()) {
     state.needsMigration = previous.version === 1 || state.rules.some(rule => rule.shape);
     state.error = false;
   }
+  // A spreadsheet's raw base64 bytes are never restored into the next saved snapshot.
+  if (state.importFile?.content_base64)
+    state.importFile = { filename: state.importFile.filename };
   if (!state.needsMigration) for (const rule of state.rules) {
     if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
   }
@@ -273,6 +286,7 @@ export function createApp(root, api = createGateway()) {
   let viewRequest = 0;
   let working = false;
   let noticesIssued = 0;
+  let confirmingErase = false;
 
   function hasInvalidStoredPatternCounts(rules) {
     return (rules || []).some(rule => rule.enabled !== false && rule.shape === "global_pattern" &&
@@ -295,7 +309,7 @@ export function createApp(root, api = createGateway()) {
     const data = {};
     for (const key of SESSION_FIELDS) data[key] = state[key];
     try {
-      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, saved_at: Date.now(), data }));
       state.storageWarning = "";
     } catch (_) {
       // Import source data can exceed the per-origin quota; retain all imported
@@ -303,7 +317,7 @@ export function createApp(root, api = createGateway()) {
       if (data.importFile?.content_base64) {
         data.importFile = { filename: data.importFile.filename };
         try {
-          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, saved_at: Date.now(), data }));
           state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
           return;
         } catch (_) { /* even the smaller snapshot did not fit */ }
@@ -354,6 +368,21 @@ export function createApp(root, api = createGateway()) {
     state.focusedFloor = state.layout.floors[0]?.zone_id || "";
     state.templateName = copy.name;
     invalidate();
+  }
+  function clearBrowserData() {
+    const catalog = state.catalog;
+    // Saved templates can contain named party targets, so clear both versions as well.
+    templates.splice(0);
+    Object.assign(state, emptySession(), { catalog });
+    state.notice = "Saved guest data, planning sessions and templates cleared from this browser.";
+    confirmingErase = false;
+    render();
+    for (const key of [SESSION_KEY, LEGACY_SESSION_KEY, TEMPLATES_KEY, LEGACY_TEMPLATES_KEY]) {
+      try { window.localStorage.removeItem(key); } catch (_) {
+        state.storageWarning = "Browser storage could not be cleared. Clear site data in browser settings.";
+        render();
+      }
+    }
   }
   function newSession() {
     const catalog = state.catalog;
@@ -581,6 +610,17 @@ export function createApp(root, api = createGateway()) {
     form.append(fileControl("Choose guest list spreadsheet (CSV or XLSX)", file));
     if (state.importFile) form.append(element("p", "muted", "Selected: " + state.importFile.filename));
     area.append(form);
+    const privacy = element("section", "privacy-controls");
+    privacy.append(element("p", "muted", "This browser saves a working session for 7 days after its last change. Raw spreadsheet bytes are discarded after import. Templates stay until removed and may contain party names."));
+    if (!confirmingErase) {
+      privacy.append(action("Clear saved guest data", () => { confirmingErase = true; render(); },
+        "quiet small", "clear-guest-data"));
+    } else {
+      privacy.append(element("p", "problem", "Permanently erase this browser's saved session AND all saved templates? Export any reusable templates first. This does not delete files you downloaded."));
+      privacy.append(row(action("Erase saved data", clearBrowserData, "danger small", "confirm-clear-guest-data"),
+        action("Cancel", () => { confirmingErase = false; render(); }, "quiet small", "cancel-clear-guest-data")));
+    }
+    area.append(privacy);
     if (!state.preview) return area;
 
     const mappingCard = card("Map columns");
@@ -655,6 +695,8 @@ export function createApp(root, api = createGateway()) {
         announce("Import blocked: fix the reported errors. No rows were silently accepted.", true);
       } else {
         state.guests = result.guests;
+        // Keep the mapping and file name but not raw base64 source data in localStorage.
+        if (state.importFile) state.importFile = { filename: state.importFile.filename };
         invalidate();
         announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
       }
