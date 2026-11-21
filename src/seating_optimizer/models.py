@@ -155,7 +155,13 @@ class Guest(Model):
     name: str
     group_id: str | None = None
     group_name: str | None = None  # Human-readable registration/party name.
+    requires_chair: bool = Field(default=True, strict=True)  # False for a lap infant.
     attributes: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+
+def chairs_needed(members: list[Guest]) -> int:
+    """Count actual chairs, while retaining every infant in group lists."""
+    return sum(guest.requires_chair for guest in members)
 
 
 Shape = Literal["attribute_grouping", "zone_restriction", "table_property_need", "pair", "capacity", "fill_efficiency", "pin", "global_pattern", "split_penalty", "small_group_priority", "low_priority", "tiered_placement", "zone_companionship"]

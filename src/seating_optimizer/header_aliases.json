@@ -69,5 +69,11 @@
     "mobility",
     "accessibility",
     "wheelchair"
+  ],
+  "lap_infants": [
+    "lap infants",
+    "infants on lap",
+    "babies without seats",
+    "no-chair infants"
   ]
 }

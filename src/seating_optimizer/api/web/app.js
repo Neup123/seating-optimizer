@@ -587,6 +587,7 @@ export function createApp(root, api = createGateway()) {
     mappingCard.append(element("span", "draft-status", "Draft mapping · Saved locally"));
     const choices = [["", "Unmapped (preserve as attribute)"],
       ["name", "Guest / registration name"], ["size", "Party size"],
+       ["lap_infants", "Infants on lap (no chair)"],
       ["group_id", "Group ID"], ["group_name", "Group name"],
       ["attribute.language", "Attribute: language"],
       ["attribute.age_layer", "Attribute: age layer"],
@@ -602,7 +603,7 @@ export function createApp(root, api = createGateway()) {
       const rowEl = element("tr");
       rowEl.append(element("td", "", header));
       const targetIsCriterion = (state.mapping[header] || "").startsWith("attribute.") ||
-        !["name","size","group_id","group_name"].includes(state.mapping[header]);
+        !["name","size","lap_infants","group_id","group_name"].includes(state.mapping[header]);
       rowEl.append(element("td", targetIsCriterion ? "criterion-ready" : "muted",
         targetIsCriterion ? "◇ Rule field" : "—"));
       const cell = element("td");
@@ -656,7 +657,9 @@ export function createApp(root, api = createGateway()) {
       } else {
         state.guests = result.guests;
         invalidate();
-        announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
+        announce("Imported " + result.guests.length + " guests (" +
+           result.guests.filter(g => g.requires_chair !== false).length +
+           " chairs needed) from " + result.rows_imported + " registrations.");
       }
     }), "primary icon-button", "import-guests"));
     buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;

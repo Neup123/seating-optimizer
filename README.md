@@ -75,6 +75,8 @@ Rules always contain an id, shape, mode (hard or soft), parameters, and a positi
 
 Hard zone restrictions propagate from any guest to the **entire** group, including all portions of an oversized adjacent-table split. Contradictory restrictions lead to an infeasible result, not a hard-rule violation. A weighted rule contributes points only when its condition holds; the plan includes per-group rule-based reasons with contributed points, score breakdown per soft rule, compromises for forgone preferences, and remaining chairs per table. Shared pair points are distributed fairly in assignment-level reasons.
 
+For infants who remain with their family but do not require a physical chair, see [Lap infants and chair capacity](docs/lap-infants.md). Infants are counted as guests but not seats only when explicitly marked; age labels never silently change capacity.
+
 ## CSV and XLSX import
 
 One spreadsheet row represents one registration with required name and size columns. A size of 3 creates three uniquely identified guests under one group_id. The source header to canonical target manual mapping is always available, including free-form targets such as attribute.food:

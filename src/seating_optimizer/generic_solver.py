@@ -22,7 +22,7 @@ from .generic_rules import (
 )
 from .models import (
     Assignment, Compromise, Model, NotSeatedGroup, Plan, PriorityMark, Problem,
-    Reason, ScoreItem, TableUsage, VenueConfiguration,
+    Reason, ScoreItem, TableUsage, VenueConfiguration, chairs_needed,
 )
 from .rule_migration import migrate_instance
 
@@ -321,7 +321,7 @@ def _core(problem):
                  for rule_id, value in by_rule.items()]
     usage = []
     for table in builder.tables:
-        occupied = sum(mapping[g.id] == table.id for g in problem.guests)
+        occupied = sum(g.requires_chair and mapping[g.id] == table.id for g in problem.guests)
         usage.append(TableUsage(table_id=table.id, zone_id=table.zone_id,
                                 capacity=table.capacity, occupied=occupied,
                                 empty_seats=table.capacity-occupied))
@@ -372,7 +372,7 @@ def solve_generic(problem: GenericProblem | Problem) -> GenericPlan:
     ]
     active = set(groups) - operator_unseat
     seats = sum(t.capacity for t in problem.tables)
-    guest_count = sum(len(groups[gid]) for gid in active)
+    guest_count = sum(chairs_needed(groups[gid]) for gid in active)
 
     def metadata(plan, pending=None, pending_reason=False):
         plan.priority_marks = marks
