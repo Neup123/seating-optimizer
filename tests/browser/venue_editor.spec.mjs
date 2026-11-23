@@ -27,11 +27,17 @@ test("real venue editor: compact defaults, rename, resize and persisted room out
     .toBeGreaterThan(Number(initialWidth));
 
   await page.locator("#start-room-outline").click();
-  const canvas=page.locator("#map-editor-svg");
-  const box=await canvas.boundingBox();
-  if(!box)throw Error("Map unavailable");
-  for(const [u,v] of [[0.002,0.002],[0.998,0.002],[0.998,0.998],[0.002,0.998]])
+  // Click the painted floor rectangle rather than the SVG viewport: viewBox
+  // letterboxing can leave noninteractive margins around the floor itself.
+  const paintedFloor=page.locator("#map-editor-svg > rect").first();
+  const corners=[[0.002,0.002],[0.998,0.002],[0.998,0.998],[0.002,0.998]];
+  for(let index=0;index<corners.length;index++){
+    const box=await paintedFloor.boundingBox();
+    if(!box)throw Error("Floor drawing unavailable");
+    const [u,v]=corners[index];
     await page.mouse.click(box.x+u*box.width,box.y+v*box.height);
+    await expect(page.locator(".room-corner")).toHaveCount(index+1);
+  }
   await page.locator("#save-room-outline").click();
   await expect(page.locator("#notice")).toContainText("Room outline validated and saved");
   await expect(page.locator("#clear-room-outline")).toBeVisible();
