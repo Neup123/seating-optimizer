@@ -20,6 +20,21 @@ test('operator click review: tables, keyboard, resize, room outline, removal', a
   await shot(page,'01-initial');
   await page.getByRole('button',{name:/Add table/}).click();
   await expect(page.locator('#stats')).toHaveText('6 tables · 58 chairs');
+  // Default placement must never produce an overlapping table, including
+  // the round table's bounding geometry. Production has the same safety goal.
+  const overlaps = await page.locator('#canvas').evaluate(svg => {
+    const boxes=[...svg.querySelectorAll('g.table-entity .shape')].map(el => {
+      const b=el.getBBox();return{x:b.x,y:b.y,w:b.width,h:b.height};
+    });
+    const collisions=[];
+    for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){
+      const a=boxes[i],b=boxes[j];
+      if(a.x < b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y)collisions.push([i,j]);
+    }
+    return collisions;
+  });
+  expect(overlaps,'Adding a table must not overlap an existing table').toEqual([]);
+
   await expect(page.locator('#editor h3')).toHaveText('Edit T6');
   const name = field(page,'Display name');
   await name.fill('Operator Test Banquet');
