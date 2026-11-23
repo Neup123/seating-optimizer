@@ -1422,14 +1422,20 @@ export function createApp(root, api = createGateway()) {
         svg.append(corner);
       }
     }
-    bg.addEventListener("click", event => {
+    svg.addEventListener("click", event => {
       if (!state.editingRoomOutline) return;
-      const bounds = svg.getBoundingClientRect();
-      if (!bounds.width || !bounds.height) return;
-      const x = Math.max(0, Math.min(floor.width,
-        Math.round((event.clientX - bounds.left) * floor.width / bounds.width)));
-      const y = Math.max(0, Math.min(floor.height,
-        Math.round((event.clientY - bounds.top) * floor.height / bounds.height)));
+      // SVG viewBox can be letterboxed; its CSS bounding rect is not the
+      // painted coordinate system. Convert actual pointer coordinates via CTM.
+      // Listen on the SVG so table shapes and corner handles cannot swallow a
+      // room-outline click intended for the editor.
+      const matrix = svg.getScreenCTM();
+      if (!matrix) return;
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const local = point.matrixTransform(matrix.inverse());
+      const x = Math.max(0, Math.min(floor.width, Math.round(local.x)));
+      const y = Math.max(0, Math.min(floor.height, Math.round(local.y)));
       state.roomDraft.push([x, y]);
       render();
     });
