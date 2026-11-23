@@ -335,8 +335,11 @@ export function createApp(root, api = createGateway()) {
     state.error = false;
   }
   // A spreadsheet's raw base64 bytes are never restored into the next saved snapshot.
-  if (state.importFile?.content_base64)
+  if (state.importFile?.content_base64) {
     state.importFile = { filename: state.importFile.filename };
+    // Sanitization is itself a data change; purge old bytes immediately.
+    saveSession();
+  }
   if (!state.needsMigration) for (const rule of state.rules) {
     if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
   }
@@ -578,14 +581,14 @@ export function createApp(root, api = createGateway()) {
     sidebar.append(nav);
     return sidebar;
   }
-  function render() {
+  function render(persist = true) {
     if (state.screen === "plan" && state.view === "print" &&
         LIST_VIEWS.has(state.printFormat) && typeof state.viewContent === "string" &&
         listContentEndpoint !== listEndpoint(state.printFormat)) {
       void loadView("print");
       return;
     }
-    if (!state.needsMigration) saveSession();
+    if (persist !== false && !state.needsMigration) saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -1969,10 +1972,11 @@ export function createApp(root, api = createGateway()) {
         state.rules = [];
       }
     }
-    render();
+    render(false);
     if (state.plan && Array.isArray(state.catalog)) await loadView(state.view);
   })();
-  render();
+  // Catalog/policy fetches must not overwrite storage before an explicit user edit.
+  render(false);
   return { state, ready, render, show: screen => { state.screen = screen; render(); },
            loadView, validateLayout, loadLayoutFiles, projectProblem, newSession };
 }
