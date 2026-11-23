@@ -26,20 +26,27 @@ test("real venue editor: compact defaults, rename, resize and persisted room out
   await expect.poll(async()=>Number(await page.locator("#table-T1-width").inputValue()))
     .toBeGreaterThan(Number(initialWidth));
 
+  // Keep this test table clear of the room corners and the canvas's
+  // visually clipped 12px rounded border, just like an operator would.
+  await page.locator("#table-T1-x").fill("40");
+  await page.locator("#table-T1-x").blur();
+  await page.locator("#table-T1-y").fill("40");
+  await page.locator("#table-T1-y").blur();
+  await expect(page.locator("#table-T1-y")).toHaveValue("40");
   await page.locator("#start-room-outline").click();
-  // Click the painted floor rectangle rather than the SVG viewport: viewBox
-  // letterboxing can leave noninteractive margins around the floor itself.
   const paintedFloor=page.locator("#map-editor-svg > rect").first();
-  const corners=[[0.002,0.002],[0.998,0.002],[0.998,0.998],[0.002,0.998]];
+  const cornerPositions=({width:w,height:h})=>[
+    [16,3],[w-16,3],[w-3,16],[w-3,h-16],
+    [w-16,h-3],[16,h-3],[3,h-16],[3,16],
+  ];
+  const floorBox=await paintedFloor.boundingBox();
+  if(!floorBox)throw Error("Floor drawing unavailable");
+  const corners=cornerPositions(floorBox);
   for(let index=0;index<corners.length;index++){
-    // The Draw room outline toolbar is above the canvas. Clicking the button
-    // may scroll the canvas below the viewport, so bring it back before the
-    // coordinate-based real mouse click.
-    await paintedFloor.scrollIntoViewIfNeeded();
-    const box=await paintedFloor.boundingBox();
-    if(!box)throw Error("Floor drawing unavailable");
-    const [u,v]=corners[index];
-    await page.mouse.click(box.x+u*box.width,box.y+v*box.height);
+    const [x,y]=corners[index];
+    // A locator click auto-scrolls and checks the real painted target;
+    // page.mouse.click at off-screen coordinates can silently miss.
+    await paintedFloor.click({position:{x,y}});
     await expect(page.locator(".room-corner")).toHaveCount(index+1);
   }
   await page.locator("#save-room-outline").click();
