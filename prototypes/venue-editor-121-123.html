@@ -134,8 +134,27 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
     const priority=document.createElement('label');priority.textContent='Priority for couples and singles';const check=document.createElement('input');check.type='checkbox';check.checked=t.priority;check.style.width='20px';check.onchange=()=>{t.priority=check.checked;toast('Preference updated.');};priority.append(check);advanced.append(grid,priority);target.append(advanced);
     const actions=document.createElement('div');actions.className='controls';const remove=document.createElement('button');remove.className='btn danger';remove.textContent='Remove table';remove.onclick=()=>{if(!window.confirm('Remove '+t.name+' from the demo venue?'))return;tables.splice(tables.indexOf(t),1);selected=tables[0]?.id||null;render();};actions.append(remove);target.append(actions);
   }
+  // Prototype-only placement: preserve clear space and stay inside the
+  // current room polygon instead of choosing a fixed overlapping grid cell.
+  function insideRoom(x,y){
+    let found=false;
+    for(let i=0,j=room.length-1;i<room.length;j=i++){
+      const a=room[i],b=room[j];
+      if((a[1]>y)!==(b[1]>y) && x < (b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])found=!found;
+    }
+    return found;
+  }
+  function defaultSpot(w,h){
+    for(let y=70;y<=475-h-6;y+=16)for(let x=70;x<=755-w-6;x+=16){
+      const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]];
+      if(!corners.every(p=>insideRoom(p[0],p[1])))continue;
+      if(tables.some(t=>x<t.x+t.w+12&&x+w+12>t.x&&y<t.y+t.h+12&&y+h+12>t.y))continue;
+      return{x,y};
+    }
+    return null;
+  }
   function render(){renderCanvas();renderList();renderEditor();$('save-room').hidden=mode!=='room';$('stats').textContent=tables.length+' tables · '+tables.reduce((n,t)=>n+t.chairs,0)+' chairs';$('move-mode').setAttribute('aria-pressed',String(mode==='move'));$('room-mode').setAttribute('aria-pressed',String(mode==='room'));}
-  $('add').onclick=()=>{const n=1+Math.max(0,...tables.map(t=>Number(t.id.slice(1))||0));const row=Math.floor((tables.length%9)/3),col=tables.length%3;const id='T'+n;tables.push({id,name:'Table '+n,chairs:10,x:110+col*180,y:90+row*130,w:115,h:74,shape:'rect',priority:false});selected=id;render();$('editor-name').focus();toast(id+' added with sensible defaults.');};
+  $('add').onclick=()=>{const n=1+Math.max(0,...tables.map(t=>Number(t.id.slice(1))||0));const id='T'+n, spot=defaultSpot(115,74);if(!spot){toast('No clear space for another table. Move or resize an existing table.');return;}tables.push({id,name:'Table '+n,chairs:10,x:spot.x,y:spot.y,w:115,h:74,shape:'rect',priority:false});selected=id;render();$('editor-name').focus();toast(id+' added with sensible defaults.');};
   $('search').oninput=renderList;
   $('move-mode').onclick=()=>{mode='move';render();toast('Drag a table or its resize corner.');};
   $('room-mode').onclick=()=>{mode='room';room=[];render();toast('Click room corners on the map to trace the outline.');};
