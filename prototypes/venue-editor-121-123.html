@@ -144,6 +144,23 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
     }
     return found;
   }
+  function roomOutlineKeepsTables(){
+    if(room.length<3)return false;
+    const area=room.reduce((sum,p,i)=>sum+p[0]*room[(i+1)%room.length][1]-room[(i+1)%room.length][0]*p[1],0);
+    if(Math.abs(area)<3000)return false;
+    const intersect=(a,b,c,d)=>{
+      const cross=(p,q,r)=>(q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]);
+      return cross(a,b,c)*cross(a,b,d)<0&&cross(c,d,a)*cross(c,d,b)<0;
+    };
+    const edges=room.map((p,i)=>[p,room[(i+1)%room.length]]);
+    if(edges.some(([a,b],i)=>edges.some(([c,d],j)=>Math.abs(i-j)>1&&Math.abs(i-j)!==edges.length-1&&intersect(a,b,c,d))))return false;
+    return tables.every(t=>{
+      const corners=[[t.x,t.y],[t.x+t.w,t.y],[t.x+t.w,t.y+t.h],[t.x,t.y+t.h]];
+      const sides=corners.map((p,i)=>[p,corners[(i+1)%4]]);
+      return corners.every(([x,y])=>insideRoom(x,y))
+        &&!sides.some(([a,b])=>edges.some(([c,d])=>intersect(a,b,c,d)));
+    });
+  }
   function defaultSpot(w,h){
     for(let y=70;y<=475-h-6;y+=16)for(let x=70;x<=755-w-6;x+=16){
       const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]];
@@ -158,7 +175,7 @@ kbd{border:1px solid #d0dce0;background:white;border-radius:4px;padding:2px 5px}
   $('search').oninput=renderList;
   $('move-mode').onclick=()=>{mode='move';render();toast('Drag a table or its resize corner.');};
   $('room-mode').onclick=()=>{mode='room';room=[];render();toast('Click room corners on the map to trace the outline.');};
-  $('save-room').onclick=()=>{if(room.length<3){toast('Add at least three corners before saving the room outline.');return;}mode='move';render();toast('Room outline saved in prototype.');};
+  $('save-room').onclick=()=>{if(room.length<3){toast('Add at least three corners before saving the room outline.');return;}if(!roomOutlineKeepsTables()){toast('Room outline must be simple and contain every table. Redraw or move tables first.');return;}mode='move';render();toast('Room outline saved in prototype.');};
   $('reset-room').onclick=()=>{room=initialRoom.map(x=>x.slice());mode='move';render();toast('Original outline restored.');};
   render();
 })();
