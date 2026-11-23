@@ -32,6 +32,10 @@ test("real venue editor: compact defaults, rename, resize and persisted room out
   const paintedFloor=page.locator("#map-editor-svg > rect").first();
   const corners=[[0.002,0.002],[0.998,0.002],[0.998,0.998],[0.002,0.998]];
   for(let index=0;index<corners.length;index++){
+    // The Draw room outline toolbar is above the canvas. Clicking the button
+    // may scroll the canvas below the viewport, so bring it back before the
+    // coordinate-based real mouse click.
+    await paintedFloor.scrollIntoViewIfNeeded();
     const box=await paintedFloor.boundingBox();
     if(!box)throw Error("Floor drawing unavailable");
     const [u,v]=corners[index];
