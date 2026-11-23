@@ -17,7 +17,13 @@ async function start(preloaded = {}) {
   for (const [key, value] of Object.entries(preloaded))
     dom.window.localStorage.setItem(key, value);
   const root = dom.window.document.getElementById("root");
-  const api = { get: async () => [], post: async () => ({}) };
+  const api = { get: async path => path === "/v2/plan/status-capabilities" ? {
+    optimal:{complete:true,printable:true,reviewable:false,retryable:false},
+    feasible:{complete:true,printable:true,reviewable:false,retryable:false},
+    infeasible:{complete:false,printable:false,reviewable:false,retryable:true},
+    unknown:{complete:false,printable:false,reviewable:false,retryable:true},
+    needs_review:{complete:false,printable:false,reviewable:true,retryable:true},
+  } : [], post: async () => ({}) };
   const app = createApp(root, api);
   await app.ready;
   return { app, dom, root, store: dom.window.localStorage };
