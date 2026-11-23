@@ -1,0 +1,3 @@
+# The deployed service is the Python FastAPI app.
+# package.json is only for UI/browser tests and must not select the runtime.
+providers = ["python"]
