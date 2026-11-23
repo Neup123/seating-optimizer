@@ -4,7 +4,7 @@ from pydantic import ValidationError
 
 from seating_optimizer.models import (
     Plan, PriorityMark, Assignment, PLAN_TRANSITIONS,
-    plan_capabilities, validate_plan_lifecycle,
+    plan_capabilities, validate_plan_lifecycle, transition_plan_status,
 )
 from seating_optimizer.generic_solver import GenericPlan
 
@@ -70,3 +70,18 @@ def test_api_exposes_same_status_capabilities_as_python_contract():
     }
     assert response.json()["needs_review"]["reviewable"] is True
     assert response.json()["infeasible"]["printable"] is False
+
+
+def test_staged_transition_guard_refuses_skipping_semantic_states():
+    plan = Plan(session_id="s", status="optimal")
+    with pytest.raises(ValueError, match="Invalid plan transition"):
+        transition_plan_status(plan, "infeasible")
+    assert plan.status == "optimal"
+    with pytest.raises(ValueError, match="Unknown solve status"):
+        transition_plan_status(plan, "dirty_after_edit")
+    assert plan.status == "optimal"
+    transition_plan_status(plan, "needs_review")
+    plan.pending_groups = [pending()]
+    assert validate_plan_lifecycle(plan).status == "needs_review"
+    with pytest.raises(ValueError, match="Invalid plan transition"):
+        transition_plan_status(plan, "optimal")

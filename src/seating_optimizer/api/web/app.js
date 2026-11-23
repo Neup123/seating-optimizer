@@ -289,7 +289,7 @@ export function createApp(root, api = createGateway()) {
     return {
       screen: "import", view: "table", viewContent: null, viewError: "",
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
+      catalog: [], statusCapabilities: null, ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
@@ -302,6 +302,21 @@ export function createApp(root, api = createGateway()) {
     };
   }
   const state = emptySession();
+  // Backend owns both the status vocabulary and its permitted operations.
+  // Fail closed until its policy is loaded; never infer privileges from labels.
+  function planHasCapability(status, capability) {
+    return state.statusCapabilities?.[status]?.[capability] === true;
+  }
+  function validatePlanCapabilities(reply) {
+    if (!reply || typeof reply !== "object" || Array.isArray(reply) ||
+        Object.keys(reply).length === 0 ||
+        Object.values(reply).some(policy => !policy || typeof policy !== "object" ||
+          ["complete","printable","reviewable","retryable"].some(key =>
+            typeof policy[key] !== "boolean"))) {
+      throw Error("The server returned an invalid seating plan status policy.");
+    }
+    return reply;
+  }
   // Uncommitted invalid text stays visible through re-renders, but never enters rules.
   const invalidPatternDrafts = new WeakMap();
   const savedTemplates = storedJSON(TEMPLATES_KEY, storedJSON(LEGACY_TEMPLATES_KEY, []));
@@ -320,12 +335,14 @@ export function createApp(root, api = createGateway()) {
     state.error = false;
   }
   // A spreadsheet's raw base64 bytes are never restored into the next saved snapshot.
-  if (state.importFile?.content_base64)
+  if (state.importFile?.content_base64) {
     state.importFile = { filename: state.importFile.filename };
+    // Sanitization is itself a data change; purge old bytes immediately.
+    saveSession();
+  }
   if (!state.needsMigration) for (const rule of state.rules) {
     if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
   }
-  if (["optimal", "feasible"].includes(state.plan?.status)) state.lastGoodPlan = deepCopy(state.plan);
   if (!state.plan && state.lastGoodPlan) state.planStale = true;
   let viewObjectUrl = null;
   let listContentEndpoint = null;
@@ -413,9 +430,10 @@ export function createApp(root, api = createGateway()) {
   }
   function clearBrowserData() {
     const catalog = state.catalog;
+    const statusCapabilities = state.statusCapabilities;
     // Saved templates can contain named party targets, so clear both versions as well.
     templates.splice(0);
-    Object.assign(state, emptySession(), { catalog });
+    Object.assign(state, emptySession(), { catalog, statusCapabilities });
     state.notice = "Saved guest data, planning sessions and templates cleared from this browser.";
     confirmingErase = false;
     render();
@@ -428,8 +446,9 @@ export function createApp(root, api = createGateway()) {
   }
   function newSession() {
     const catalog = state.catalog;
+    const statusCapabilities = state.statusCapabilities;
     clearObjectUrl();
-    Object.assign(state, emptySession(), { catalog });
+    Object.assign(state, emptySession(), { catalog, statusCapabilities });
     if (Array.isArray(catalog) && catalog.length) {
       state.ruleEngine = catalog[0].engine;
       state.ruleMechanism = catalog[0].mechanism;
@@ -562,14 +581,14 @@ export function createApp(root, api = createGateway()) {
     sidebar.append(nav);
     return sidebar;
   }
-  function render() {
+  function render(persist = true) {
     if (state.screen === "plan" && state.view === "print" &&
         LIST_VIEWS.has(state.printFormat) && typeof state.viewContent === "string" &&
         listContentEndpoint !== listEndpoint(state.printFormat)) {
       void loadView("print");
       return;
     }
-    if (!state.needsMigration) saveSession();
+    if (persist !== false && !state.needsMigration) saveSession();
     root.replaceChildren();
     const shell = element("div", "shell");
     shell.append(drawHeader());
@@ -1309,8 +1328,8 @@ export function createApp(root, api = createGateway()) {
 
   function proposeReassignment(direction) {
     void attempt(async () => {
-      if (!state.plan || !(["optimal", "feasible"].includes(state.plan.status) ||
-            (direction.action === "seat_pending" && state.plan.status === "needs_review")))
+      if (!state.plan || !(planHasCapability(state.plan.status, "complete") ||
+            (direction.action === "seat_pending" && planHasCapability(state.plan.status, "reviewable"))))
         throw Error("A solved plan or low-priority review is required before checking options.");
       const instruction = { ...direction, id: "manual-" + (state.nextManualId++) };
       const previousPlan = state.plan;
@@ -1447,7 +1466,7 @@ export function createApp(root, api = createGateway()) {
         state.plan = plan;
         state.planStale = false;
         state.restoredAfterFailure = false;
-        if (["optimal", "feasible"].includes(plan.status))
+        if (planHasCapability(plan.status, "complete"))
           state.lastGoodPlan = deepCopy(plan);
         state.manualInstructions = deepCopy(plan.manual_instructions || state.manualInstructions);
         state.reassignResponse = null;
@@ -1463,7 +1482,7 @@ export function createApp(root, api = createGateway()) {
         announce("Solver returned " + plan.status.toUpperCase() + "; " +
           (plan.assignments?.length || 0) + " group " +
           ((plan.assignments?.length || 0) === 1 ? "assignment." : "assignments."));
-        if (plan.status === "optimal" || plan.status === "feasible") await loadView("table");
+        if (planHasCapability(plan.status, "complete")) await loadView("table");
       }), "primary", "solve-plan")
     ));
     controls.append(advanced);
@@ -1514,6 +1533,11 @@ export function createApp(root, api = createGateway()) {
       }
       return area;
     }
+    if (!state.statusCapabilities) {
+      area.append(card("Plan status policy unavailable",
+        "The server plan policy must load before reviewing, editing or printing a seating plan. Retry the connection."));
+      return area;
+    }
     const plan = state.plan;
     function renderListPreview() {
       const content = element("div");
@@ -1562,7 +1586,7 @@ export function createApp(root, api = createGateway()) {
           instruction ? action("Restore", () => removeInstruction(instruction.id),
             "quiet small", "restore-" + group.group_id) : element("span", "", "")));
       }
-      if (!["optimal", "feasible"].includes(plan.status)) {
+      if (!planHasCapability(plan.status, "printable")) {
         panel.append(action("Print list", () => {
           state.printFormat = "not-seated";
           void loadView("print");
@@ -1622,7 +1646,8 @@ export function createApp(root, api = createGateway()) {
       }
       breakdown.append(entries); status.append(breakdown);
     }
-    if (plan.status === "infeasible" || plan.status === "unknown") {
+    if (!planHasCapability(plan.status, "complete") &&
+        !planHasCapability(plan.status, "reviewable")) {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
         status.append(element("h3", "", "Why no seating plan fits"));
@@ -1661,7 +1686,7 @@ export function createApp(root, api = createGateway()) {
     area.append(status);
     const unseated = renderNotSeated();
     if (unseated) area.append(unseated);
-    if (plan.status === "needs_review") {
+    if (planHasCapability(plan.status, "reviewable")) {
       const panel = card("Low-priority placement needs a decision",
         "Earlier families remain seated. Nothing pending was moved to not seated.");
       panel.append(element("p", "problem", plan.message));
@@ -1918,12 +1943,20 @@ export function createApp(root, api = createGateway()) {
   const ready = (async () => {
     try {
       state.catalog = await api.get("/v2/rules/catalog");
+      state.statusCapabilities = validatePlanCapabilities(
+        await api.get("/v2/plan/status-capabilities"));
+      if (state.plan && planHasCapability(state.plan.status, "complete"))
+        state.lastGoodPlan = deepCopy(state.plan);
     } catch (error) {
       state.notice = friendlyApiError(error);
       state.error = true;
       state.retryAction = async () => {
         state.catalog = await api.get("/v2/rules/catalog");
-        announce("Rule catalog loaded successfully.");
+        state.statusCapabilities = validatePlanCapabilities(
+          await api.get("/v2/plan/status-capabilities"));
+        if (state.plan && planHasCapability(state.plan.status, "complete"))
+          state.lastGoodPlan = deepCopy(state.plan);
+        announce("Rule and seating status policies loaded successfully.");
       };
     }
     if (state.needsMigration) {
@@ -1939,10 +1972,11 @@ export function createApp(root, api = createGateway()) {
         state.rules = [];
       }
     }
-    render();
+    render(false);
     if (state.plan && Array.isArray(state.catalog)) await loadView(state.view);
   })();
-  render();
+  // Catalog/policy fetches must not overwrite storage before an explicit user edit.
+  render(false);
   return { state, ready, render, show: screen => { state.screen = screen; render(); },
            loadView, validateLayout, loadLayoutFiles, projectProblem, newSession };
 }

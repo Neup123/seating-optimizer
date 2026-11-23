@@ -443,8 +443,8 @@ PLAN_PRINTABLE_STATUSES = PLAN_COMPLETE_STATUSES
 PLAN_TRANSITIONS = {
     "input_ready": frozenset({"solving", "dirty_after_edit"}),
     "solving": frozenset(PLAN_SOLVE_STATUSES),
-    "optimal": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
-    "feasible": frozenset({"dirty_after_edit", "solving", "applied_manual_decision"}),
+    "optimal": frozenset({"dirty_after_edit", "solving", "applied_manual_decision", "needs_review"}),
+    "feasible": frozenset({"dirty_after_edit", "solving", "applied_manual_decision", "needs_review"}),
     "needs_review": frozenset({"applied_manual_decision", "solving", "dirty_after_edit"}),
     "infeasible": frozenset({"solving", "dirty_after_edit", "applied_manual_decision"}),
     "unknown": frozenset({"solving", "dirty_after_edit"}),
@@ -482,6 +482,21 @@ class Plan(Model):
         if self.status in PLAN_UNSOLVED_STATUSES and self.total_score is not None:
             raise ValueError("An infeasible or unknown plan cannot claim an objective score")
         return self
+
+
+def transition_plan_status(plan: Plan, status: str) -> None:
+    """The only writer for transitions of an already-created solver Plan.
+
+    Initial solver results are constructed with Pydantic; later staged-review
+    transitions pass through this guard and the final metadata validator.
+    Unserialized UI-only states are documented in PLAN_TRANSITIONS but may
+    never be written into Plan.status.
+    """
+    if status not in PLAN_SOLVE_STATUSES:
+        raise ValueError(f"Unknown solve status: {status}")
+    if status != plan.status and status not in PLAN_TRANSITIONS.get(plan.status, frozenset()):
+        raise ValueError(f"Invalid plan transition: {plan.status} -> {status}")
+    plan.status = status
 
 
 def validate_plan_lifecycle(plan: Plan) -> Plan:
