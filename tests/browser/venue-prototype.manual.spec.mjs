@@ -71,6 +71,13 @@ test('operator click review: tables, keyboard, resize, room outline, removal', a
   await canvas.click({position:{x:bounds.width*.8,y:bounds.height*.15}});
   await canvas.click({position:{x:bounds.width*.75,y:bounds.height*.8}});
   await page.getByRole('button',{name:'Save outline'}).click();
+  await expect(page.locator('#toast')).toContainText('contain every table');
+  await expect(page.getByRole('button',{name:'Save outline'})).toBeVisible();
+  await page.getByRole('button',{name:'Edit room outline'}).click();
+  for(const [x,y] of [[.035,.07],[.96,.07],[.96,.93],[.035,.93]]){
+    await canvas.click({position:{x:bounds.width*x,y:bounds.height*y}});
+  }
+  await page.getByRole('button',{name:'Save outline'}).click();
   await expect(page.locator('#toast')).toContainText('Room outline saved');
   await shot(page,'03-room-outline');
   await page.getByRole('button',{name:'Reset outline'}).click();
