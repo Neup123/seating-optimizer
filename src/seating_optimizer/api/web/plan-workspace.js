@@ -42,6 +42,10 @@ function choice(label, options, current, fn, id) {
 function tableOf(plan, id) {
   return (plan.tables || []).find(table => table.table_id === id);
 }
+function tableLabel(plan, id) {
+  const name = tableOf(plan, id)?.name?.trim();
+  return name && name !== id ? name + " (Table " + id + ")" : "Table " + id;
+}
 function floorOf(plan, assignment) {
   return tableOf(plan, assignment.table_id)?.zone_id || "";
 }
@@ -182,7 +186,7 @@ export function renderPlanWorkspace(state, {
           refresh();
         }, "reassign-place-type"));
         const locations = state.reassignPlaceType === "table"
-          ? (plan.tables || []).map(t => [t.table_id, "Table " + t.table_id])
+          ? (plan.tables || []).map(t => [t.table_id, tableLabel(plan, t.table_id)])
           : [...new Set((plan.tables || []).map(t => t.zone_id))].map(zone => [zone, zone]);
         editor.append(choice(isMove ? "Destination" : "Excluded place", locations,
           state.reassignPlaceId || "", value => {
@@ -304,7 +308,7 @@ export function renderPlanWorkspace(state, {
   function detail(a) {
     const details = el("div", "plan-details");
     const people = memberNames(a, partyMembers);
-    details.append(el("h4", "", nameFor(a) + " · Table " + a.table_id));
+    details.append(el("h4", "", nameFor(a) + " · " + tableLabel(plan, a.table_id)));
     details.append(el("p", "muted", "Members: " +
       (people.length ? people.join(", ") : (a.guest_ids || []).length + " registered " +
       ((a.guest_ids || []).length === 1 ? "person" : "people"))));
@@ -407,7 +411,7 @@ export function renderPlanWorkspace(state, {
     check.setAttribute("aria-label","Select "+partyName(a));
     check.addEventListener("change",()=>selectItem("party",a.group_id));
     party.append(check,el("span","",nameFor(a)));
-    line.append(party, el("span", "muted", "Table " + a.table_id +
+    line.append(party, el("span", "muted", tableLabel(plan, a.table_id) +
       " · " + (floorOf(plan, a) || "Unspecified floor")));
     line.append(clicker("Not here", () => chooseIntent(a, "not_here"),
       "quiet small"));
@@ -440,7 +444,7 @@ export function renderPlanWorkspace(state, {
   function tableSection(t, variant) {
     const holder = el("section", variant === "cards" ? "working-table-card" : "working-table-section");
     holder.dataset.tableId = t.table_id;
-    holder.append(el("h3", "", "Table " + t.table_id),
+    holder.append(el("h3", "", tableLabel(plan, t.table_id)),
       el("p", "muted", (t.zone_id || "Unspecified floor") + " · " +
         t.occupied + "/" + t.capacity + " chairs · " + t.empty_seats + " empty"));
     const items = sorted(assignments.filter(a => a.table_id === t.table_id && matches(a)));
@@ -467,7 +471,7 @@ export function renderPlanWorkspace(state, {
         group.setAttribute("data-table-id", drawing.table_id);
         group.setAttribute("role", "button");
         group.setAttribute("tabindex", "0");
-        group.setAttribute("aria-label", "Focus table " + drawing.table_id);
+        group.setAttribute("aria-label", "Focus " + tableLabel(plan, drawing.table_id));
         group.setAttribute("class", state.focusedTableId === drawing.table_id ? "focused" : "");
         const shape = document.createElementNS(svg.namespaceURI,
           drawing.shape === "circle" ? "circle" : drawing.shape === "ellipse" ? "ellipse" : "rect");
@@ -485,7 +489,7 @@ export function renderPlanWorkspace(state, {
         title.setAttribute("x", drawing.x + drawing.width / 2);
         title.setAttribute("y", drawing.y + drawing.height / 2);
         title.setAttribute("text-anchor", "middle");
-        title.textContent = drawing.table_id + " · " + (table?.occupied || 0) +
+        title.textContent = (table?.name || drawing.table_id) + " · " + (table?.occupied || 0) +
           "/" + (table?.capacity || 0);
         group.append(shape, title);
         const focus = () => { state.focusedTableId = drawing.table_id; refresh(); };

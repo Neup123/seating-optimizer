@@ -1288,7 +1288,7 @@ def _solve_core(problem: Problem) -> Plan:
                 reasons=item_reasons, points=round(sum(r.points for r in item_reasons), 5)))
 
     table_usage = [
-        TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+        TableUsage(table_id=t.id, name=t.name, zone_id=t.zone_id, capacity=t.capacity,
                    occupied=usage[j], empty_seats=t.capacity - usage[j])
         for j, t in enumerate(tables)
     ]
@@ -1392,7 +1392,7 @@ def _empty_stage(problem: Problem) -> Plan:
     """A legitimate stage when every family has been deferred."""
     return Plan(
         session_id=problem.session_id, status="optimal", total_score=0,
-        tables=[TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+        tables=[TableUsage(table_id=t.id, name=t.name, zone_id=t.zone_id, capacity=t.capacity,
                            occupied=0, empty_seats=t.capacity)
                 for t in problem.tables],
         manual_instructions=[], layout=problem.layout,

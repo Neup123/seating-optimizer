@@ -461,7 +461,7 @@ test("F1/U14: 43 guests, seven tables and six migrated rules show the +6 named p
   assert.doesNotMatch($(".plan-details").textContent,/No matching rule records/);
 });
 
-test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mobile panes", async () => {
+test("U4/U19/F3/U38: venue actions have visible names or icon tooltips and focused mobile panes", async () => {
   const {app,$,root}=await setup();
   app.show("import");
   assert.ok($("#guest-file").classList.contains("visually-hidden-file"));
@@ -477,11 +477,19 @@ test("U4/U19/F3/U38: icon inputs and venue actions have tooltips and focused mob
     "delete-template","validate-layout","export-layout","add-floor","add-table"]) {
     const action=$("#"+id);
     assert.ok(action,id+" must exist");
-    assert.ok(action.classList.contains("icon-button"),id+" must be an icon action");
+    assert.ok(action.classList.contains("icon-button") ||
+      action.textContent.trim().length>3,id+" needs a visible name or a recognizable icon");
     assert.ok(action.title.length>4,id+" requires complete tooltip");
     assert.equal(action.getAttribute("aria-label"),action.title);
   }
-  assert.equal($("#add-table").textContent.trim(),"＋");
+  assert.match($("#add-table").textContent,/Add table/);
+  for(const [id,label] of [["save-template","Save template"],
+    ["load-template","Load template"],["export-layout","Export layout"],
+    ["configuration-file-trigger","Import configuration"],
+    ["layout-file-trigger","Import layout"]]){
+    assert.match($("#"+id).textContent,new RegExp(label),
+      id+" must explain its venue action without requiring a tooltip");
+  }
   assert.equal($("#new-table-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($("#table-G1-small-priority").parentElement.className,"priority-checkbox");
   assert.equal($(".map-layout").dataset.mobilePane,"map");
@@ -617,4 +625,118 @@ test("table edits are validated before commit and rejected drafts stay visible",
   await until(()=>app.state.tables.find(t=>t.id==="G1").capacity===initial+1);
   assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
   assert.match(root.textContent,/Server validated/);
+});
+
+test("venue editor uses compact searchable rows and stable readable table names", async () => {
+  const {app,dom,$,$$,root,calls}=await setup(async()=>({}));
+  seed(app);app.show("map");
+  assert.equal($$(".table-row-details").length,1);
+  assert.ok($(".table-row-details summary").textContent.includes("G1"));
+  assert.equal($("#new-table-id").value,"T3");
+  assert.ok($(".table-advanced"),"rare attributes are under an advanced disclosure");
+  setValue($("#table-G1-name"),"Near entrance",dom.window);
+  await until(()=>app.state.tables.find(t=>t.id==="G1")?.name==="Near entrance");
+  assert.equal(app.state.tables[0].id,"G1","display rename never breaks linked table ID");
+  assert.match(root.textContent,/Near entrance/);
+  assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
+  setValue($("#table-search"),"does-not-exist",dom.window);
+  $("#table-search").dispatchEvent(new dom.window.Event("input",{bubbles:true}));
+  assert.ok($(".table-row-details").hidden);
+  setValue($("#table-search"),"Near entrance",dom.window);
+  $("#table-search").dispatchEvent(new dom.window.Event("input",{bubbles:true}));
+  assert.equal($(".table-row-details").hidden,false);
+  click($("#add-table"));
+  assert.equal(app.state.tables.length,3);
+  assert.equal(app.state.tables[2].id,"T3");
+  assert.equal(app.state.tables[2].name,"T3");
+});
+
+test("room outline stays a draft until backend accepts it; room can be reset", async () => {
+  let accept=false;
+  const {app,dom,$,root,calls}=await setup(async(path)=>{
+    if(path==="/v1/layouts/import" && !accept) throw Error("Room outline outside allowed area");
+    return {};
+  });
+  seed(app);app.show("map");
+  click($("#start-room-outline"));
+  const bg=$("#map-editor-svg rect");
+  $("#map-editor-svg").getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+  for(const [x,y] of [[0,0],[390,0],[390,290],[0,290]]){
+    const currentBg=root.querySelector("#map-editor-svg rect");
+    root.querySelector("#map-editor-svg").getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+    currentBg.dispatchEvent(new dom.window.MouseEvent("click",{bubbles:true,clientX:x,clientY:y}));
+  }
+  assert.equal(app.state.roomDraft.length,4);
+  assert.equal(app.state.layout.floors[0].room_outline,undefined);
+  click($("#save-room-outline"));
+  await until(()=>root.textContent.includes("Room outline outside allowed area"));
+  assert.equal(app.state.layout.floors[0].room_outline,undefined);
+  assert.equal(app.state.editingRoomOutline,true);
+  accept=true;
+  click($("#save-room-outline"));
+  await until(()=>Array.isArray(app.state.layout.floors[0].room_outline));
+  assert.equal(app.state.layout.floors[0].room_outline.length,4);
+  assert.equal(app.state.editingRoomOutline,false);
+  assert.ok(calls.filter(([path])=>path==="/v1/layouts/import").length>=2);
+  click($("#clear-room-outline"));
+  await until(()=>app.state.layout.floors[0].room_outline===null);
+});
+
+test("map resize handle changes dimensions without changing chair capacity", async () => {
+  const {app,dom,$,root}=await setup();
+  seed(app);app.state.focusedTableId="G1";app.show("map");
+  const map=$("#map-editor-svg");
+  map.getBoundingClientRect=()=>({left:0,top:0,width:400,height:300});
+  const handle=$(".map-resize-handle");
+  assert.ok(handle);
+  const old=app.state.layout.floors[0].tables[0];
+  const originalWidth=old.width;
+  handle.dispatchEvent(new dom.window.MouseEvent("pointerdown",
+    {bubbles:true,clientX:180,clientY:160}));
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointermove",
+    {bubbles:true,clientX:200,clientY:170}));
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("pointerup",{bubbles:true}));
+  await until(()=>app.state.layout.floors[0].tables[0].width>originalWidth);
+  assert.equal(app.state.tables.find(t=>t.id==="G1").capacity,4);
+  assert.equal(app.state.plan,null);
+});
+
+test("rename table ID requires explicit server validation and updates the linked plan inputs",async()=>{
+  let accept=false;
+  const {app,dom,$,root,calls}=await setup(async(path)=>{
+    if(path==="/v2/configurations/validate"&&!accept)throw Error("Rejected table ID change");
+    return {};
+  });
+  seed(app);
+  app.state.rules=[{id:"p1",table:"G1",engine:"venue",mechanism:"locked_assignment"}];
+  app.state.manualInstructions=[{id:"m1",action:"pin",place_type:"table",place_id:"G1"}];
+  app.show("map");
+  setValue($("#table-G1-id"),"Welcome",dom.window);
+  assert.ok(app.state.tables.some(t=>t.id==="G1"),"typing does not rekey");
+  click($("#rename-table-G1"));
+  await until(()=>root.textContent.includes("Rejected table ID change"));
+  assert.ok(app.state.tables.some(t=>t.id==="G1"),"failed validation preserves original ID");
+  accept=true;
+  click($("#rename-table-G1"));
+  await until(()=>app.state.tables.some(t=>t.id==="Welcome"));
+  assert.equal(app.state.layout.floors[0].tables[0].table_id,"Welcome");
+  assert.equal(app.state.rules[0].table,"Welcome");
+  assert.equal(app.state.manualInstructions[0].place_id,"Welcome");
+  assert.ok(calls.some(([path,payload])=>path==="/v2/configurations/validate" &&
+    payload.tables.some(t=>t.id==="Welcome")));
+  assert.ok($("#table-Welcome-capacity"),"editor selectors rebind to new ID");
+});
+
+test("custom table labels remain consistent between venue and solved workspace",async()=>{
+  const {app,$,root}=await setup();
+  seed(app);
+  app.state.tables[0].name="Near entrance";
+  app.show("map");
+  assert.match($("#map-editor-svg").textContent,/Near entrance/);
+  app.state.plan={...structuredClone(plan),
+    tables:[{...plan.tables[0],name:"Near entrance"}]};
+  app.show("plan");
+  assert.match(root.textContent,/Near entrance \(Table G1\)/);
+  assert.ok($(".working-table-section"),"table still uses the original stable ID");
+  assert.equal($(".working-table-section").dataset.tableId,"G1");
 });

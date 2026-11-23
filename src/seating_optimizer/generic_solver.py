@@ -234,7 +234,7 @@ def _stage_problem(problem, active_ids, lookup):
 def _empty(problem):
     return GenericPlan(
         session_id=problem.session_id, status="optimal", total_score=0,
-        tables=[TableUsage(table_id=t.id, zone_id=t.zone_id, capacity=t.capacity,
+        tables=[TableUsage(table_id=t.id, name=t.name, zone_id=t.zone_id, capacity=t.capacity,
                            occupied=0, empty_seats=t.capacity) for t in problem.tables],
         layout=problem.layout, message="No ordinary families in the first stage.",
     )
@@ -326,7 +326,7 @@ def _core(problem):
     usage = []
     for table in builder.tables:
         occupied = sum(g.requires_chair and mapping[g.id] == table.id for g in problem.guests)
-        usage.append(TableUsage(table_id=table.id, zone_id=table.zone_id,
+        usage.append(TableUsage(table_id=table.id, name=table.name, zone_id=table.zone_id,
                                 capacity=table.capacity, occupied=occupied,
                                 empty_seats=table.capacity-occupied))
     return GenericPlan(

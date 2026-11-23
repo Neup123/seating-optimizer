@@ -738,6 +738,7 @@ components:
         id: {type: string}
         zone_id: {type: string}
         capacity: {type: integer, minimum: 1}
+        name: {type: [string, 'null'], minLength: 1, description: Human-readable label; renaming does not alter stable Table.id references.}
         small_group_priority:
           type: boolean
           default: false
@@ -777,6 +778,18 @@ components:
         zone_id: {type: string}
         width: {type: number, exclusiveMinimum: 0, maximum: 10000}
         height: {type: number, exclusiveMinimum: 0, maximum: 10000}
+        room_outline:
+          description: Optional simple room polygon in canvas coordinates. Must enclose nonzero area, remain within the canvas, not self-intersect, and contain the entire bounding rectangle of each table.
+          type: [array, 'null']
+          minItems: 3
+          maxItems: 100
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            prefixItems:
+              - {type: number, minimum: 0}
+              - {type: number, minimum: 0}
         tables:
           type: array
           items: {$ref: '#/components/schemas/TableDrawing'}
@@ -1029,6 +1042,7 @@ components:
       required: [table_id, zone_id, capacity, occupied, empty_seats]
       properties:
         table_id: {type: string}
+        name: {type: [string, 'null'], description: Human-readable table label; table_id remains the immutable solve reference.}
         zone_id: {type: string}
         capacity: {type: integer}
         occupied: {type: integer}

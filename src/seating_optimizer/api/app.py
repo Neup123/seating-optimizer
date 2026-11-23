@@ -490,6 +490,10 @@ def create_app() -> FastAPI:
     def visual_plan_workspace_script() -> FileResponse:
         return FileResponse(web_dir / "plan-workspace.js", media_type="text/javascript")
 
+    @app.get("/assets/room-outline.js", include_in_schema=False)
+    def visual_room_outline_script() -> FileResponse:
+        return FileResponse(web_dir / "room-outline.js", media_type="text/javascript")
+
     @app.get("/assets/v2-rules.js", include_in_schema=False)
     def visual_v2_rules_script() -> FileResponse:
         return FileResponse(web_dir / "v2-rules.js", media_type="text/javascript")

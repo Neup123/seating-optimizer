@@ -1,5 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
+import { tableFitsRoom } from "./room-outline.js";
 import { renderGenericRules, tablePropertyVocabulary, displayRuleName, describeRuleEffect } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
@@ -52,9 +53,51 @@ export function nextFreeTablePosition(floor, width, height, gap = 8) {
       y < oy + oh + gap && y + height + gap > oy;
   };
   for (const y of axis(maxY)) for (const x of axis(maxX)) {
-    if (!(floor.tables || []).some(other => overlaps(x, y, other))) return { x, y };
+    if (!(floor.tables || []).some(other => overlaps(x, y, other)) &&
+        tableFitsRoom(floor.room_outline, x, y, width, height)) return { x, y };
   }
   return null;
+}
+
+/** Atomically rekey only fields whose schema represents a TABLE reference.
+ * Do not replace arbitrary strings: labels and criteria may coincidentally
+ * contain the same text, and must not be silently altered.
+ */
+export function renamedTableState(tables, layout, rules, instructions, oldId, newId) {
+  const nextId = String(newId || "").trim();
+  if (!nextId || nextId === oldId || tables.some(t => t.id === nextId))
+    throw Error("Choose a new, unique table ID.");
+  if (!tables.some(t => t.id === oldId))
+    throw Error("The table to rename no longer exists.");
+  const copy = {
+    tables: deepCopy(tables), layout: deepCopy(layout),
+    rules: deepCopy(rules), instructions: deepCopy(instructions || [])
+  };
+  for (const t of copy.tables) if (t.id === oldId) {
+    t.id = nextId;
+    if (!t.name || t.name === oldId) t.name = nextId;
+  }
+  for (const floor of copy.layout.floors || [])
+    for (const drawing of floor.tables || [])
+      if (drawing.table_id === oldId) drawing.table_id = nextId;
+  for (const rule of copy.rules) {
+    if (rule.table === oldId) rule.table = nextId;
+    if (rule.parameters?.table === oldId) rule.parameters.table = nextId;
+    if (rule.legacy_source?.parameters?.table === oldId)
+      rule.legacy_source.parameters.table = nextId;
+    for (const tier of rule.tiers || []) {
+      if (Array.isArray(tier.tables))
+        tier.tables = tier.tables.map(id => id === oldId ? nextId : id);
+    }
+  }
+  for (const instruction of copy.instructions) {
+    if (instruction.place_type === "table" && instruction.place_id === oldId)
+      instruction.place_id = nextId;
+    if (instruction.guest_tables) for (const [guestId, tableId]
+      of Object.entries(instruction.guest_tables))
+      if (tableId === oldId) instruction.guest_tables[guestId] = nextId;
+  }
+  return copy;
 }
 
 function syncDrawingMetadata(tables, layout, from = "table") {
@@ -291,7 +334,7 @@ export function createApp(root, api = createGateway()) {
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
       catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
-      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
+      sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", editingRoomOutline: false, roomDraft: null, pendingTableRename: {}, cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
        workspaceSort: "table", focusedTableId: "", printFormat: "groups-table",
        manualInstructions: [], nextManualId: 1, overflowChoice: "", pendingUnseatGroupId: null, reassignMode: null,
@@ -398,6 +441,9 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
+    state.editingRoomOutline = false;
+    state.roomDraft = null;
+    state.pendingTableRename = {};
     syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
@@ -471,6 +517,9 @@ export function createApp(root, api = createGateway()) {
     }
     catch (error) {
       state.retryAction = task;
+      // The retry/error controls render synchronously. Release the gate first
+      // so an immediate correction click cannot be silently discarded.
+      working = false;
       announce(friendlyApiError(error), true);
     }
     finally { working = false; }
@@ -495,7 +544,7 @@ export function createApp(root, api = createGateway()) {
       session_id: state.sessionId,
       zones: state.zones.map(z => ({ id: z.id, name: z.name })),
       tables: state.tables.map(t => ({ id: t.id, zone_id: t.zone_id,
-        capacity: Number(t.capacity), properties: [...(t.properties || [])],
+        capacity: Number(t.capacity), name: t.name || null, properties: [...(t.properties || [])],
         small_group_priority: Boolean(t.small_group_priority) })),
       guests: state.guests,
       rules: state.rules,
@@ -956,17 +1005,20 @@ export function createApp(root, api = createGateway()) {
       applyConfiguration(validated);
       announce("Imported complete configuration " + validated.name + ".");
     }));
-    templatesCard.append(fileControl("Import full configuration JSON", configFile));
+    const configurationPicker = fileControl("Import full configuration JSON", configFile);
+    configurationPicker.querySelector("button")?.append(element("span","", "Import configuration"));
+    templatesCard.append(configurationPicker);
     const templateActions = [
-      ["save-template","Save or update venue template","✓"],
-      ["export-configuration","Download full configuration JSON","⤓"],
-      ["load-template","Load selected venue template","↥"],
-      ["duplicate-template","Duplicate selected venue template","⧉"],
-      ["delete-template","Delete selected venue template","🗑"]
+      ["save-template","Save template","Save or update venue template"],
+      ["export-configuration","Export JSON","Download full configuration JSON"],
+      ["load-template","Load template","Load selected venue template"],
+      ["duplicate-template","Duplicate","Duplicate selected venue template"],
+      ["delete-template","Delete template","Delete selected venue template"]
     ];
-    for (const [id,title,glyph] of templateActions) {
+    for (const [id,label,title] of templateActions) {
       const b=templatesCard.querySelector("#"+id);
-      b.textContent=glyph;b.classList.add("icon-button");
+      b.textContent=label;
+      b.classList.remove("icon-button");
       b.title=title;b.setAttribute("aria-label",title);
     }
     const templateDrawer=element("details","card form-measure template-drawer");
@@ -991,15 +1043,17 @@ export function createApp(root, api = createGateway()) {
     file.addEventListener("change", () => attempt(async () => {
       if (file.files?.length) await loadLayoutFiles(Array.from(file.files));
     }));
-    intro.append(fileControl("Import venue layout files (JSON or SVG)", file));
+    const layoutPicker = fileControl("Import venue layout files (JSON or SVG)", file);
+    layoutPicker.querySelector("button")?.append(element("span","", "Import layout"));
+    intro.append(layoutPicker);
     intro.append(row(
-      action("✓", () => attempt(validateLayout), "primary icon-button", "validate-layout"),
-      action("↓", () => attempt(async () => {
+      action("✓ Validate layout", () => attempt(validateLayout), "primary small", "validate-layout"),
+      action("↓ Export layout", () => attempt(async () => {
         const validated = await api.post("/v1/layouts/import", {
           files: [{ filename: "layout.json", content_base64: encodeText(JSON.stringify(state.layout)) }]
         });
         downloadBlob(JSON.stringify(validated, null, 2), "venue-layout.json", "application/json");
-      }), "secondary icon-button", "export-layout")
+      }), "secondary small", "export-layout")
     ));
     for (const [id,title] of [["validate-layout","Validate layout"],["export-layout","Export layout JSON"]]) {
       const b=intro.querySelector("#"+id);b.title=title;b.setAttribute("aria-label",title);
@@ -1019,7 +1073,7 @@ export function createApp(root, api = createGateway()) {
       inputs[key] = input;
       addFloor.append(append(element("label"), element("span", "", label), input));
     });
-    const submit = element("button", "primary icon-button", "＋");
+    const submit = element("button", "primary small", "＋ Create floor");
     submit.title = "Create floor"; submit.setAttribute("aria-label", "Create floor");
     submit.type = "submit"; submit.id = "add-floor";
     addFloor.append(submit);
@@ -1046,7 +1100,12 @@ export function createApp(root, api = createGateway()) {
     const panel = card("Tables on " + (state.zones.find(z => z.id === layout.zone_id)?.name || layout.zone_id));
     panel.append(selectField("Floor", state.layout.floors.map(f => [f.zone_id,
       state.zones.find(z => z.id === f.zone_id)?.name || f.zone_id]),
-      state.focusedFloor, value => { state.focusedFloor = value; render(); }, { id: "floor-select" }));
+      state.focusedFloor, value => {
+        state.focusedFloor = value;
+        state.editingRoomOutline = false;
+        state.roomDraft = null;
+        render();
+      }, { id: "floor-select" }));
 
     const mobileTabs = element("div", "venue-mobile-tabs segmented");
     mobileTabs.setAttribute("role", "group");
@@ -1059,6 +1118,47 @@ export function createApp(root, api = createGateway()) {
       mobileTabs.append(tab);
     }
     panel.append(mobileTabs);
+    const roomTools = element("div", "venue-outline-tools");
+    const saveOutline = async outline => {
+      const candidate = {floors: state.layout.floors.map(floor =>
+        floor.zone_id === layout.zone_id ? {...floor, room_outline: outline} : floor)};
+      // The same backend schema checks polygons, walls and whole table footprints
+      // for API imports, saved templates, and direct UI edits.
+      await api.post("/v1/layouts/import", {
+        files: [{filename:"layout.json", content_base64:encodeText(JSON.stringify(candidate))}],
+        zones:state.zones, tables:state.tables
+      });
+      layout.room_outline = outline;
+      state.editingRoomOutline = false;
+      state.roomDraft = null;
+      invalidate();
+      announce(outline ? "Room outline validated and saved." : "Rectangular room restored.");
+    };
+    if (state.editingRoomOutline) {
+      roomTools.append(
+        element("span", "muted", "Click room corners in order; at least three are required."),
+        action("Undo corner", () => { state.roomDraft?.pop(); render(); },
+          "secondary small", "undo-room-corner"),
+        action("Save outline", () => attempt(async () => {
+          if (!state.roomDraft || state.roomDraft.length < 3)
+            throw Error("Draw at least three room corners before saving.");
+          await saveOutline([...state.roomDraft]);
+        }), "primary small", "save-room-outline"),
+        action("Cancel", () => { state.editingRoomOutline=false;state.roomDraft=null;render(); },
+          "quiet small", "cancel-room-outline")
+      );
+    } else {
+      roomTools.append(
+        action("Draw room outline", () => {
+          state.editingRoomOutline=true;state.roomDraft=[];render();
+        }, "secondary small", "start-room-outline")
+      );
+      if (layout.room_outline) roomTools.append(
+        action("Use rectangular floor", () => attempt(() => saveOutline(null)),
+          "quiet small", "clear-room-outline")
+      );
+    }
+    panel.append(roomTools);
     const split = element("div", "map-layout");
     split.dataset.mobilePane = state.mobileVenuePane || "map";
     const canvas = element("div", "map-canvas");
@@ -1068,7 +1168,9 @@ export function createApp(root, api = createGateway()) {
     const tableForm = element("form", "stack");
     tableForm.id = "table-form";
     tableForm.append(element("h3", "", "Add numbered table"));
-    const idInput = textField("Table ID", "", () => {}, { id: "new-table-id", required: true });
+    let nextId = state.tables.length + 1;
+    while (state.tables.some(t => t.id === "T" + nextId)) nextId++;
+    const idInput = textField("Table ID", "T" + nextId, () => {}, { id: "new-table-id", required: true });
     const capacityInput = textField("Chair count", "10", () => {}, { id: "new-table-capacity", type: "number", min: 1, step: 1 });
     const shapeInput = selectField("Shape", ["rectangle", "ellipse", "circle"], "rectangle", () => {}, { id: "new-table-shape" });
     const propertyInput = propertyControl("Table properties", [], "new-table-properties");
@@ -1076,8 +1178,11 @@ export function createApp(root, api = createGateway()) {
     const priorityInput = document.createElement("input");
     priorityInput.type = "checkbox"; priorityInput.id = "new-table-small-priority";
     priorityLabel.append(priorityInput, element("span", "", "Priority for couples and singles (soft)"));
-    tableForm.append(grid(idInput, capacityInput, shapeInput), propertyInput, priorityLabel);
-    const create = element("button", "secondary icon-button", "＋");
+    const tableAdvanced = element("details", "table-advanced");
+    tableAdvanced.append(element("summary", "", "Shape and preferences"),
+      shapeInput, propertyInput, priorityLabel);
+    tableForm.append(grid(idInput, capacityInput), tableAdvanced);
+    const create = element("button", "secondary small", "＋ Add table");
     create.type = "submit"; create.id = "add-table";
     create.title = "Add table to floor"; create.setAttribute("aria-label", create.title);
     tableForm.append(create);
@@ -1097,19 +1202,66 @@ export function createApp(root, api = createGateway()) {
       if (!place) return announce("No non-overlapping space for this table. Move or resize an existing table, or enlarge the floor.", true);
       const { x, y } = place;
       const small_group_priority = priorityInput.checked;
-      state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
+      state.tables.push({ id, zone_id: layout.zone_id, capacity, name: id, properties, small_group_priority });
       layout.tables.push({ table_id: id, x, y, width, height, shape });
       syncDrawingMetadata(state.tables, state.layout);
+      state.focusedTableId = id;
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
     const list = element("div", "stack");
     list.append(element("h3", "", "Tables on this floor"));
+    const tableSearch = textField("Find table", "", () => {}, {
+      id: "table-search", placeholder: "Search by name or ID"
+    });
+    list.append(tableSearch);
+    tableSearch.querySelector("input").addEventListener("input", event => {
+      for (const details of list.querySelectorAll(".table-row-details")) {
+        const text = (details.dataset.tableName || "").toLowerCase();
+        details.hidden = !text.includes(event.target.value.toLowerCase().trim());
+      }
+    });
     for (const drawing of layout.tables) {
       const table = state.tables.find(t => t.id === drawing.table_id);
       const editor = element("form", "table-editor");
       editor.dataset.tableId = drawing.table_id;
-      editor.append(element("h3", "", drawing.table_id));
+      editor.append(textField("Table name", table?.name || drawing.table_id, () => {},
+        { id: "table-" + drawing.table_id + "-name" }));
+      const renameLine = element("div", "row table-rename-row");
+      const renameField = textField("Table ID (changes rule references)",
+        state.pendingTableRename[drawing.table_id] ?? drawing.table_id, () => {},
+        { id: "table-" + drawing.table_id + "-id" });
+      const preserveRenameDraft = event => {
+        state.pendingTableRename[drawing.table_id] = event.target.value;
+      };
+      renameField.querySelector("input").addEventListener("input", preserveRenameDraft);
+      renameField.querySelector("input").addEventListener("change", preserveRenameDraft);
+      const renameButton = action("Change table ID", () => attempt(async () => {
+        const requested = renameField.querySelector("input").value;
+        const changed = renamedTableState(state.tables, state.layout,
+          state.rules, state.manualInstructions, drawing.table_id, requested);
+        await api.post("/v2/configurations/validate", {
+          version:2, name:"Renamed venue", zones:state.zones,
+          tables:changed.tables, layout:changed.layout, rules:changed.rules
+        });
+        const nextId = requested.trim();
+        const previousValidated = state.validatedTables[drawing.table_id];
+        state.tables=changed.tables;
+        state.layout=changed.layout;
+        state.rules=changed.rules;
+        state.manualInstructions=changed.instructions;
+        delete state.validatedTables[drawing.table_id];
+        delete state.pendingTableRename[drawing.table_id];
+        if (previousValidated) state.validatedTables[nextId]=true;
+        state.focusedTableId=nextId;
+        if(state.reassignPlaceType==="table"&&state.reassignPlaceId===drawing.table_id)
+          state.reassignPlaceId=nextId;
+        invalidate();
+        announce("Renamed table ID " + drawing.table_id + " to " + nextId +
+          ". Linked rules and manual directions were updated.");
+      }), "secondary small", "rename-table-" + drawing.table_id);
+      renameLine.append(renameField, renameButton);
+      editor.append(renameLine);
       const fields = element("div", "grid three");
       const definitions = [
         ["capacity", "Chairs", table?.capacity, 1],
@@ -1145,13 +1297,15 @@ export function createApp(root, api = createGateway()) {
         indicator.textContent="Editing draft";indicator.classList.add("unsaved");
       });
       editor.addEventListener("change",e=>{
+        // Stable table-ID renames are an explicit, validated transaction.
+        if(e.target.id==="table-"+drawing.table_id+"-id")return;
         if(e.target.matches('input,select'))editor.requestSubmit();
       });
-      const remove = action("⌫", () => {
+      const remove = action("Remove", () => {
         layout.tables = layout.tables.filter(d => d.table_id !== drawing.table_id);
         state.tables = state.tables.filter(t => t.id !== drawing.table_id);
         invalidate(); announce("Removed table " + drawing.table_id + ".");
-      }, "danger small icon-button");
+      }, "danger small");
       remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
       editor.addEventListener("submit", async event => {
@@ -1178,7 +1332,9 @@ export function createApp(root, api = createGateway()) {
         const {capacity: _tableCapacity, ...drawingFields}=next;
         const proposedDrawing = {...drawing,...drawingFields,shape,properties:[...properties],
           small_group_priority:priorityInput.checked};
-        const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
+        const proposedTable = {...table,capacity:next.capacity,
+          name: editor.querySelector('[id="table-' + drawing.table_id + '-name"]').value.trim() || drawing.table_id,
+          properties:[...properties],
           small_group_priority:priorityInput.checked};
         const candidate = {
           floors:state.layout.floors.map(floor=>({
@@ -1218,7 +1374,23 @@ export function createApp(root, api = createGateway()) {
         state.validatedTables[drawing.table_id]=true;
         invalidate();announce("Saved and validated table " + drawing.table_id + ".");
       });
-      list.append(editor);
+      const compact = element("details", "table-row-details");
+      compact.dataset.tableName = [drawing.table_id, table?.name || ""].join(" ");
+      compact.open = state.focusedTableId === drawing.table_id ||
+        (!state.focusedTableId && layout.tables[0]?.table_id === drawing.table_id);
+      const heading = element("summary", "table-row-heading");
+      heading.append(
+        element("strong", "", table?.name || drawing.table_id),
+        element("span", "muted", drawing.table_id + " · " +
+          (table?.capacity ?? "Set chairs") + " chairs · " + drawing.shape)
+      );
+      compact.append(heading, editor);
+      heading.addEventListener("click", () => {
+        state.focusedTableId = drawing.table_id;
+        for (const sibling of list.querySelectorAll(".table-row-details"))
+          if (sibling !== compact) sibling.open = false;
+      });
+      list.append(compact);
     }
     controls.append(list);
     split.append(controls); panel.append(split); area.append(panel);
@@ -1234,12 +1406,61 @@ export function createApp(root, api = createGateway()) {
     const bg = document.createElementNS(SVG_NS, "rect");
     bg.setAttribute("width", String(floor.width)); bg.setAttribute("height", String(floor.height));
     bg.setAttribute("fill", "#f5f8fa"); svg.append(bg);
+    const outline = state.editingRoomOutline ? state.roomDraft : floor.room_outline;
+    if (outline?.length) {
+      const polygon = document.createElementNS(SVG_NS,
+        outline.length >= 3 ? "polygon" : "polyline");
+      polygon.setAttribute("points", outline.map(point => point.join(",")).join(" "));
+      polygon.setAttribute("class", "room-boundary");
+      polygon.setAttribute("fill", outline.length >= 3 ? "white" : "none");
+      polygon.setAttribute("pointer-events", "none");
+      svg.append(polygon);
+      for (const [x,y] of outline) {
+        const corner=document.createElementNS(SVG_NS,"circle");
+        corner.setAttribute("cx", String(x));corner.setAttribute("cy",String(y));
+        corner.setAttribute("r", "4");corner.setAttribute("class","room-corner");
+        svg.append(corner);
+      }
+    }
+    svg.addEventListener("click", event => {
+      if (!state.editingRoomOutline) return;
+      // SVG viewBox can be letterboxed; its CSS bounding rect is not the
+      // painted coordinate system. Convert actual pointer coordinates via CTM.
+      // Listen on the SVG so table shapes and corner handles cannot swallow a
+      // room-outline click intended for the editor.
+      let x, y;
+      if (typeof svg.getScreenCTM === "function" &&
+          typeof svg.createSVGPoint === "function") {
+        const matrix = svg.getScreenCTM();
+        if (!matrix) return;
+        const point = svg.createSVGPoint();
+        point.x = event.clientX;
+        point.y = event.clientY;
+        const local = point.matrixTransform(matrix.inverse());
+        x = Math.round(local.x);
+        y = Math.round(local.y);
+      } else {
+        // DOM test runtimes do not implement SVG transforms; keep the
+        // approximated coordinate mapping solely as a test/browser fallback.
+        const bounds = svg.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) return;
+        x = Math.round((event.clientX - bounds.left) * floor.width / bounds.width);
+        y = Math.round((event.clientY - bounds.top) * floor.height / bounds.height);
+      }
+      x = Math.max(0, Math.min(floor.width, x));
+      y = Math.max(0, Math.min(floor.height, y));
+      state.roomDraft.push([x, y]);
+      render();
+    });
     for (const drawing of floor.tables) {
       const g = document.createElementNS(SVG_NS, "g"); g.setAttribute("class", "map-group");
       g.setAttribute("tabindex","0");
       g.setAttribute("role","button");
-      g.setAttribute("aria-label","Move table "+drawing.table_id+" using arrow keys");
+      g.setAttribute("aria-label","Move table "+
+        (state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id) +
+        " using arrow keys");
       g.setAttribute("data-table-id", drawing.table_id);
+      g.setAttribute("data-focused", String(state.focusedTableId === drawing.table_id));
       const shape = document.createElementNS(SVG_NS, drawing.shape === "rectangle" ? "rect" : "ellipse");
       if (drawing.shape === "rectangle") {
         ["x", "y", "width", "height"].forEach(k => shape.setAttribute(k, String(drawing[k])));
@@ -1259,43 +1480,104 @@ export function createApp(root, api = createGateway()) {
       label.setAttribute("fill", "#154b5a");
       label.setAttribute("font-size", "15");
       label.setAttribute("font-weight", "700");
-      label.textContent = drawing.table_id;
-      g.append(shape,label); svg.append(g);
-      g.addEventListener("keydown", event => {
-        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
-        if (!delta) return;
-        event.preventDefault();
-        drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
-        drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+      label.textContent = state.tables.find(t => t.id === drawing.table_id)?.name || drawing.table_id;
+      const handle = document.createElementNS(SVG_NS, "rect");
+      handle.setAttribute("width", "14");handle.setAttribute("height", "14");
+      handle.setAttribute("class", "map-resize-handle");
+      handle.setAttribute("data-resize", "true");
+      const paint = () => {
+        if (drawing.shape === "rectangle") {
+          for (const key of ["x","y","width","height"]) shape.setAttribute(key, String(drawing[key]));
+        } else {
+          shape.setAttribute("cx", String(drawing.x + drawing.width / 2));
+          shape.setAttribute("cy", String(drawing.y + drawing.height / 2));
+          shape.setAttribute("rx", String(drawing.width / 2));
+          shape.setAttribute("ry", String(drawing.height / 2));
+        }
+        label.setAttribute("x", String(drawing.x + drawing.width / 2));
+        label.setAttribute("y", String(drawing.y + drawing.height / 2));
+        handle.setAttribute("x", String(drawing.x + drawing.width - 7));
+        handle.setAttribute("y", String(drawing.y + drawing.height - 7));
+      };
+      g.append(shape,label,handle); svg.append(g);paint();
+      const validatePosition = async () => {
+        if (!floor.room_outline) return;
+        const candidate = {floors: state.layout.floors.map(other => ({
+          ...other, tables: other.tables.map(item => item.table_id === drawing.table_id ?
+            {...drawing} : item)
+        }))};
+        await api.post("/v1/layouts/import", {
+          files:[{filename:"layout.json",content_base64:encodeText(JSON.stringify(candidate))}],
+          zones:state.zones,tables:state.tables
+        });
+      };
+      const committed = () => {
         delete state.validatedTables[drawing.table_id];
+        state.focusedTableId = drawing.table_id;
         invalidate();render();
         const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
         active?.focus();
+      };
+      g.addEventListener("keydown", event => {
+        const delta = {ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[event.key];
+        if (!delta || state.editingRoomOutline) return;
+        event.preventDefault();
+        const before = {...drawing};
+        if (event.shiftKey) {
+          drawing.width=Math.max(20,Math.min(floor.width-drawing.x,drawing.width+delta[0]));
+          drawing.height=Math.max(20,Math.min(floor.height-drawing.y,drawing.height+delta[1]));
+          if (drawing.shape==="circle") {
+            const diameter=Math.min(drawing.width,drawing.height);
+            drawing.width=diameter;drawing.height=diameter;
+          }
+        } else {
+          drawing.x=Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
+          drawing.y=Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        }
+        if (floor.room_outline) void attempt(async()=>{
+          try { await validatePosition(); }
+          catch(error){Object.assign(drawing,before);throw error;}
+          committed();
+        });
+        else committed();
       });
       g.addEventListener("pointerdown", event => {
+        if (state.editingRoomOutline) return;
         event.preventDefault();
         const rect = svg.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
         const startX = event.clientX, startY = event.clientY;
-        const oldX = drawing.x, oldY = drawing.y;
+        const before = {...drawing};
+        const resizing = event.target.getAttribute("data-resize")==="true";
+        let changed=false;
         function move(e) {
-          const dx = (e.clientX - startX) * floor.width / rect.width;
-          const dy = (e.clientY - startY) * floor.height / rect.height;
-          drawing.x = Math.round(Math.max(0, Math.min(floor.width - drawing.width, oldX + dx)));
-          drawing.y = Math.round(Math.max(0, Math.min(floor.height - drawing.height, oldY + dy)));
-          if (drawing.shape === "rectangle") { shape.setAttribute("x", drawing.x); shape.setAttribute("y", drawing.y); }
-          else { shape.setAttribute("cx", drawing.x + drawing.width / 2); shape.setAttribute("cy", drawing.y + drawing.height / 2); }
-          label.setAttribute("x", drawing.x + drawing.width / 2);
-          label.setAttribute("y", drawing.y + drawing.height / 2);
+          const dx=(e.clientX-startX)*floor.width/rect.width;
+          const dy=(e.clientY-startY)*floor.height/rect.height;
+          if (resizing) {
+            drawing.width=Math.max(20,Math.min(floor.width-before.x,Math.round(before.width+dx)));
+            drawing.height=Math.max(20,Math.min(floor.height-before.y,Math.round(before.height+dy)));
+            if (drawing.shape==="circle") {
+              const diameter=Math.min(drawing.width,drawing.height);
+              drawing.width=diameter;drawing.height=diameter;
+            }
+          } else {
+            drawing.x=Math.round(Math.max(0,Math.min(floor.width-drawing.width,before.x+dx)));
+            drawing.y=Math.round(Math.max(0,Math.min(floor.height-drawing.height,before.y+dy)));
+          }
+          changed=true;paint();
         }
         function stop() {
-          document.removeEventListener("pointermove", move);
-          document.removeEventListener("pointerup", stop);
-          delete state.validatedTables[drawing.table_id];
-          invalidate(); render();
+          document.removeEventListener("pointermove",move);
+          document.removeEventListener("pointerup",stop);
+          if (!changed){state.focusedTableId=drawing.table_id;render();return;}
+          void attempt(async()=>{
+            try{await validatePosition();}
+            catch(error){Object.assign(drawing,before);paint();throw error;}
+            committed();
+          });
         }
-        document.addEventListener("pointermove", move);
-        document.addEventListener("pointerup", stop);
+        document.addEventListener("pointermove",move);
+        document.addEventListener("pointerup",stop);
       });
     }
     return svg;

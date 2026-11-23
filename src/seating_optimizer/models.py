@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .pattern_rules import validate_pattern
+from .room_geometry import validate_outline, rectangle_inside
 
 
 class Model(BaseModel):
@@ -37,6 +38,8 @@ class Table(Model):
     id: str
     zone_id: str
     capacity: int = Field(gt=0)
+    # Rename the display without changing stable IDs referenced by rules/exports.
+    name: str | None = Field(default=None, min_length=1)
     properties: list[str] = Field(default_factory=list)
     small_group_priority: bool = False
 
@@ -77,16 +80,23 @@ class FloorLayout(Model):
     zone_id: str
     width: float = Field(gt=0, le=10000)
     height: float = Field(gt=0, le=10000)
+    # Optional polygon in canvas coordinates; omitted for legacy rectangle rooms.
+    room_outline: list[tuple[float, float]] | None = None
     tables: list[TableDrawing] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_positions(self) -> "FloorLayout":
+        if self.room_outline is not None:
+            validate_outline(self.room_outline, self.width, self.height)
         ids = [table.table_id for table in self.tables]
         if len(set(ids)) != len(ids):
             raise ValueError(f"Duplicate table drawing in zone {self.zone_id}")
         for table in self.tables:
             if table.x + table.width > self.width + 0.0001 or table.y + table.height > self.height + 0.0001:
                 raise ValueError(f"Table drawing {table.table_id} exceeds floor bounds in {self.zone_id}")
+            if self.room_outline is not None and not rectangle_inside(
+                    self.room_outline, table.x, table.y, table.width, table.height):
+                raise ValueError(f"Table drawing {table.table_id} is outside room outline in {self.zone_id}")
         return self
 
 
@@ -413,6 +423,7 @@ class Compromise(Model):
 
 class TableUsage(Model):
     table_id: str
+    name: str | None = None
     zone_id: str
     capacity: int
     occupied: int
