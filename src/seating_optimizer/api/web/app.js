@@ -1428,14 +1428,27 @@ export function createApp(root, api = createGateway()) {
       // painted coordinate system. Convert actual pointer coordinates via CTM.
       // Listen on the SVG so table shapes and corner handles cannot swallow a
       // room-outline click intended for the editor.
-      const matrix = svg.getScreenCTM();
-      if (!matrix) return;
-      const point = svg.createSVGPoint();
-      point.x = event.clientX;
-      point.y = event.clientY;
-      const local = point.matrixTransform(matrix.inverse());
-      const x = Math.max(0, Math.min(floor.width, Math.round(local.x)));
-      const y = Math.max(0, Math.min(floor.height, Math.round(local.y)));
+      let x, y;
+      if (typeof svg.getScreenCTM === "function" &&
+          typeof svg.createSVGPoint === "function") {
+        const matrix = svg.getScreenCTM();
+        if (!matrix) return;
+        const point = svg.createSVGPoint();
+        point.x = event.clientX;
+        point.y = event.clientY;
+        const local = point.matrixTransform(matrix.inverse());
+        x = Math.round(local.x);
+        y = Math.round(local.y);
+      } else {
+        // DOM test runtimes do not implement SVG transforms; keep the
+        // approximated coordinate mapping solely as a test/browser fallback.
+        const bounds = svg.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) return;
+        x = Math.round((event.clientX - bounds.left) * floor.width / bounds.width);
+        y = Math.round((event.clientY - bounds.top) * floor.height / bounds.height);
+      }
+      x = Math.max(0, Math.min(floor.width, x));
+      y = Math.max(0, Math.min(floor.height, y));
       state.roomDraft.push([x, y]);
       render();
     });
