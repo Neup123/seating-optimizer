@@ -18,6 +18,13 @@ const catalog = [
   {engine:"venue",mechanism:"locked_assignment",modes:["hard"]},
   {engine:"stage",mechanism:"priority_mark",modes:["mark"]}
 ];
+const planStatusPolicy = {
+  optimal: {complete:true,printable:true,reviewable:false,retryable:false},
+  feasible: {complete:true,printable:true,reviewable:false,retryable:false},
+  infeasible: {complete:false,printable:false,reviewable:false,retryable:true},
+  unknown: {complete:false,printable:false,reviewable:false,retryable:true},
+  needs_review: {complete:false,printable:false,reviewable:true,retryable:true},
+};
 const layout = { floors: [
   { zone_id: "ground", width: 400, height: 300, tables: [
     { table_id: "G1", x: 20, y: 20, width: 160, height: 140, shape: "rectangle" }
@@ -62,7 +69,8 @@ async function setup(handler = async () => ({}), stored = {}) {
   globalThis.Blob = dom.window.Blob;
   const calls = [];
   const api = {
-    get: async path => { calls.push([path,"GET"]); return path === "/v2/rules/catalog" ? catalog : handler(path); },
+    get: async path => { calls.push([path,"GET"]); return path === "/v2/rules/catalog" ? catalog :
+        path === "/v2/plan/status-capabilities" ? planStatusPolicy : handler(path); },
     post: async (path, payload, responseType) => {
       calls.push([path, payload, responseType]);
       return handler(path, payload, responseType);
