@@ -23,9 +23,12 @@ function savedSeating() {
 }
 async function restore(page){
   const session=savedSeating();
-  await page.addInitScript(value=>localStorage.setItem(
-    "seating-optimizer:session:v2",JSON.stringify(value)),session);
+  // Set storage once for this tab. addInitScript would replay the old
+  // snapshot on *every* navigation and undo the reset/stale state on reload.
   await page.goto("/");
+  await page.evaluate(value=>localStorage.setItem(
+    "seating-optimizer:session:v2",JSON.stringify(value)),session);
+  await page.reload();
   await page.locator("#nav-plan").click();
   await expect(page.locator("#solve-plan")).toBeVisible();
   await expect(page.locator("#new-session")).toBeVisible();
@@ -61,7 +64,9 @@ test("new session cannot erase a saved solved session without explicit confirmat
 
 test("input edits retain clearly marked read-only stale seating across navigation and reload (#122)",async({page},info)=>{
   await restore(page);
+  await page.getByText("Advanced solver settings").click();
   const limit=page.locator("#time-limit");
+  await expect(limit).toBeVisible();
   await limit.fill("4");
   await limit.blur();
   await expect(page.locator("#stale-plan-preview")).toBeVisible();
