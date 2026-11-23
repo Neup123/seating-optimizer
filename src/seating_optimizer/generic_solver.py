@@ -23,7 +23,7 @@ from .generic_rules import (
 )
 from .models import (
     Assignment, Compromise, Model, NotSeatedGroup, Plan, PriorityMark, Problem,
-    Reason, ScoreItem, TableUsage, VenueConfiguration, validate_plan_lifecycle, chairs_needed,
+    Reason, ScoreItem, TableUsage, VenueConfiguration, validate_plan_lifecycle, transition_plan_status, chairs_needed,
 )
 from .rule_migration import migrate_instance
 
@@ -433,7 +433,7 @@ def solve_generic(problem: GenericProblem | Problem) -> GenericPlan:
         candidate.locked_guest_tables = {**candidate.locked_guest_tables, **locked}
         result = _core(candidate)
         if result.status not in ("optimal", "feasible"):
-            baseline.status = "needs_review"
+            transition_plan_status(baseline, "needs_review")
             baseline.message = (
                 f"Low-priority grade {mark.grade} family {mark.group_name} cannot "
                 "be fitted without changing an earlier placement. Operator decision required."
