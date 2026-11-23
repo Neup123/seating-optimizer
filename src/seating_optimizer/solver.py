@@ -12,7 +12,7 @@ from .adjacency import together_clusters, neighbouring_tables, largest_connected
 from .display import counted, distinct_party_name, party_name_for
 from .models import (Assignment, Compromise, NotSeatedGroup, PatternMatch, Plan,
                      PriorityMark, Problem, Reason, ScoreItem, TableUsage,
-                     validate_plan_lifecycle, chairs_needed)
+                     validate_plan_lifecycle, transition_plan_status, chairs_needed)
 from .pattern_rules import add_pattern_match, pattern_matches, pattern_description, validate_pattern
 
 
@@ -1487,7 +1487,7 @@ def solve(problem: Problem) -> Plan:
         if stage.status not in {"optimal", "feasible"}:
             unresolved = [m for m in active_marks
                           if m.group_id in deferred - included]
-            baseline.status = "needs_review"
+            transition_plan_status(baseline, "needs_review")
             baseline.message = (
                 f"Low-priority grade {grade} cannot be fitted into the remaining "
                 "space without changing an earlier placement. Choose a solver-checked "
