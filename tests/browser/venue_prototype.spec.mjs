@@ -22,7 +22,7 @@ test("venue prototype adds with defaults and edits the selected compact table ro
   const map=page.locator("#canvas");
   const rect=await map.boundingBox();
   if (!rect) throw Error("Prototype map not visible");
-  for (const [x,y] of [[0.12,0.2],[0.70,0.2],[0.7,0.8],[0.12,0.8]])
+  for (const [x,y] of [[0.035,0.07],[0.96,0.07],[0.96,0.93],[0.035,0.93]])
     await page.mouse.click(rect.x+rect.width*x,rect.y+rect.height*y);
   await page.getByRole("button", {name:"Save outline"}).click();
   await expect(page.getByText("Room outline saved in prototype.")).toBeVisible();
