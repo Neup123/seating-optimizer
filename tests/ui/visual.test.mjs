@@ -247,6 +247,9 @@ test("rule card name is the only label; delete and toggles are compact icon acti
   checkbox.checked=false;checkbox.dispatchEvent(new dom.window.Event("change",{bubbles:true}));
   assert.equal(app.state.rules[0].enabled,false);
   click($("#delete-rule-0"));
+  assert.equal(app.state.rules.length,1);
+  assert.ok($("#confirm-rule-delete-0"),"Removing a rule requires confirmation");
+  click($("#confirm-rule-delete-0"));
   assert.equal(app.state.rules.length,0);
 });
 test("priority mark is mode mark and tiered preferences use same accordion workflow",async()=>{
@@ -333,7 +336,8 @@ test("v2 plan infeasible state names operator rule and offers edit link",async()
   app.state.plan={...plan,status:"infeasible",message:"No valid layout",conflicting_constraints:["rule:rule-1 violated"]};
   app.show("plan");
   assert.match($(".conflict-row").textContent,/Seniors only downstairs/);
-  assert.doesNotMatch($(".conflict-row").textContent,/rule-1/);
+  assert.doesNotMatch($(".conflict-row > span").textContent,/rule-1/);
+  assert.match($(".rule-diagnostics").textContent,/rule:rule-1/);
   click($(".conflict-row button"));
   assert.equal(app.state.screen,"rules");
   assert.ok($(".rule-accordion-body"));
@@ -558,4 +562,59 @@ test("stale seating remains visible but read-only after changing inputs and relo
   assert.ok(later.$("#stale-plan-preview"));
   assert.equal(later.app.state.plan,null);
   assert.match(later.root.textContent,/Re-optimize before using or printing/);
+});
+
+test("hard-rule infeasibility explains requirements in plain language and keeps raw diagnostics secondary",async()=>{
+  const {app,root,$}=await setup();
+  seed(app);
+  app.state.rules=[{
+    id:"hard-rule-123",name:"Quiet floor for Alice",
+    description:"Alice needs a quiet floor on ground level.",
+    engine:"venue",mechanism:"placement_by_criterion",
+    mode:"hard",enabled:true,
+    criterion:{subject:"guest",field:"mobility",op:"==",value:"wheelchair"},
+    zones:["ground"]
+  }];
+  app.state.plan={...structuredClone(plan),status:"infeasible",total_score:null,
+    assignments:[],score_breakdown:[],
+    message:"Hard rules conflict with table capacities and party placement.",
+    conflicting_constraints:["rule:hard-rule-123 (Quiet floor for Alice)"]};
+  app.show("plan");
+  assert.match(root.textContent,/Why no seating plan fits/);
+  assert.match(root.textContent,/Quiet floor for Alice/);
+  assert.match(root.textContent,/Alice needs a quiet floor on ground level/);
+  assert.match(root.textContent,/not necessarily.*minimal/);
+  assert.equal($(".rule-diagnostics")?.querySelector("summary")?.textContent,"Technical reference");
+  assert.match($(".rule-diagnostics").textContent,/rule:hard-rule-123/);
+  click($(".conflict-row button"));
+  assert.equal(app.state.screen,"rules");
+  assert.equal(app.state.expandedRuleId,"hard-rule-123");
+});
+
+test("table edits are validated before commit and rejected drafts stay visible",async()=>{
+  let reject=true;
+  const {app,root,$,dom,calls}=await setup(async path=>{
+    if(path==="/v1/layouts/import"){
+      if(reject) throw Error("Table drawing exceeds floor bounds");
+      return {floors:[]};
+    }
+    return {};
+  });
+  seed(app);app.show("map");
+  const editor=$('.table-editor[data-table-id="G1"]');
+  assert.ok(editor);
+  const capacity=$("#table-G1-capacity");
+  assert.ok(capacity);
+  const initial=app.state.tables.find(t=>t.id==="G1").capacity;
+  setValue(capacity,String(initial+1),dom.window);
+  await until(()=>editor.querySelector(".save-state").textContent.includes("Not saved"));
+  assert.equal(app.state.tables.find(t=>t.id==="G1").capacity,initial,
+    "rejected geometry cannot partially commit the table capacity");
+  assert.equal(capacity.value,String(initial+1),"rejected draft remains editable");
+  assert.match(editor.querySelector(".save-state").textContent,/floor bounds/);
+  reject=false;
+  editor.requestSubmit();
+  await until(()=>app.state.tables.find(t=>t.id==="G1").capacity===initial+1);
+  assert.ok(calls.some(([path])=>path==="/v1/layouts/import"));
+  assert.match(root.textContent,/Server validated/);
 });

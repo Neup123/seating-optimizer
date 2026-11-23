@@ -84,6 +84,26 @@ paths:
                     engine: {type: string, enum: [intra, inter, venue, stage]}
                     mechanism: {type: string}
                     modes: {type: array, items: {type: string}}
+  /v2/plan/status-capabilities:
+    get:
+      operationId: listPlanStatusCapabilities
+      summary: Shared lifecycle semantics for plan statuses
+      description: Returns the backend's single definition of printable, reviewable, retryable and complete for each serialized Plan status.
+      responses:
+        '200':
+          description: Capability map keyed by solver status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+                  required: [printable, reviewable, retryable, complete]
+                  properties:
+                    printable: {type: boolean}
+                    reviewable: {type: boolean}
+                    retryable: {type: boolean}
+                    complete: {type: boolean}
   /v2/configurations/migrate:
     post:
       operationId: migrateLegacyConfiguration
@@ -837,7 +857,7 @@ components:
       additionalProperties: false
       required: [shape, title, description, modes, default_mode, default_weight, fields]
       properties:
-        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]}
+        shape: {type: string, enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, split_mixing_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]}
         title: {type: string}
         description: {type: string}
         modes: {type: array, items: {type: string, enum: [soft, hard, mark, staged]}}
@@ -870,6 +890,7 @@ components:
         name: {type: string}
         group_id: {type: [string, 'null']}
         group_name: {type: [string, 'null'], description: Human-readable registration or party name.}
+        requires_chair: {type: boolean, default: true, description: False only for an explicitly declared lap infant; the person is still assigned and exported.}
         attributes:
           type: object
           additionalProperties: {type: [string, number, boolean]}
@@ -884,7 +905,7 @@ components:
         enabled: {type: boolean, default: true, description: An absent value means enabled. False removes this instance from solver constraints, scores, and explanations without deleting its configuration.}
         shape:
           type: string
-          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]
+          enum: [attribute_grouping, zone_restriction, table_property_need, pair, capacity, fill_efficiency, pin, global_pattern, split_penalty, split_mixing_penalty, small_group_priority, low_priority, tiered_placement, zone_companionship]
         mode: {type: string, enum: [soft, hard, mark, staged]}
         parameters:
           type: object

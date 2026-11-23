@@ -15,6 +15,20 @@ For the implemented component/data flow, browser persistence, local-only API tru
 - [Architecture decision record: fork-first solver selection](docs/adr-001-solver-selection.md)
 - [Architecture and trust boundaries](docs/orientation.md) (introduced in PR #100; merge that PR before relying on this link).
 
+## Working browser interface
+
+Screenshots were captured from the running FastAPI browser client with synthetic event registrations. They illustrate the current flow; no guest-identifying production data is included.
+
+| Guest import | Venue editor |
+| --- | --- |
+| ![Guest column mapping](docs/screenshots/guest-import.jpg) | ![Populated table map](docs/screenshots/venue-editor.jpg) |
+
+| Rule configuration | Working seating plan |
+| --- | --- |
+| ![Rule editor](docs/screenshots/rules.jpg) | ![Solver plan](docs/screenshots/working-plan.jpg) |
+
+![Print-preview from the solved plan](docs/screenshots/print-preview.jpg)
+
 ## Installation
 
 Python 3.11+ is required.
@@ -81,6 +95,8 @@ In the legacy v1 interface, rule records contain an id, shape, mode (including h
 | pin | target, table | Hard pin for any member or their group, respected on re-solve. |
 
 Hard zone restrictions propagate from any guest to the **entire** group, including all portions of an oversized adjacent-table split. Contradictory restrictions lead to an infeasible result, not a hard-rule violation. A weighted rule contributes points only when its condition holds; the plan includes per-group rule-based reasons with contributed points, score breakdown per soft rule, compromises for forgone preferences, and remaining chairs per table. Shared pair points are distributed fairly in assignment-level reasons.
+
+For infants who remain with their family but do not require a physical chair, see [Lap infants and chair capacity](docs/lap-infants.md). Infants are counted as guests but not seats only when explicitly marked; age labels never silently change capacity.
 
 ## CSV and XLSX import
 

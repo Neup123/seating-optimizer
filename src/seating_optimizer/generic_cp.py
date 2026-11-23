@@ -11,10 +11,12 @@ from types import SimpleNamespace
 
 from ortools.sat.python import cp_model
 
+from .objective_priority import split_mixing_terms
 from .adjacency import neighbouring_tables
 from .generic_rules import Criterion, GenericRule, compare_value, guest_value, match_family, match_guest
 from .pattern_rules import add_comparison
 from .solver import _zone_companionship_penalties
+from .models import chairs_needed
 
 
 def group_id(guest):
@@ -32,17 +34,45 @@ class Build:
         self.ids = list(groups)
         self.split = set(problem.splittable_groups)
         self.split.update(i.group_id for i in problem.manual_instructions if i.allow_split)
-        max_capacity = max(t.capacity for t in self.tables)
         linked = {
             lookup[target] for rule in problem.rules
             if rule.enabled and (rule.engine, rule.mechanism) == ("inter", "pair_relation")
             and rule.relation == "together"
             for target in (rule.targets or [])
         }
-        # Match the legacy atomicity exception: a linked family is NOT
-        # silently split merely because its own size exceeds one table.
-        self.split.update(gid for gid, members in groups.items()
-                          if len(members) > max_capacity and gid not in linked)
+        # A large family must be compared only with tables that satisfy its
+        # HARD venue rules. The unrestricted largest table may be on a floor
+        # which is prohibited for that family (same contract as v1).
+        for gid, members in groups.items():
+            if gid in linked or gid in self.split:
+                continue
+            admissible = set(range(self.n))
+            for rule in problem.rules:
+                if not rule.enabled or rule.mode != "hard":
+                    continue
+                if (rule.engine, rule.mechanism) in {
+                        ("venue", "placement_by_criterion"), ("venue", "property_need")}:
+                    criterion = Criterion.model_validate(rule.criterion)
+                    applies = (match_family(members, criterion) if criterion.subject == "family"
+                               else any(match_guest(guest, criterion) for guest in members))
+                    if not applies:
+                        continue
+                    if rule.mechanism == "placement_by_criterion":
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if table.zone_id in rule.zones}
+                    else:
+                        allowed = {j for j, table in enumerate(self.tables)
+                                   if (rule.property == "small_group_priority" and table.small_group_priority)
+                                   or rule.property.casefold() in
+                                   {tag.casefold() for tag in table.properties}}
+                    admissible &= allowed
+                elif (rule.engine, rule.mechanism) == ("venue", "locked_assignment") and (
+                        lookup[rule.target] == gid):
+                    admissible &= {j for j, table in enumerate(self.tables)
+                                   if table.id == rule.table}
+            largest = max((self.tables[j].capacity for j in admissible), default=0)
+            if chairs_needed(members) > largest:
+                self.split.add(gid)
         self.x = {(gid, j): self.model.NewBoolVar(f"v2:x:{gid}:{j}")
                   for gid in groups for j in range(self.n)}
         self.guest_at = {}
@@ -53,6 +83,13 @@ class Build:
                     for j in range(self.n):
                         self.guest_at[guest.id, j] = self.model.NewBoolVar(f"v2:g:{guest.id}:{j}")
                     self.model.Add(sum(self.guest_at[guest.id, j] for j in range(self.n)) == 1)
+                # Infants occupying no chair must not become independent split portions.
+                anchor = next((g for g in members if g.requires_chair), None)
+                if anchor is not None:
+                    for infant in (g for g in members if not g.requires_chair):
+                        for j in range(self.n):
+                            self.model.Add(self.guest_at[infant.id, j] ==
+                                           self.guest_at[anchor.id, j])
                 for j in range(self.n):
                     count = sum(self.guest_at[g.id, j] for g in members)
                     self.model.Add(count >= self.x[gid, j])
@@ -66,7 +103,7 @@ class Build:
                         self.guest_at[guest.id, j] = self.x[gid, j]
         self.seats = {}
         for j, table in enumerate(self.tables):
-            self.seats[j] = sum(self.guest_at[g.id, j] for g in problem.guests)
+            self.seats[j] = sum(self.guest_at[g.id, j] for g in problem.guests if g.requires_chair)
             self.model.Add(self.seats[j] <= table.capacity)
         self.assumptions = {}
         self.terms = []
@@ -201,7 +238,7 @@ class Build:
             matching = [r for r in together_rules
                         if self.lookup[r.targets[0]] in members
                         and self.lookup[r.targets[1]] in members]
-            combined = sum(len(self.groups[gid]) for gid in members)
+            combined = sum(chairs_needed(self.groups[gid]) for gid in members)
             if len(members) < 2 or combined <= max_table or not matching:
                 continue
             active = self.model.NewBoolVar(f"v2:linked:{cluster_index}:active")
@@ -271,6 +308,11 @@ def _no_builder(rule, b):
 def _split_term(rule, b):
     for gid in b.split:
         b.terms.append(-rule.weight * (sum(b.x[gid, j] for j in range(b.n)) - 1))
+
+
+def _split_mixing_term(rule, b):
+    for mixed in split_mixing_terms(b.model,b.split,b.ids,b.n,b.x,rule.id):
+        b.terms.append(-rule.weight*mixed)
 
 
 def _holes_term(rule, b):
@@ -402,24 +444,35 @@ def _pair_relation(rule, b):
 
 def _placement_by_criterion(rule, b):
     matches = b.matching(rule.criterion)
+    allowed = set(rule.zones)
+    if rule.mode == "hard":
+        # A need of ONE family member restricts every portion of the family,
+        # including auto-split members (atomic parties previously got this
+        # propagation only implicitly through their shared x variable).
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if table.zone_id not in allowed:
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if table.zone_id in set(rule.zones):
-                if rule.mode == "soft":
-                    b.terms.append(rule.weight * b.guest_at[guest.id, j])
-            elif rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
+            if table.zone_id in allowed:
+                b.terms.append(rule.weight * b.guest_at[guest.id, j])
 
 
 def _property_need(rule, b):
     matches = b.matching(rule.criterion)
+    if rule.mode == "hard":
+        affected = {group_id(guest) for guest in matches}
+        for gid in affected:
+            for j, table in enumerate(b.tables):
+                if not b.has_property(table, rule.property):
+                    b.model.Add(b.x[gid, j] == 0).OnlyEnforceIf(b.guard(rule))
+        return
     for guest in matches:
         for j, table in enumerate(b.tables):
-            if b.has_property(table, rule.property):
-                continue
-            if rule.mode == "hard":
-                b.model.Add(b.guest_at[guest.id, j] == 0).OnlyEnforceIf(b.guard(rule))
-            else:
+            if not b.has_property(table, rule.property):
                 b.terms.append(-rule.weight * b.guest_at[guest.id, j])
 
 
@@ -477,6 +530,7 @@ def _companionship(rule, b):
 
 BUILDERS = {
     ("intra", "split_term"): _split_term,
+    ("intra", "split_mixing_term"): _split_mixing_term,
     ("intra", "own_attribute_grouping"): _own_attribute_grouping,
     ("inter", "pair_relation"): _pair_relation,
     ("inter", "criterion_pairs"): _criterion_pairs,
@@ -521,7 +575,7 @@ def resolve_tiers(build, rules):
         locked = False
         for rank, permitted in enumerate(ranked, 1):
             viable = {j for j in permitted
-                      if build.tables[j].capacity >= len(build.groups[gid])}
+                      if build.tables[j].capacity >= chairs_needed(build.groups[gid])}
             if not viable:
                 continue
             # Probe candidate under every hard assumption.
@@ -549,7 +603,7 @@ def resolve_tiers(build, rules):
             continue
         # The split was already explicitly permitted or structurally unavoidable.
         for rank, permitted in enumerate(ranked, 1):
-            if sum(build.tables[j].capacity for j in permitted) < len(build.groups[gid]):
+            if sum(build.tables[j].capacity for j in permitted) < chairs_needed(build.groups[gid]):
                 continue
             probe = build.model.NewBoolVar(f"v2:tier:split:{rule.id}:{rank}")
             build.model.Add(sum(build.x[gid, j] for j in range(build.n) if j not in permitted) == 0).OnlyEnforceIf(probe)

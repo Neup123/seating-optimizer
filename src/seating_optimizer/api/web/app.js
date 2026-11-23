@@ -1,6 +1,6 @@
 /* Phase 3: an API-driven visual client, with no seating or rule evaluation. */
 import { renderPlanWorkspace } from "./plan-workspace.js";
-import { renderGenericRules, tablePropertyVocabulary, displayRuleName } from "./v2-rules.js";
+import { renderGenericRules, tablePropertyVocabulary, displayRuleName, describeRuleEffect } from "./v2-rules.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SCREENS = [["import", "Guest import"], ["rules", "Rules"], ["map", "Venue map"], ["plan", "Seating plan"]];
 const LIST_VIEWS = new Set(["people", "people-floor", "groups", "groups-table", "not-seated"]);
@@ -8,8 +8,9 @@ const SESSION_KEY = "seating-optimizer:session:v2";
 const LEGACY_SESSION_KEY = "seating-optimizer:session:v1";
 const TEMPLATES_KEY = "seating-optimizer:templates:v2";
 const LEGACY_TEMPLATES_KEY = "seating-optimizer:templates:v1";
+const SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // Seven days since last saved change.
 const SESSION_FIELDS = ["screen", "view", "importFile", "preview", "mapping", "importResult",
-  "guests", "ruleEngine", "ruleMechanism", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
+  "guests", "ruleEngine", "ruleMechanism", "ruleQuery", "expandedRuleId", "rules", "nextRule", "zones", "tables", "layout",
   "focusedFloor", "sessionId", "seconds", "reviewListMode", "plan", "lastGoodPlan", "planStale", "cardsPerPage", "includeReasons", "listFields", "notice", "error", "templateName", "templateSelected", "templateDrawerOpen", "selectedPlanItem", "expandedPartyKey", "workspaceQuery", "workspaceFloor", "workspaceSort", "focusedTableId", "printFormat", "manualInstructions", "nextManualId", "advancedSolver"];
 
 function storedJSON(key, fallback) {
@@ -19,6 +20,15 @@ function storedJSON(key, fallback) {
   } catch (_) { return fallback; }
 }
 function deepCopy(value) { return JSON.parse(JSON.stringify(value)); }
+function recentSession(key) {
+  const candidate = storedJSON(key, null);
+  if (candidate?.saved_at && (!Number.isFinite(candidate.saved_at) ||
+      Date.now() - candidate.saved_at > SESSION_RETENTION_MS)) {
+    try { window.localStorage.removeItem(key); } catch (_) { /* storage disabled */ }
+    return null;
+  }
+  return candidate;
+}
 
 /** Scan a predictable row-first grid, checking actual table bounds, not table count.
  * A conservative gap makes each new table independently visible and selectable.
@@ -45,6 +55,24 @@ export function nextFreeTablePosition(floor, width, height, gap = 8) {
     if (!(floor.tables || []).some(other => overlaps(x, y, other))) return { x, y };
   }
   return null;
+}
+
+function syncDrawingMetadata(tables, layout, from = "table") {
+  // One metadata mapping for import, edits, templates and solver submissions.
+  // Table owns scoring metadata. A new portable layout is the only input
+  // that intentionally imports drawing metadata into the canonical Table.
+  const byId = new Map(tables.map(table => [table.id, table]));
+  for (const floor of layout.floors || []) for (const drawing of floor.tables || []) {
+    const table = byId.get(drawing.table_id);
+    if (!table) continue;
+    if (from === "drawing") {
+      table.properties = [...(drawing.properties || [])];
+      table.small_group_priority = Boolean(drawing.small_group_priority);
+    } else {
+      drawing.properties = [...(table.properties || [])];
+      drawing.small_group_priority = Boolean(table.small_group_priority);
+    }
+  }
 }
 
 
@@ -261,7 +289,7 @@ export function createApp(root, api = createGateway()) {
     return {
       screen: "import", view: "table", viewContent: null, viewError: "",
       importFile: null, preview: null, mapping: {}, importResult: null, guests: [],
-      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", expandedRuleId: null, rules: [], nextRule: 1,
+      catalog: [], ruleEngine: "intra", ruleMechanism: "split_term", ruleQuery: "", expandedRuleId: null, rules: [], nextRule: 1,
       zones: [], tables: [], layout: { floors: [] }, focusedFloor: "",
       sessionId: "session-" + Date.now().toString(36), seconds: 5, reviewListMode:"table", advancedSolver: false, solving: false, plan: null, lastGoodPlan: null, planStale: false, pendingNewSession: false, restoredAfterFailure: false, mobileVenuePane: "map", cardsPerPage: 1, includeReasons: false, listFields: [],
        selectedPlanItem: null, expandedPartyKey: null, workspaceQuery: "", workspaceFloor: "",
@@ -270,7 +298,7 @@ export function createApp(root, api = createGateway()) {
        reassignResponse: null, reassignPlaceType: "table",
        reassignPlaceId: "", reassignAllowSplit: false,
       notice: "", error: false, retryAction: null,
-      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: ""
+      templateName: "", templateSelected: "", templateDrawerOpen: false, storageWarning: "", validatedTables: {}
     };
   }
   const state = emptySession();
@@ -278,7 +306,7 @@ export function createApp(root, api = createGateway()) {
   const invalidPatternDrafts = new WeakMap();
   const savedTemplates = storedJSON(TEMPLATES_KEY, storedJSON(LEGACY_TEMPLATES_KEY, []));
   const templates = Array.isArray(savedTemplates) ? savedTemplates : [];
-  const previous = storedJSON(SESSION_KEY, storedJSON(LEGACY_SESSION_KEY, null));
+  const previous = recentSession(SESSION_KEY) || recentSession(LEGACY_SESSION_KEY);
   if ([1, 2].includes(previous?.version) && previous.data && Array.isArray(previous.data.guests) &&
       Array.isArray(previous.data.rules) && Array.isArray(previous.data.tables) &&
       Array.isArray(previous.data.zones) && Array.isArray(previous.data.layout?.floors)) {
@@ -291,6 +319,9 @@ export function createApp(root, api = createGateway()) {
     state.needsMigration = previous.version === 1 || state.rules.some(rule => rule.shape);
     state.error = false;
   }
+  // A spreadsheet's raw base64 bytes are never restored into the next saved snapshot.
+  if (state.importFile?.content_base64)
+    state.importFile = { filename: state.importFile.filename };
   if (!state.needsMigration) for (const rule of state.rules) {
     if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
   }
@@ -301,6 +332,7 @@ export function createApp(root, api = createGateway()) {
   let viewRequest = 0;
   let working = false;
   let noticesIssued = 0;
+  let confirmingErase = false;
 
   function hasInvalidStoredPatternCounts(rules) {
     return (rules || []).some(rule => rule.enabled !== false && rule.shape === "global_pattern" &&
@@ -323,7 +355,7 @@ export function createApp(root, api = createGateway()) {
     const data = {};
     for (const key of SESSION_FIELDS) data[key] = state[key];
     try {
-      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, saved_at: Date.now(), data }));
       state.storageWarning = "";
     } catch (_) {
       // Import source data can exceed the per-origin quota; retain all imported
@@ -331,7 +363,7 @@ export function createApp(root, api = createGateway()) {
       if (data.importFile?.content_base64) {
         data.importFile = { filename: data.importFile.filename };
         try {
-          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, data }));
+          window.localStorage.setItem(SESSION_KEY, JSON.stringify({ version: 2, saved_at: Date.now(), data }));
           state.storageWarning = "Source spreadsheet could not be cached. Re-select it to redo the import.";
           return;
         } catch (_) { /* even the smaller snapshot did not fit */ }
@@ -352,6 +384,7 @@ export function createApp(root, api = createGateway()) {
       throw Error("Add a floor and at least one table before saving a configuration.");
     if (configuredTables().length !== state.tables.length)
       throw Error("All configured tables need a positive chair capacity.");
+    syncDrawingMetadata(state.tables, state.layout);
     return deepCopy({
       version: 2, name, zones: state.zones, tables: state.tables,
       layout: state.layout, rules: state.rules
@@ -365,12 +398,7 @@ export function createApp(root, api = createGateway()) {
     state.zones = copy.zones;
     state.tables = copy.tables;
     state.layout = copy.layout;
-    for (const floor of state.layout.floors) for (const drawing of floor.tables) {
-      const table = state.tables.find(t => t.id === drawing.table_id);
-      if (table && (Object.hasOwn(table, "small_group_priority") ||
-          Object.hasOwn(drawing, "small_group_priority")))
-        drawing.small_group_priority = Boolean(table.small_group_priority);
-    }
+    syncDrawingMetadata(state.tables, state.layout);
     state.rules = copy.rules;
     for (const rule of state.rules) {
       if (rule.mechanism && !rule.name?.trim()) rule.name = displayRuleName(rule);
@@ -382,6 +410,21 @@ export function createApp(root, api = createGateway()) {
     state.focusedFloor = state.layout.floors[0]?.zone_id || "";
     state.templateName = copy.name;
     invalidate();
+  }
+  function clearBrowserData() {
+    const catalog = state.catalog;
+    // Saved templates can contain named party targets, so clear both versions as well.
+    templates.splice(0);
+    Object.assign(state, emptySession(), { catalog });
+    state.notice = "Saved guest data, planning sessions and templates cleared from this browser.";
+    confirmingErase = false;
+    render();
+    for (const key of [SESSION_KEY, LEGACY_SESSION_KEY, TEMPLATES_KEY, LEGACY_TEMPLATES_KEY]) {
+      try { window.localStorage.removeItem(key); } catch (_) {
+        state.storageWarning = "Browser storage could not be cleared. Clear site data in browser settings.";
+        render();
+      }
+    }
   }
   function newSession() {
     const catalog = state.catalog;
@@ -609,12 +652,24 @@ export function createApp(root, api = createGateway()) {
     form.append(fileControl("Choose guest list spreadsheet (CSV or XLSX)", file));
     if (state.importFile) form.append(element("p", "muted", "Selected: " + state.importFile.filename));
     area.append(form);
+    const privacy = element("section", "privacy-controls");
+    privacy.append(element("p", "muted", "This browser saves a working session for 7 days after its last change. Raw spreadsheet bytes are discarded after import. Templates stay until removed and may contain party names."));
+    if (!confirmingErase) {
+      privacy.append(action("Clear saved guest data", () => { confirmingErase = true; render(); },
+        "quiet small", "clear-guest-data"));
+    } else {
+      privacy.append(element("p", "problem", "Permanently erase this browser's saved session AND all saved templates? Export any reusable templates first. This does not delete files you downloaded."));
+      privacy.append(row(action("Erase saved data", clearBrowserData, "danger small", "confirm-clear-guest-data"),
+        action("Cancel", () => { confirmingErase = false; render(); }, "quiet small", "cancel-clear-guest-data")));
+    }
+    area.append(privacy);
     if (!state.preview) return area;
 
     const mappingCard = card("Map columns");
     mappingCard.append(element("span", "draft-status", "Draft mapping · Saved locally"));
     const choices = [["", "Unmapped (preserve as attribute)"],
       ["name", "Guest / registration name"], ["size", "Party size"],
+       ["lap_infants", "Infants on lap (no chair)"],
       ["group_id", "Group ID"], ["group_name", "Group name"],
       ["attribute.language", "Attribute: language"],
       ["attribute.age_layer", "Attribute: age layer"],
@@ -630,7 +685,7 @@ export function createApp(root, api = createGateway()) {
       const rowEl = element("tr");
       rowEl.append(element("td", "", header));
       const targetIsCriterion = (state.mapping[header] || "").startsWith("attribute.") ||
-        !["name","size","group_id","group_name"].includes(state.mapping[header]);
+        !["name","size","lap_infants","group_id","group_name"].includes(state.mapping[header]);
       rowEl.append(element("td", targetIsCriterion ? "criterion-ready" : "muted",
         targetIsCriterion ? "◇ Rule field" : "—"));
       const cell = element("td");
@@ -683,8 +738,29 @@ export function createApp(root, api = createGateway()) {
         announce("Import blocked: fix the reported errors. No rows were silently accepted.", true);
       } else {
         state.guests = result.guests;
+        // Keep the mapping and file name but not raw base64 source data in localStorage.
+        if (state.importFile) state.importFile = { filename: state.importFile.filename };
         invalidate();
-        announce("Imported " + result.guests.length + " guests from " + result.rows_imported + " registrations.");
+        const currentTargets=new Set(result.guests.flatMap(g=>[g.id,g.group_id || "guest:"+g.id,g.name]));
+        const staleRules=state.rules.filter(rule=>{
+          const targets=[
+            ...(Array.isArray(rule.targets)?rule.targets:[]),
+            ...(rule.target?[rule.target]:[]),
+            ...((rule.engine===undefined && rule.shape==="pair")?
+              [rule.parameters?.left,rule.parameters?.right]:[]),
+            ...((rule.engine===undefined && rule.shape==="pin")?[rule.parameters?.target]:[])
+          ].filter(Boolean);
+          return targets.some(target=>!currentTargets.has(target));
+        });
+        const staleInstructions=state.manualInstructions.filter(i=>!currentTargets.has(i.group_id));
+        announce("Imported " + result.guests.length + " guests (" +
+          result.guests.filter(g => g.requires_chair !== false).length +
+          " chairs needed) from " + result.rows_imported +
+          " registrations." +
+          (staleRules.length || staleInstructions.length ?
+            " Warning: " + staleRules.length + " consideration(s) and " +
+            staleInstructions.length + " manual direction(s) refer to missing registrations. Rebind them before solving." : ""),
+          Boolean(staleRules.length || staleInstructions.length));
       }
     }), "primary icon-button", "import-guests"));
     buttons.querySelector("#import-guests").disabled = duplicateMappings.length > 0;
@@ -747,18 +823,13 @@ export function createApp(root, api = createGateway()) {
         const old = state.tables.find(t => t.id === drawing.table_id);
         if (old && old.zone_id !== floor.zone_id)
           throw Error("Table " + drawing.table_id + " is assigned to a different floor.");
-        // Layout JSON carries portable tags; Table.properties is the solver input.
-        // Synchronize both copies without assigning tag weights.
-        if (old) {
-          old.properties = [...(drawing.properties || [])];
-          old.small_group_priority = Boolean(drawing.small_group_priority);
-        } else state.tables.push({
+        if (!old) state.tables.push({
           id: drawing.table_id, zone_id: floor.zone_id, capacity: null,
-          properties: [...(drawing.properties || [])],
-          small_group_priority: Boolean(drawing.small_group_priority)
+          properties: [], small_group_priority: false
         });
       }
     }
+    syncDrawingMetadata(state.tables, state.layout, "drawing");
     state.focusedFloor = imported.floors[0].zone_id;
     invalidate();
     announce("Layout imported. Set chair capacities and validate the venue before solving.");
@@ -1027,8 +1098,8 @@ export function createApp(root, api = createGateway()) {
       const { x, y } = place;
       const small_group_priority = priorityInput.checked;
       state.tables.push({ id, zone_id: layout.zone_id, capacity, properties, small_group_priority });
-      layout.tables.push({ table_id: id, x, y, width, height, shape,
-        properties: [...properties], small_group_priority });
+      layout.tables.push({ table_id: id, x, y, width, height, shape });
+      syncDrawingMetadata(state.tables, state.layout);
       invalidate(); announce("Added table " + id + " with " + capacity + " chairs.");
     });
     controls.append(tableForm);
@@ -1067,7 +1138,8 @@ export function createApp(root, api = createGateway()) {
       const save = element("button", "secondary small icon-button", "✓");
       save.type = "submit"; save.title="Save table";save.setAttribute("aria-label",save.title);
       save.hidden=true;
-      const indicator=element("span","save-state","✓ Saved locally");
+      const indicator=element("span","save-state",
+        state.validatedTables[drawing.table_id] ? "✓ Server validated" : "✓ Saved locally");
       editor.addEventListener("input",e=>{
         if(e.target.type==="hidden")return;
         indicator.textContent="Editing draft";indicator.classList.add("unsaved");
@@ -1082,30 +1154,69 @@ export function createApp(root, api = createGateway()) {
       }, "danger small icon-button");
       remove.title="Remove table";remove.setAttribute("aria-label",remove.title);
       editor.append(row(save, indicator, remove));
-      editor.addEventListener("submit", event => {
+      editor.addEventListener("submit", async event => {
         event.preventDefault();
         const next = {};
         for (const [key] of definitions) {
           const val = editor.querySelector('[id="table-' + drawing.table_id + "-" + key + '"]').value;
           next[key] = Number(val);
         }
+        const invalid = message => {
+          indicator.textContent="Not saved — "+message;
+          indicator.classList.add("unsaved");
+        };
         if (["x","y","width","height"].some(k => !Number.isFinite(next[k])))
-          return announce("Table drawing coordinates must be finite numbers.", true);
+          return invalid("Table drawing coordinates must be finite numbers.");
         if (!Number.isInteger(next.capacity) || next.capacity < 1)
-          return announce("Chair capacity must be a positive integer.", true);
+          return invalid("Chair capacity must be a positive integer.");
         let properties;
         try {
           properties = parseTableProperties(editor.querySelector(
             '[id="table-' + drawing.table_id + '-properties"]').value);
-        } catch (error) { return announce(error.message, true); }
-        table.capacity = next.capacity;
-        table.properties = properties;
-        table.small_group_priority = priorityInput.checked;
-        drawing.properties = [...properties];
-        drawing.small_group_priority = priorityInput.checked;
-        ["x", "y", "width", "height"].forEach(k => drawing[k] = next[k]);
-        drawing.shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
-        invalidate(); announce("Saved table " + drawing.table_id + ". Validate layout to check geometry.");
+        } catch (error) { return invalid(error.message); }
+        const shape = editor.querySelector('[id="table-' + drawing.table_id + '-shape"]').value;
+        const {capacity: _tableCapacity, ...drawingFields}=next;
+        const proposedDrawing = {...drawing,...drawingFields,shape,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const proposedTable = {...table,capacity:next.capacity,properties:[...properties],
+          small_group_priority:priorityInput.checked};
+        const candidate = {
+          floors:state.layout.floors.map(floor=>({
+            ...floor,tables:floor.tables.map(old=>old.table_id===drawing.table_id?
+              proposedDrawing:old)
+          }))
+        };
+        const candidateTables=state.tables.map(old=>old.id===table.id?proposedTable:old);
+        // A freshly imported map can contain many tables whose chair counts
+        // have not yet been assigned. Validate only when the whole venue can
+        // satisfy the server schema; do not block incremental initial setup.
+        const awaitingCapacities=candidateTables.some(t=>
+          !Number.isInteger(Number(t.capacity)) || Number(t.capacity)<1);
+        if (awaitingCapacities) {
+          Object.assign(table,proposedTable);
+          Object.assign(drawing,proposedDrawing);
+          syncDrawingMetadata(state.tables, state.layout);
+          delete state.validatedTables[drawing.table_id];
+          invalidate();announce("Saved locally. Finish chair counts for all tables, then validate layout.");
+          return;
+        }
+        indicator.textContent="Validating changes…";
+        indicator.classList.add("unsaved");
+        try {
+          await api.post("/v1/layouts/import",{
+            files:[{filename:"layout.json",content_base64:encodeText(JSON.stringify(candidate))}],
+            zones:state.zones,tables:candidateTables
+          });
+        } catch (error) {
+          indicator.textContent="Not saved — "+friendlyApiError(error);
+          indicator.classList.add("unsaved");
+          return; // Retain the draft fields so the operator can correct them.
+        }
+        Object.assign(table,proposedTable);
+        Object.assign(drawing,proposedDrawing);
+          syncDrawingMetadata(state.tables, state.layout);
+        state.validatedTables[drawing.table_id]=true;
+        invalidate();announce("Saved and validated table " + drawing.table_id + ".");
       });
       list.append(editor);
     }
@@ -1156,6 +1267,7 @@ export function createApp(root, api = createGateway()) {
         event.preventDefault();
         drawing.x = Math.max(0,Math.min(floor.width-drawing.width,drawing.x+delta[0]));
         drawing.y = Math.max(0,Math.min(floor.height-drawing.height,drawing.y+delta[1]));
+        delete state.validatedTables[drawing.table_id];
         invalidate();render();
         const active = root.querySelector('#map-editor-svg [data-table-id="'+drawing.table_id+'"]');
         active?.focus();
@@ -1179,6 +1291,7 @@ export function createApp(root, api = createGateway()) {
         function stop() {
           document.removeEventListener("pointermove", move);
           document.removeEventListener("pointerup", stop);
+          delete state.validatedTables[drawing.table_id];
           invalidate(); render();
         }
         document.addEventListener("pointermove", move);
@@ -1275,15 +1388,38 @@ export function createApp(root, api = createGateway()) {
     });
   }
 
+  function operatorConflictRule(rule) {
+    // The v2 rule formatter is shared with the assignment details panel.
+    if (rule.mechanism) return displayRuleName(rule) + " — " + describeRuleEffect(rule);
+    const p=rule.parameters || {};
+    const name=rule.name?.trim() || ({
+      pin:"Fixed table",zone_restriction:"Floor restriction",
+      table_property_need:"Table requirement",pair:"Together/apart requirement",
+      capacity:"Chair capacity"
+    }[rule.shape] || "Mandatory seating requirement");
+    let effect="";
+    if (rule.shape==="pin") effect="Keep " + p.target + " at table " + p.table;
+    else if (rule.shape==="zone_restriction") effect="Seat matching guests (" +
+      [p.attribute,p.value].filter(Boolean).join(" = ") + ") only on " +
+      (p.zone || (p.allowed_zones || []).join(", "));
+    else if (rule.shape==="table_property_need") effect="Provide table property " + p.property;
+    else if (rule.shape==="pair") effect="Keep " + p.left + " and " + p.right +
+      (p.relation==="apart" ? " apart" : " together");
+    return name + (rule.description?.trim() ? " — " + rule.description.trim() :
+      effect ? " — " + effect : "");
+  }
   function explainRuleRefs(value) {
-    // Keep the server's machine identifiers intact in Plan/JSON, but show
-    // the operator's name next to them in human-facing diagnostics.
-    let output = String(value);
-    for (const rule of state.rules) {
-      if (!rule?.name) continue;
-      output = output.replaceAll("rule:" + rule.id, rule.name);
+    // Machine IDs remain in API/JSON; only the UI is interpreted.
+    let output=String(value);
+    const ordered=[...state.rules].sort((a,b)=>String(b.id).length-String(a.id).length);
+    for (const rule of ordered) {
+      const ref="rule:"+rule.id;
+      if (!output.includes(ref)) continue;
+      const friendly=operatorConflictRule(rule);
+      output=output.replaceAll(ref+" ("+(rule.name || "")+")",friendly);
+      output=output.replaceAll(ref,friendly);
     }
-    return output.replace(/rule:[\w.-]+/g, "an unnamed consideration");
+    return output.replace(/rule:[\w.-]+/g,"An unidentified required consideration");
   }
   function renderPlan() {
     const area = element("div");
@@ -1490,10 +1626,15 @@ export function createApp(root, api = createGateway()) {
       status.append(element("p", "problem", plan.message));
       if ((plan.conflicting_constraints || []).length) {
         status.append(element("h3", "", "Why no seating plan fits"));
+        status.append(element("p", "muted", "These requirements explain the conflict but are not necessarily a minimal set. Edit a requirement or adjust table capacity, then solve again."));
         const explanations = element("div", "stack");
         for (const explanation of plan.conflicting_constraints) {
           const line = element("div","problem conflict-row");
           line.append(element("span","",explainRuleRefs(explanation)));
+          const diagnostics=element("details","rule-diagnostics");
+          diagnostics.append(element("summary","","Technical reference"),
+            element("code","",String(explanation)));
+          line.append(diagnostics);
           const match = state.rules.find(rule => explanation.includes(rule.id) ||
             (rule.name && explanation.includes(rule.name)));
           if (match) {
