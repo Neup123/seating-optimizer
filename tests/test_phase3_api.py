@@ -134,6 +134,11 @@ def test_browser_files_are_actually_served_with_correct_media_types():
     assert "grid-template-columns" in css.text
     selection = client.get("/assets/plan-selection.js")
     workspace = client.get("/assets/plan-workspace.js")
+    room_module = client.get("/assets/room-outline.js")
+    assert room_module.status_code == 200
+    assert "text/javascript" in room_module.headers["content-type"]
+    assert "tableFitsRoom" in room_module.text
+    assert 'from "./room-outline.js"' in js.text
     assert selection.status_code == workspace.status_code == 200
     assert "text/javascript" in selection.headers["content-type"]
     assert "text/javascript" in workspace.headers["content-type"]
