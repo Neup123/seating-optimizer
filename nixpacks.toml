@@ -1,3 +1,8 @@
 # The deployed service is the Python FastAPI app.
 # package.json is only for UI/browser tests and must not select the runtime.
 providers = ["python"]
+
+# PDF exports require a Unicode-capable system TrueType font.
+# Keep fonts in the container, not committed as binary assets.
+[phases.setup]
+aptPkgs = ["...", "fonts-dejavu-core"]
